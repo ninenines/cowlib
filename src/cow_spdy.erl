@@ -55,8 +55,8 @@ split(Data = << _:40, Length:24, _/bits >>)
 	Length2 = Length + 8,
 	<< Frame:Length2/binary, Rest/bits >> = Data,
 	{true, Frame, Rest};
-split(Data) ->
-	{false, Data}.
+split(_) ->
+	false.
 
 parse(<< 0:1, StreamID:31, 0:7, IsFinFlag:1, _:24, Data/bits >>, _) ->
 	{data, StreamID, from_flag(IsFinFlag), Data};

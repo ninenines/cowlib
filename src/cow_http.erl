@@ -89,15 +89,10 @@ parse_fullpath(Fullpath) ->
 
 parse_fullpath(<<>>, Path) ->
 	{Path, <<>>};
-parse_fullpath(<< $?, Rest/binary >>, Path) ->
-	parse_fullpath_qs(Rest, Path, <<>>);
+parse_fullpath(<< $?, Qs/binary >>, Path) ->
+	{Path, Qs};
 parse_fullpath(<< C, Rest/binary >>, SoFar) ->
 	parse_fullpath(Rest, << SoFar/binary, C >>).
-
-parse_fullpath_qs(<<>>, Path, Qs) ->
-	{Path, Qs};
-parse_fullpath_qs(<< C, Rest/binary >>, Path, SoFar) ->
-	parse_fullpath_qs(Rest, Path, << SoFar/binary, C >>).
 
 -ifdef(TEST).
 parse_fullpath_test() ->

@@ -19,7 +19,7 @@
 
 %% @doc Return the mimetype for any file by looking at its extension.
 
--spec all(file:filename_all()) -> {binary(), binary(), []}.
+-spec all(binary()) -> {binary(), binary(), []}.
 all(Path) ->
 	case filename:extension(Path) of
 		<<>> -> {<<"application">>, <<"octet-stream">>, []};
@@ -28,7 +28,7 @@ all(Path) ->
 
 %% @doc Return the mimetype for a Web related file by looking at its extension.
 
--spec web(file:filename_all()) -> {binary(), binary(), []}.
+-spec web(binary()) -> {binary(), binary(), []}.
 web(Path) ->
 	case filename:extension(Path) of
 		<<>> -> {<<"application">>, <<"octet-stream">>, []};

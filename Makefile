@@ -15,8 +15,10 @@ gen:
 		> $(GEN_OUT)
 	$(gen_verbose) wget -qO - $(GEN_URL) \
 		| grep -v ^# \
-		| awk '{for (i=2; i<=NF; i++) if ($$i != "") \
-			print "all_ext(<<\"" $$i "\">>) -> <<\"" $$1 "\">>;"}' \
+		| awk '{for (i=2; i<=NF; i++) if ($$i != "") { \
+			split($$1, a, "/"); \
+			print "all_ext(<<\"" $$i "\">>) -> {<<\"" \
+				a[1] "\">>, <<\"" a[2] "\">>, []};"}}' \
 		| sort \
 		| uniq -w 25 \
 		>> $(GEN_OUT)

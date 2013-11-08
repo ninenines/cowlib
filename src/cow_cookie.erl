@@ -14,10 +14,7 @@
 
 -module(cow_cookie).
 
-%% Parse.
 -export([parse_cookie/1]).
-
-%% Build.
 -export([setcookie/3]).
 
 -type cookie_option() :: {max_age, non_neg_integer()}
@@ -25,8 +22,6 @@
 	| {secure, boolean()} | {http_only, boolean()}.
 -type cookie_opts() :: [cookie_option()].
 -export_type([cookie_opts/0]).
-
-%% Parse.
 
 %% @doc Parse a cookie header string and return a list of key/values.
 
@@ -150,8 +145,6 @@ parse_cookie_test_() ->
 	],
 	[{V, fun() -> R = parse_cookie(V) end} || {V, R} <- Tests].
 -endif.
-
-%% Build.
 
 %% @doc Convert a cookie name, value and options to its iodata form.
 %% @end

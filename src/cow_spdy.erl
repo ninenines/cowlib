@@ -27,7 +27,7 @@
 -export([syn_stream/12]).
 -export([syn_reply/6]).
 -export([rst_stream/2]).
-%% @todo settings
+-export([settings/2]).
 -export([ping/1]).
 -export([goaway/2]).
 %% @todo headers
@@ -235,7 +235,27 @@ rst_stream(StreamID, Status) ->
 	<< 1:1, 3:15, 3:16, 0:8, 8:24,
 		0:1, StreamID:31, StatusCode:32 >>.
 
-%% @todo settings
+settings(ClearSettingsFlag, Settings) ->
+	IsClearSettingsFlag = to_flag(ClearSettingsFlag),
+	NbEntries = length(Settings),
+	Entries = [begin
+		IsWasPersistedFlag = to_flag(WasPersistedFlag),
+		IsPersistFlag = to_flag(PersistFlag),
+		ID = case Key of
+			upload_bandwidth -> 1;
+			download_bandwidth -> 2;
+			round_trip_time -> 3;
+			max_concurrent_streams -> 4;
+			current_cwnd -> 5;
+			download_retrans_rate -> 6;
+			initial_window_size -> 7;
+			client_certificate_vector_size -> 8
+		end,
+		<< 0:6, IsWasPersistedFlag:1, IsPersistFlag:1, ID:24, Value:32 >>
+	end || {Key, Value, WasPersistedFlag, PersistFlag} <- Settings],
+	Length = 4 + iolist_size(Entries),
+	[<< 1:1, 3:15, 4:16, 0:7, IsClearSettingsFlag:1, Length:24,
+		NbEntries:32 >>, Entries].
 
 ping(PingID) ->
 	<< 1:1, 3:15, 6:16, 0:8, 4:24, PingID:32 >>.
@@ -251,6 +271,17 @@ goaway(LastGoodStreamID, Status) ->
 
 %% @todo headers
 %% @todo window_update
+
+-ifdef(TEST).
+settings_frame_test() ->
+	ClearSettingsFlag = false,
+	Settings = [{max_concurrent_streams,1000,false,false},
+				{initial_window_size,10485760,false,false}],
+	Bin = list_to_binary(cow_spdy:settings(ClearSettingsFlag, Settings)),
+	P = cow_spdy:parse(Bin, undefined),
+	P = {settings, ClearSettingsFlag, Settings},
+	ok.
+-endif.
 
 build_headers(Zdef, Headers) ->
 	NbHeaders = length(Headers),

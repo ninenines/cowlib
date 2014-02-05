@@ -2,6 +2,7 @@
 
 PROJECT = cowlib
 CT_SUITES = eunit
+PLT_APPS = crypto
 
 include erlang.mk
 

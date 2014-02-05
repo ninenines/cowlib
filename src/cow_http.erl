@@ -18,6 +18,8 @@
 -export([parse_fullpath/1]).
 -export([parse_version/1]).
 
+-include("cow_inline.hrl").
+
 %% @doc Extract host and port from a binary.
 %%
 %% Because the hostname is case insensitive it is converted
@@ -37,33 +39,7 @@ parse_fullhost(<< $], Rest/bits >>, true, Acc) ->
 	parse_fullhost(Rest, false, << Acc/binary, $] >>);
 parse_fullhost(<< C, Rest/bits >>, E, Acc) ->
 	case C of
-		$A -> parse_fullhost(Rest, E, << Acc/binary, $a >>);
-		$B -> parse_fullhost(Rest, E, << Acc/binary, $b >>);
-		$C -> parse_fullhost(Rest, E, << Acc/binary, $c >>);
-		$D -> parse_fullhost(Rest, E, << Acc/binary, $d >>);
-		$E -> parse_fullhost(Rest, E, << Acc/binary, $e >>);
-		$F -> parse_fullhost(Rest, E, << Acc/binary, $f >>);
-		$G -> parse_fullhost(Rest, E, << Acc/binary, $g >>);
-		$H -> parse_fullhost(Rest, E, << Acc/binary, $h >>);
-		$I -> parse_fullhost(Rest, E, << Acc/binary, $i >>);
-		$J -> parse_fullhost(Rest, E, << Acc/binary, $j >>);
-		$K -> parse_fullhost(Rest, E, << Acc/binary, $k >>);
-		$L -> parse_fullhost(Rest, E, << Acc/binary, $l >>);
-		$M -> parse_fullhost(Rest, E, << Acc/binary, $m >>);
-		$N -> parse_fullhost(Rest, E, << Acc/binary, $n >>);
-		$O -> parse_fullhost(Rest, E, << Acc/binary, $o >>);
-		$P -> parse_fullhost(Rest, E, << Acc/binary, $p >>);
-		$Q -> parse_fullhost(Rest, E, << Acc/binary, $q >>);
-		$R -> parse_fullhost(Rest, E, << Acc/binary, $r >>);
-		$S -> parse_fullhost(Rest, E, << Acc/binary, $s >>);
-		$T -> parse_fullhost(Rest, E, << Acc/binary, $t >>);
-		$U -> parse_fullhost(Rest, E, << Acc/binary, $u >>);
-		$V -> parse_fullhost(Rest, E, << Acc/binary, $v >>);
-		$W -> parse_fullhost(Rest, E, << Acc/binary, $w >>);
-		$X -> parse_fullhost(Rest, E, << Acc/binary, $x >>);
-		$Y -> parse_fullhost(Rest, E, << Acc/binary, $y >>);
-		$Z -> parse_fullhost(Rest, E, << Acc/binary, $z >>);
-		_ -> parse_fullhost(Rest, E, << Acc/binary, C >>)
+		?INLINE_LOWERCASE(parse_fullhost, Rest, E, Acc)
 	end.
 
 -ifdef(TEST).

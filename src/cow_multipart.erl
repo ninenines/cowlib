@@ -216,18 +216,22 @@ parse_body(Stream, Boundary) ->
 				%% No boundary, check for a possible partial at the end.
 				%% Return more or less of the body depending on the result.
 				nomatch ->
-					From = byte_size(Stream) - BoundarySize - 3,
-					case binary:match(Stream, <<"\r">>) of
+					StreamSize = byte_size(Stream),
+					From = StreamSize - BoundarySize - 3,
+					MatchOpts = if
+						%% Binary too small to contain boundary, check it fully.
+						From < 0 -> [];
+						%% Optimize, only check the end of the binary.
+						true -> [{scope, {From, StreamSize - From}}]
+					end,
+					case binary:match(Stream, <<"\r">>, MatchOpts) of
 						nomatch ->
 							{ok, Stream};
 						{Pos, _} ->
-							Pos2 = From + Pos,
 							case Stream of
-								<< Body:Pos2/binary, "\r\n" >> ->
+								<< Body:Pos/binary >> ->
 									{ok, Body};
-								<< Body:Pos2/binary, "\r\n", Rest/bits >> ->
-									{ok, Body, Rest};
-								<< Body:Pos2/binary, Rest/bits >> ->
+								<< Body:Pos/binary, Rest/bits >> ->
 									{ok, Body, Rest}
 							end
 					end;
@@ -292,6 +296,29 @@ parse_interleaved_test() ->
 	done = parse_body(InRest4, InBoundary),
 	{done, Rest4} = parse_headers(InRest4, InBoundary),
 	{done, <<>>} = parse_headers(Rest4, ?TEST2_BOUNDARY),
+	ok.
+
+parse_partial_test() ->
+	{ok, <<0:8000, "abcdef">>, <<"\rghij">>}
+		= parse_body(<<0:8000, "abcdef\rghij">>, <<"boundary">>),
+	{ok, <<"abcdef">>, <<"\rghij">>}
+		= parse_body(<<"abcdef\rghij">>, <<"boundary">>),
+	{ok, <<"abc">>, <<"\rdef">>}
+		= parse_body(<<"abc\rdef">>, <<"boundaryboundary">>),
+	{ok, <<0:8000, "abcdef">>, <<"\r\nghij">>}
+		= parse_body(<<0:8000, "abcdef\r\nghij">>, <<"boundary">>),
+	{ok, <<"abcdef">>, <<"\r\nghij">>}
+		= parse_body(<<"abcdef\r\nghij">>, <<"boundary">>),
+	{ok, <<"abc">>, <<"\r\ndef">>}
+		= parse_body(<<"abc\r\ndef">>, <<"boundaryboundary">>),
+	{ok, <<"boundary">>, <<"\r">>}
+		= parse_body(<<"boundary\r">>, <<"boundary">>),
+	{ok, <<"boundary">>, <<"\r\n">>}
+		= parse_body(<<"boundary\r\n">>, <<"boundary">>),
+	{ok, <<"boundary">>, <<"\r\n-">>}
+		= parse_body(<<"boundary\r\n-">>, <<"boundary">>),
+	{ok, <<"boundary">>, <<"\r\n--">>}
+		= parse_body(<<"boundary\r\n--">>, <<"boundary">>),
 	ok.
 -endif.
 

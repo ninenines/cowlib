@@ -1,0 +1,8 @@
+.cowlib.plt
+.erlang.mk.packages.*
+_rel
+deps
+ebin
+logs
+relx
+test/*.beam

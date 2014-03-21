@@ -24,7 +24,7 @@
 
 -type version() :: 'HTTP/1.0' | 'HTTP/1.1'.
 -type status() :: 100..999.
--type headers() :: [{binary(), binary()}].
+-type headers() :: [{binary(), iodata()}].
 
 -include("cow_inline.hrl").
 
@@ -106,7 +106,7 @@ horse_parse_status_line_other() ->
 
 %% @doc Parse the list of headers.
 
--spec parse_headers(binary()) -> {headers(), binary()}.
+-spec parse_headers(binary()) -> {[{binary(), binary()}], binary()}.
 parse_headers(Data) ->
 	parse_header(Data, []).
 
@@ -262,11 +262,9 @@ parse_fullpath_test() ->
 
 %% @doc Convert an HTTP version to atom.
 
--spec parse_version(binary()) -> 'HTTP/1.1' | 'HTTP/1.0'.
-parse_version(<<"HTTP/1.1">>) ->
-	'HTTP/1.1';
-parse_version(<<"HTTP/1.0">>) ->
-	'HTTP/1.0'.
+-spec parse_version(binary()) -> version().
+parse_version(<<"HTTP/1.1">>) -> 'HTTP/1.1';
+parse_version(<<"HTTP/1.0">>) -> 'HTTP/1.0'.
 
 -ifdef(TEST).
 parse_version_test() ->

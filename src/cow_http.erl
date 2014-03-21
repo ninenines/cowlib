@@ -22,6 +22,9 @@
 -export([parse_fullpath/1]).
 -export([parse_version/1]).
 
+-export([request/4]).
+-export([version/1]).
+
 -type version() :: 'HTTP/1.0' | 'HTTP/1.1'.
 -type status() :: 100..999.
 -type headers() :: [{binary(), iodata()}].
@@ -271,5 +274,28 @@ parse_version_test() ->
 	'HTTP/1.1' = parse_version(<<"HTTP/1.1">>),
 	'HTTP/1.0' = parse_version(<<"HTTP/1.0">>),
 	{'EXIT', _} = (catch parse_version(<<"HTTP/1.2">>)),
+	ok.
+-endif.
+
+%% @doc Return formatted request-line and headers.
+%% @todo Add tests when the corresponding reverse functions are added.
+
+-spec request(binary(), iodata(), version(), headers()) -> iodata().
+request(Method, Path, Version, Headers) ->
+	[Method, <<" ">>, Path, <<" ">>, version(Version), <<"\r\n">>,
+		[[N, <<": ">>, V, <<"\r\n">>] || {N, V} <- Headers],
+		<<"\r\n">>].
+
+%% @doc Return the version as a binary.
+
+-spec version(version()) -> binary().
+version('HTTP/1.1') -> <<"HTTP/1.1">>;
+version('HTTP/1.0') -> <<"HTTP/1.0">>.
+
+-ifdef(TEST).
+version_test() ->
+	<<"HTTP/1.1">> = version('HTTP/1.1'),
+	<<"HTTP/1.0">> = version('HTTP/1.0'),
+	{'EXIT', _} = (catch version('HTTP/1.2')),
 	ok.
 -endif.

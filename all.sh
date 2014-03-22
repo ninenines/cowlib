@@ -11,8 +11,6 @@ do
 	echo "    TESTING $rel"
 	echo
 	. $KERL_INSTALL_PATH/$rel/activate
-	cp ~/.kerl/builds/$rel/otp_src_*/lib/ssl/test/erl_make_certs.erl \
-		deps/ct_helper/src/
 	CT_OPTS="-label $rel" make tests
 done
 

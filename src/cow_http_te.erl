@@ -26,11 +26,6 @@
 %% The state type is the same for both identity and chunked.
 -type state() :: {non_neg_integer(), non_neg_integer()}.
 
-%% @todo Add EXTRA to erlang.mk.
--ifdef(TEST).
--define(EXTRA, 1).
--endif.
-
 -ifdef(EXTRA).
 dripfeed(<< C, Rest/bits >>, Acc, State, F) ->
 	case F(<< Acc/binary, C >>, State) of

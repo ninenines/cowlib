@@ -169,7 +169,7 @@ parse_headers(<< L1:32, Key:L1/binary, L2:32, Value:L2/binary, Rest/bits >>,
 	case Key of
 		<< $:, _/bits >> ->
 			parse_headers(Rest, NbHeaders - 1, Acc,
-				[{Key, Value}|lists:keydelete(Key, 1, SpAcc)]);
+				lists:keystore(Key, 1, SpAcc, {Key, Value}));
 		_ ->
 			parse_headers(Rest, NbHeaders - 1, [{Key, Value}|Acc], SpAcc)
 	end.

@@ -26,6 +26,14 @@
 %% The state type is the same for both identity and chunked.
 -type state() :: {non_neg_integer(), non_neg_integer()}.
 
+-type decode_ret() :: more
+	| {more, Data::binary(), state()}
+	| {more, Data::binary(), RemLen::non_neg_integer(), state()}
+	| {more, Data::binary(), Rest::binary(), state()}
+	| {done, TotalLen::non_neg_integer(), Rest::binary()}
+	| {done, Data::binary(), TotalLen::non_neg_integer(), Rest::binary()}.
+-export_type([decode_ret/0]).
+
 -ifdef(EXTRA).
 dripfeed(<< C, Rest/bits >>, Acc, State, F) ->
 	case F(<< Acc/binary, C >>, State) of
@@ -122,7 +130,7 @@ horse_stream_identity_dripfeed() ->
 
 -spec stream_chunked(Data, State)
 	-> more | {more, Data, State} | {more, Data, Len, State}
-	| {more, Data, Len, Data, State}
+	| {more, Data, Data, State}
 	| {done, Len, Data} | {done, Data, Len, Data}
 	when Data::binary(), State::state(), Len::non_neg_integer().
 stream_chunked(Data, State) ->
@@ -134,7 +142,7 @@ stream_chunked(Data = << C, _/bits >>, {0, Streamed}, Acc) when C =/= $\r ->
 		{next, Rest, State, Acc2} ->
 			stream_chunked(Rest, State, Acc2);
 		{more, State, Acc2} ->
-			{more, Acc2, 0, Data, State};
+			{more, Acc2, Data, State};
 		Ret ->
 			Ret
 	end;

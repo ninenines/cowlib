@@ -249,14 +249,14 @@ stream_chunked_n_passes_test() ->
 	more = stream_chunked(<<"4\r">>, S0),
 	{more, <<>>, 6, S1} = stream_chunked(<<"4\r\n">>, S0),
 	{more, <<"Wiki">>, 0, S2} = stream_chunked(<<"Wiki\r\n">>, S1),
-	{more, <<"pedia">>, 0, <<"e\r">>, S3} = stream_chunked(<<"5\r\npedia\r\ne\r">>, S2),
+	{more, <<"pedia">>, <<"e\r">>, S3} = stream_chunked(<<"5\r\npedia\r\ne\r">>, S2),
 	{more, <<" in\r\n\r\nchunks.">>, 2, S4} = stream_chunked(<<"e\r\n in\r\n\r\nchunks.">>, S3),
 	{done, 23, <<>>} = stream_chunked(<<"\r\n0\r\n\r\n">>, S4),
 	%% A few extra for coverage purposes.
 	more = stream_chunked(<<"\n3">>, {1, 0}),
 	{more, <<"abc">>, 2, {2, 3}} = stream_chunked(<<"\n3\r\nabc">>, {1, 0}),
 	{more, <<"abc">>, {1, 3}} = stream_chunked(<<"3\r\nabc\r">>, {0, 0}),
-	{more, <<"abc">>, 0, <<"123">>, {0, 3}} = stream_chunked(<<"3\r\nabc\r\n123">>, {0, 0}),
+	{more, <<"abc">>, <<"123">>, {0, 3}} = stream_chunked(<<"3\r\nabc\r\n123">>, {0, 0}),
 	ok.
 
 stream_chunked_dripfeed_test() ->

@@ -16,6 +16,12 @@
 
 -export([rfc2109/1]).
 
+%% Date utilities.
+-export([pad_int/1]).
+-export([weekday/1]).
+-export([month/1]).
+-export([year/1]).
+
 %% @doc Return the date formatted according to RFC2109.
 
 -spec rfc2109(calendar:datetime()) -> binary().

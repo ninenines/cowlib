@@ -41,9 +41,9 @@ dripfeed(<< C, Rest/bits >>, Acc, State, F) ->
 			dripfeed(Rest, << Acc/binary, C >>, State, F);
 		{more, _, State2} ->
 			dripfeed(Rest, <<>>, State2, F);
-		{more, _, _, State2} ->
+		{more, _, Length, State2} when is_integer(Length) ->
 			dripfeed(Rest, <<>>, State2, F);
-		{more, _, _, Acc2, State2} ->
+		{more, _, Acc2, State2} ->
 			dripfeed(Rest, Acc2, State2, F);
 		{done, _, <<>>} ->
 			ok;
@@ -269,6 +269,24 @@ stream_chunked_dripfeed_test() ->
 		" in\r\n\r\nchunks.\r\n"
 		"0\r\n"
 		"\r\n">>, <<>>, {0, 0}, fun stream_chunked/2).
+
+do_body_to_chunks(_, <<>>, Acc) ->
+	lists:reverse([<<"0\r\n\r\n">>|Acc]);
+do_body_to_chunks(ChunkSize, Body, Acc) ->
+	BodySize = byte_size(Body),
+	ChunkSize2 = case BodySize < ChunkSize of
+		true -> BodySize;
+		false -> ChunkSize
+	end,
+	<< Chunk:ChunkSize2/binary, Rest/binary >> = Body,
+	ChunkSizeBin = list_to_binary(integer_to_list(ChunkSize2, 16)),
+	do_body_to_chunks(ChunkSize, Rest,
+		[<< ChunkSizeBin/binary, "\r\n", Chunk/binary, "\r\n" >>|Acc]).
+
+stream_chunked_dripfeed2_test() ->
+	Body = list_to_binary(io_lib:format("~p", [lists:seq(1, 100)])),
+	Body2 = iolist_to_binary(do_body_to_chunks(50, Body, [])),
+	dripfeed(Body2, <<>>, {0, 0}, fun stream_chunked/2).
 
 stream_chunked_error_test_() ->
 	Tests = [

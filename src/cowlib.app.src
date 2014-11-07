@@ -15,6 +15,7 @@
 {application, cowlib, [
 	{description, "Support library for manipulating Web protocols."},
 	{vsn, "1.0.0"},
+	{id, "git"},
 	{modules, []},
 	{registered, []},
 	{applications, [

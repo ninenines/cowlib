@@ -206,21 +206,27 @@ horse_parse_headers() ->
 %% to lowercase.
 
 -spec parse_fullhost(binary()) -> {binary(), undefined | non_neg_integer()}.
+parse_fullhost(<< $[, Rest/bits >>) ->
+	parse_fullhost_ipv6(Rest, << $[ >>);
 parse_fullhost(Fullhost) ->
-	parse_fullhost(Fullhost, false, <<>>).
+	parse_fullhost(Fullhost, <<>>).
 
-parse_fullhost(<< $[, Rest/bits >>, false, <<>>) ->
-	parse_fullhost(Rest, true, << $[ >>);
-parse_fullhost(<<>>, false, Acc) ->
-	{Acc, undefined};
-%% @todo Optimize.
-parse_fullhost(<< $:, Rest/bits >>, false, Acc) ->
-	{Acc, list_to_integer(binary_to_list(Rest))};
-parse_fullhost(<< $], Rest/bits >>, true, Acc) ->
-	parse_fullhost(Rest, false, << Acc/binary, $] >>);
-parse_fullhost(<< C, Rest/bits >>, E, Acc) ->
+parse_fullhost_ipv6(<< $] >>, Acc) ->
+	{<< Acc/binary, $] >>, undefined};
+parse_fullhost_ipv6(<< $], $:, Rest/bits >>, Acc) ->
+	{<< Acc/binary, $] >>, binary_to_integer(Rest)};
+parse_fullhost_ipv6(<< C, Rest/bits >>, Acc) ->
 	case C of
-		?INLINE_LOWERCASE(parse_fullhost, Rest, E, Acc)
+		?INLINE_LOWERCASE(parse_fullhost_ipv6, Rest, Acc)
+	end.
+
+parse_fullhost(<<>>, Acc) ->
+	{Acc, undefined};
+parse_fullhost(<< $:, Rest/bits >>, Acc) ->
+	{Acc, binary_to_integer(Rest)};
+parse_fullhost(<< C, Rest/bits >>, Acc) ->
+	case C of
+		?INLINE_LOWERCASE(parse_fullhost, Rest, Acc)
 	end.
 
 -ifdef(TEST).
@@ -236,6 +242,28 @@ parse_fullhost_test() ->
 	{<<"[::ffff:192.0.2.1]">>, undefined}
 		= parse_fullhost(<<"[::ffff:192.0.2.1]">>),
 	ok.
+-endif.
+
+-ifdef(PERF).
+horse_parse_fullhost_blue_example_org() ->
+	horse:repeat(200000,
+		parse_fullhost(<<"blue.example.org:8080">>)
+	).
+
+horse_parse_fullhost_ipv4() ->
+	horse:repeat(200000,
+		parse_fullhost(<<"192.0.2.1:8080">>)
+	).
+
+horse_parse_fullhost_ipv6() ->
+	horse:repeat(200000,
+		parse_fullhost(<<"[2001:db8::1]:8080">>)
+	).
+
+horse_parse_fullhost_ipv6_v4() ->
+	horse:repeat(200000,
+		parse_fullhost(<<"[::ffff:192.0.2.1]:8080">>)
+	).
 -endif.
 
 %% @doc Extract path and query string from a binary.

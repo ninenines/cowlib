@@ -16,6 +16,7 @@
 
 -export([parse_connection/1]).
 -export([parse_content_length/1]).
+-export([parse_expect/1]).
 -export([parse_transfer_encoding/1]).
 
 -include("cow_inline.hrl").
@@ -97,6 +98,48 @@ horse_parse_content_length_zero() ->
 horse_parse_content_length_giga() ->
 	horse:repeat(100000,
 		parse_content_length(<<"1234567890">>)
+	).
+-endif.
+
+%% @doc Parse the Expect header.
+
+-spec parse_expect(binary()) -> continue.
+parse_expect(<<"100-continue", Rest/bits >>) ->
+	ws_end(Rest),
+	continue;
+parse_expect(<<"100-", C, O, N, T, I, M, U, E, Rest/bits >>)
+	when C =:= $C orelse C =:= $c, O =:= $O orelse O =:= $o,
+		N =:= $N orelse N =:= $n, T =:= $T orelse T =:= $t,
+		I =:= $I orelse I =:= $i, M =:= $N orelse M =:= $n,
+		U =:= $U orelse U =:= $u, E =:= $E orelse E =:= $e ->
+	ws_end(Rest),
+	continue.
+
+-ifdef(TEST).
+parse_expect_test_() ->
+	Tests = [
+		<<"100-continue">>,
+		<<"100-CONTINUE">>,
+		<<"100-Continue">>,
+		<<"100-CoNtInUe">>,
+		<<"100-continue    ">>
+	],
+	[{V, fun() -> continue = parse_expect(V) end} || V <- Tests].
+
+parse_expect_error_test_() ->
+	Tests = [
+		<<>>,
+		<<"   ">>,
+		<<"200-OK">>,
+		<<"Cookies">>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_expect(V)) end} || V <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_expect() ->
+	horse:repeat(200000,
+		parse_expect(<<"100-continue">>)
 	).
 -endif.
 

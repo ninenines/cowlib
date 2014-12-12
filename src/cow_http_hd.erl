@@ -17,6 +17,7 @@
 -export([parse_connection/1]).
 -export([parse_content_length/1]).
 -export([parse_expect/1]).
+-export([parse_max_forwards/1]).
 -export([parse_transfer_encoding/1]).
 
 -include("cow_inline.hrl").
@@ -141,6 +142,33 @@ horse_parse_expect() ->
 	horse:repeat(200000,
 		parse_expect(<<"100-continue">>)
 	).
+-endif.
+
+%% @doc Parse the Max-Forwards header.
+
+-spec parse_max_forwards(binary()) -> integer().
+parse_max_forwards(<< $0, R/bits >>) -> number(R, 0);
+parse_max_forwards(<< $1, R/bits >>) -> number(R, 1);
+parse_max_forwards(<< $2, R/bits >>) -> number(R, 2);
+parse_max_forwards(<< $3, R/bits >>) -> number(R, 3);
+parse_max_forwards(<< $4, R/bits >>) -> number(R, 4);
+parse_max_forwards(<< $5, R/bits >>) -> number(R, 5);
+parse_max_forwards(<< $6, R/bits >>) -> number(R, 6);
+parse_max_forwards(<< $7, R/bits >>) -> number(R, 7);
+parse_max_forwards(<< $8, R/bits >>) -> number(R, 8);
+parse_max_forwards(<< $9, R/bits >>) -> number(R, 9).
+
+-ifdef(TEST).
+parse_max_forwards_test_() ->
+	Tests = [
+		{<<"0">>, 0},
+		{<<"42    ">>, 42},
+		{<<"69\t">>, 69},
+		{<<"1337">>, 1337},
+		{<<"1234567890">>, 1234567890},
+		{<<"1234567890     ">>, 1234567890}
+	],
+	[{V, fun() -> R = parse_max_forwards(V) end} || {V, R} <- Tests].
 -endif.
 
 %% @doc Parse the Transfer-Encoding header.

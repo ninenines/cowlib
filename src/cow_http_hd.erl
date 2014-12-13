@@ -17,6 +17,7 @@
 -export([parse_accept/1]).
 -export([parse_accept_charset/1]).
 -export([parse_accept_encoding/1]).
+-export([parse_accept_language/1]).
 -export([parse_connection/1]).
 -export([parse_content_length/1]).
 -export([parse_expect/1]).
@@ -99,13 +100,13 @@ media_range_value(<< C, R/bits >>, Acc, T, S, P, K, V) when ?IS_TOKEN(C) -> medi
 
 %% Special function for badly behaving user agents that send .123 instead of 0.123.
 media_range_broken_weight(<< A, B, C, R/bits >>, Acc, T, S, P)
-	when ?IS_DIGIT(A), ?IS_DIGIT(B), ?IS_DIGIT(C) ->
+	when A >= $0, A =< $9, B >= $0, B =< $9, C >= $0, C =< $9 ->
 		accept_before_semicolon(R, Acc, T, S, P, (A - $0) * 100 + (B - $0) * 10 + (C - $0), []);
 media_range_broken_weight(<< A, B, R/bits >>, Acc, T, S, P)
-	when ?IS_DIGIT(A), ?IS_DIGIT(B) ->
+	when A >= $0, A =< $9, B >= $0, B =< $9 ->
 		accept_before_semicolon(R, Acc, T, S, P, (A - $0) * 100 + (B - $0) * 10, []);
 media_range_broken_weight(<< A, R/bits >>, Acc, T, S, P)
-	when ?IS_DIGIT(A) ->
+	when A >= $0, A =< $9 ->
 		accept_before_semicolon(R, Acc, T, S, P, (A - $0) * 100, []).
 
 media_range_weight(<< "1.000", R/bits >>, Acc, T, S, P) -> accept_before_semicolon(R, Acc, T, S, P, 1000, []);
@@ -114,13 +115,13 @@ media_range_weight(<< "1.0", R/bits >>, Acc, T, S, P) -> accept_before_semicolon
 media_range_weight(<< "1.", R/bits >>, Acc, T, S, P) -> accept_before_semicolon(R, Acc, T, S, P, 1000, []);
 media_range_weight(<< "1", R/bits >>, Acc, T, S, P) -> accept_before_semicolon(R, Acc, T, S, P, 1000, []);
 media_range_weight(<< "0.", A, B, C, R/bits >>, Acc, T, S, P)
-	when ?IS_DIGIT(A), ?IS_DIGIT(B), ?IS_DIGIT(C) ->
+	when A >= $0, A =< $9, B >= $0, B =< $9, C >= $0, C =< $9 ->
 		accept_before_semicolon(R, Acc, T, S, P, (A - $0) * 100 + (B - $0) * 10 + (C - $0), []);
 media_range_weight(<< "0.", A, B, R/bits >>, Acc, T, S, P)
-	when ?IS_DIGIT(A), ?IS_DIGIT(B) ->
+	when A >= $0, A =< $9, B >= $0, B =< $9 ->
 		accept_before_semicolon(R, Acc, T, S, P, (A - $0) * 100 + (B - $0) * 10, []);
 media_range_weight(<< "0.", A, R/bits >>, Acc, T, S, P)
-	when ?IS_DIGIT(A) ->
+	when A >= $0, A =< $9 ->
 		accept_before_semicolon(R, Acc, T, S, P, (A - $0) * 100, []);
 media_range_weight(<< "0.", R/bits >>, Acc, T, S, P) -> accept_before_semicolon(R, Acc, T, S, P, 0, []);
 media_range_weight(<< "0", R/bits >>, Acc, T, S, P) -> accept_before_semicolon(R, Acc, T, S, P, 0, []).
@@ -272,13 +273,13 @@ conneg_weight(<< "1.0", R/bits >>, Acc, T) -> conneg_list_sep(R, [{T, 1000}|Acc]
 conneg_weight(<< "1.", R/bits >>, Acc, T) -> conneg_list_sep(R, [{T, 1000}|Acc]);
 conneg_weight(<< "1", R/bits >>, Acc, T) -> conneg_list_sep(R, [{T, 1000}|Acc]);
 conneg_weight(<< "0.", A, B, C, R/bits >>, Acc, T)
-	when ?IS_DIGIT(A), ?IS_DIGIT(B), ?IS_DIGIT(C) ->
+	when A >= $0, A =< $9, B >= $0, B =< $9, C >= $0, C =< $9 ->
 		conneg_list_sep(R, [{T, (A - $0) * 100 + (B - $0) * 10 + (C - $0)}|Acc]);
 conneg_weight(<< "0.", A, B, R/bits >>, Acc, T)
-	when ?IS_DIGIT(A), ?IS_DIGIT(B) ->
+	when A >= $0, A =< $9, B >= $0, B =< $9 ->
 		conneg_list_sep(R, [{T, (A - $0) * 100 + (B - $0) * 10}|Acc]);
 conneg_weight(<< "0.", A, R/bits >>, Acc, T)
-	when ?IS_DIGIT(A) ->
+	when A >= $0, A =< $9 ->
 		conneg_list_sep(R, [{T, (A - $0) * 100}|Acc]);
 conneg_weight(<< "0.", R/bits >>, Acc, T) -> conneg_list_sep(R, [{T, 0}|Acc]);
 conneg_weight(<< "0", R/bits >>, Acc, T) -> conneg_list_sep(R, [{T, 0}|Acc]).
@@ -350,6 +351,119 @@ parse_accept_encoding_test_() ->
 horse_parse_accept_encoding() ->
 	horse:repeat(20000,
 		parse_accept_encoding(<<"gzip;q=1.0, identity; q=0.5, *;q=0">>)
+	).
+-endif.
+
+%% @doc Parse the Accept-Language header.
+
+-spec parse_accept_language(binary()) -> [{binary(), qvalue()}].
+parse_accept_language(LanguageRange) ->
+	nonempty(language_range_list(LanguageRange, [])).
+
+language_range_list(<<>>, Acc) -> lists:reverse(Acc);
+language_range_list(<< $\s, R/bits >>, Acc) -> language_range_list(R, Acc);
+language_range_list(<< $\t, R/bits >>, Acc) -> language_range_list(R, Acc);
+language_range_list(<< $\,, R/bits >>, Acc) -> language_range_list(R, Acc);
+language_range_list(<< $*, R/bits >>, Acc) -> language_range_before_semicolon(R, Acc, <<"*">>);
+language_range_list(<< C, R/bits >>, Acc) when ?IS_ALPHA(C) ->
+	case C of
+		?INLINE_LOWERCASE(language_range, R, Acc, 1, <<>>)
+	end.
+
+language_range(<<>>, Acc, _, T) -> lists:reverse([{T, 1000}|Acc]);
+language_range(<< $,, R/bits >>, Acc, _, T) -> language_range_list(R, [{T, 1000}|Acc]);
+language_range(<< $;, R/bits >>, Acc, _, T) -> language_range_before_weight(R, Acc, T);
+language_range(<< $\s, R/bits >>, Acc, _, T) -> language_range_before_semicolon(R, Acc, T);
+language_range(<< $\t, R/bits >>, Acc, _, T) -> language_range_before_semicolon(R, Acc, T);
+language_range(<< $-, R/bits >>, Acc, _, T) -> language_range_sub(R, Acc, 0, << T/binary, $- >>);
+language_range(<< _, _/bits >>, _, 8, _) -> error(badarg);
+language_range(<< C, R/bits >>, Acc, N, T) when ?IS_ALPHA(C) ->
+	case C of
+		?INLINE_LOWERCASE(language_range, R, Acc, N + 1, T)
+	end.
+
+language_range_sub(<<>>, Acc, N, T) when N > 0 -> lists:reverse([{T, 1000}|Acc]);
+language_range_sub(<< $,, R/bits >>, Acc, N, T) when N > 0 -> language_range_list(R, [{T, 1000}|Acc]);
+language_range_sub(<< $;, R/bits >>, Acc, N, T) when N > 0 -> language_range_before_weight(R, Acc, T);
+language_range_sub(<< $\s, R/bits >>, Acc, N, T) when N > 0 -> language_range_before_semicolon(R, Acc, T);
+language_range_sub(<< $\t, R/bits >>, Acc, N, T) when N > 0 -> language_range_before_semicolon(R, Acc, T);
+language_range_sub(<< $-, R/bits >>, Acc, N, T) when N > 0 -> language_range_sub(R, Acc, 0, << T/binary, $- >>);
+language_range_sub(<< _, _/bits >>, _, 8, _) -> error(badarg);
+language_range_sub(<< C, R/bits >>, Acc, N, T) when ?IS_ALPHA(C); ?IS_DIGIT(C) ->
+	case C of
+		?INLINE_LOWERCASE(language_range_sub, R, Acc, N + 1, T)
+	end.
+
+language_range_before_semicolon(<<>>, Acc, T) -> lists:reverse([{T, 1000}|Acc]);
+language_range_before_semicolon(<< $,, R/bits >>, Acc, T) -> language_range_list(R, [{T, 1000}|Acc]);
+language_range_before_semicolon(<< $;, R/bits >>, Acc, T) -> language_range_before_weight(R, Acc, T);
+language_range_before_semicolon(<< $\s, R/bits >>, Acc, T) -> language_range_before_semicolon(R, Acc, T);
+language_range_before_semicolon(<< $\t, R/bits >>, Acc, T) -> language_range_before_semicolon(R, Acc, T).
+
+language_range_before_weight(<< $\s, R/bits >>, Acc, T) -> language_range_before_weight(R, Acc, T);
+language_range_before_weight(<< $\t, R/bits >>, Acc, T) -> language_range_before_weight(R, Acc, T);
+language_range_before_weight(<< $q, $=, R/bits >>, Acc, T) -> language_range_weight(R, Acc, T);
+%% Special clause for broken user agents that confuse ; and , separators.
+language_range_before_weight(<< C, R/bits >>, Acc, T) when ?IS_ALPHA(C) ->
+	case C of
+		?INLINE_LOWERCASE(language_range, R, [{T, 1000}|Acc], 1, <<>>)
+	end.
+
+language_range_weight(<< "1.000", R/bits >>, Acc, T) -> language_range_list_sep(R, [{T, 1000}|Acc]);
+language_range_weight(<< "1.00", R/bits >>, Acc, T) -> language_range_list_sep(R, [{T, 1000}|Acc]);
+language_range_weight(<< "1.0", R/bits >>, Acc, T) -> language_range_list_sep(R, [{T, 1000}|Acc]);
+language_range_weight(<< "1.", R/bits >>, Acc, T) -> language_range_list_sep(R, [{T, 1000}|Acc]);
+language_range_weight(<< "1", R/bits >>, Acc, T) -> language_range_list_sep(R, [{T, 1000}|Acc]);
+language_range_weight(<< "0.", A, B, C, R/bits >>, Acc, T)
+	when A >= $0, A =< $9, B >= $0, B =< $9, C >= $0, C =< $9 ->
+		language_range_list_sep(R, [{T, (A - $0) * 100 + (B - $0) * 10 + (C - $0)}|Acc]);
+language_range_weight(<< "0.", A, B, R/bits >>, Acc, T)
+	when A >= $0, A =< $9, B >= $0, B =< $9 ->
+		language_range_list_sep(R, [{T, (A - $0) * 100 + (B - $0) * 10}|Acc]);
+language_range_weight(<< "0.", A, R/bits >>, Acc, T)
+	when A >= $0, A =< $9 ->
+		language_range_list_sep(R, [{T, (A - $0) * 100}|Acc]);
+language_range_weight(<< "0.", R/bits >>, Acc, T) -> language_range_list_sep(R, [{T, 0}|Acc]);
+language_range_weight(<< "0", R/bits >>, Acc, T) -> language_range_list_sep(R, [{T, 0}|Acc]).
+
+language_range_list_sep(<<>>, Acc) -> lists:reverse(Acc);
+language_range_list_sep(<< $\s, R/bits >>, Acc) -> language_range_list_sep(R, Acc);
+language_range_list_sep(<< $\t, R/bits >>, Acc) -> language_range_list_sep(R, Acc);
+language_range_list_sep(<< $,, R/bits >>, Acc) -> language_range_list(R, Acc).
+
+-ifdef(TEST).
+parse_accept_language_test_() ->
+	Tests = [
+		{<<"da, en-gb;q=0.8, en;q=0.7">>, [
+			{<<"da">>, 1000},
+			{<<"en-gb">>, 800},
+			{<<"en">>, 700}
+		]},
+		{<<"en, en-US, en-cockney, i-cherokee, x-pig-latin, es-419">>, [
+			{<<"en">>, 1000},
+			{<<"en-us">>, 1000},
+			{<<"en-cockney">>, 1000},
+			{<<"i-cherokee">>, 1000},
+			{<<"x-pig-latin">>, 1000},
+			{<<"es-419">>, 1000}
+		]}
+	],
+	[{V, fun() -> R = parse_accept_language(V) end} || {V, R} <- Tests].
+
+parse_accept_language_error_test_() ->
+	Tests = [
+		<<>>,
+		<<"loooooong">>,
+		<<"en-us-loooooong">>,
+		<<"419-en-us">>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_accept_language(V)) end} || V <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_accept_language() ->
+	horse:repeat(20000,
+		parse_accept_language(<<"da, en-gb;q=0.8, en;q=0.7">>)
 	).
 -endif.
 

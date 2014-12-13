@@ -15,6 +15,7 @@
 -module(cow_http_hd).
 
 -export([parse_accept/1]).
+-export([parse_accept_charset/1]).
 -export([parse_connection/1]).
 -export([parse_content_length/1]).
 -export([parse_expect/1]).
@@ -221,6 +222,98 @@ horse_parse_accept() ->
 	horse:repeat(20000,
 		parse_accept(<<"text/*;q=0.3, text/html;q=0.7, text/html;level=1, "
 			"text/html;level=2;q=0.4, */*;q=0.5">>)
+	).
+-endif.
+
+%% @doc Parse the Accept-Charset header.
+
+-spec parse_accept_charset(binary()) -> [{binary(), qvalue()}].
+parse_accept_charset(Charset) ->
+	nonempty(conneg_list(Charset, [])).
+
+conneg_list(<<>>, Acc) -> lists:reverse(Acc);
+conneg_list(<< $\s, R/bits >>, Acc) -> conneg_list(R, Acc);
+conneg_list(<< $\t, R/bits >>, Acc) -> conneg_list(R, Acc);
+conneg_list(<< $\,, R/bits >>, Acc) -> conneg_list(R, Acc);
+conneg_list(<< C, R/bits >>, Acc) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(conneg, R, Acc, <<>>)
+	end.
+
+conneg(<<>>, Acc, T) -> lists:reverse([{T, 1000}|Acc]);
+conneg(<< $,, R/bits >>, Acc, T) -> conneg_list(R, [{T, 1000}|Acc]);
+conneg(<< $;, R/bits >>, Acc, T) -> conneg_before_weight(R, Acc, T);
+conneg(<< $\s, R/bits >>, Acc, T) -> conneg_before_semicolon(R, Acc, T);
+conneg(<< $\t, R/bits >>, Acc, T) -> conneg_before_semicolon(R, Acc, T);
+conneg(<< C, R/bits >>, Acc, T) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(conneg, R, Acc, T)
+	end.
+
+conneg_before_semicolon(<<>>, Acc, T) -> lists:reverse([{T, 1000}|Acc]);
+conneg_before_semicolon(<< $,, R/bits >>, Acc, T) -> conneg_list(R, [{T, 1000}|Acc]);
+conneg_before_semicolon(<< $;, R/bits >>, Acc, T) -> conneg_before_weight(R, Acc, T);
+conneg_before_semicolon(<< $\s, R/bits >>, Acc, T) -> conneg_before_semicolon(R, Acc, T);
+conneg_before_semicolon(<< $\t, R/bits >>, Acc, T) -> conneg_before_semicolon(R, Acc, T).
+
+conneg_before_weight(<< $\s, R/bits >>, Acc, T) -> conneg_before_weight(R, Acc, T);
+conneg_before_weight(<< $\t, R/bits >>, Acc, T) -> conneg_before_weight(R, Acc, T);
+conneg_before_weight(<< $q, $=, R/bits >>, Acc, T) -> conneg_weight(R, Acc, T);
+%% Special clause for broken user agents that confuse ; and , separators.
+conneg_before_weight(<< C, R/bits >>, Acc, T) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(conneg, R, [{T, 1000}|Acc], <<>>)
+	end.
+
+conneg_weight(<< "1.000", R/bits >>, Acc, T) -> conneg_list_sep(R, [{T, 1000}|Acc]);
+conneg_weight(<< "1.00", R/bits >>, Acc, T) -> conneg_list_sep(R, [{T, 1000}|Acc]);
+conneg_weight(<< "1.0", R/bits >>, Acc, T) -> conneg_list_sep(R, [{T, 1000}|Acc]);
+conneg_weight(<< "1.", R/bits >>, Acc, T) -> conneg_list_sep(R, [{T, 1000}|Acc]);
+conneg_weight(<< "1", R/bits >>, Acc, T) -> conneg_list_sep(R, [{T, 1000}|Acc]);
+conneg_weight(<< "0.", A, B, C, R/bits >>, Acc, T)
+	when ?IS_DIGIT(A), ?IS_DIGIT(B), ?IS_DIGIT(C) ->
+		conneg_list_sep(R, [{T, (A - $0) * 100 + (B - $0) * 10 + (C - $0)}|Acc]);
+conneg_weight(<< "0.", A, B, R/bits >>, Acc, T)
+	when ?IS_DIGIT(A), ?IS_DIGIT(B) ->
+		conneg_list_sep(R, [{T, (A - $0) * 100 + (B - $0) * 10}|Acc]);
+conneg_weight(<< "0.", A, R/bits >>, Acc, T)
+	when ?IS_DIGIT(A) ->
+		conneg_list_sep(R, [{T, (A - $0) * 100}|Acc]);
+conneg_weight(<< "0.", R/bits >>, Acc, T) -> conneg_list_sep(R, [{T, 0}|Acc]);
+conneg_weight(<< "0", R/bits >>, Acc, T) -> conneg_list_sep(R, [{T, 0}|Acc]).
+
+conneg_list_sep(<<>>, Acc) -> lists:reverse(Acc);
+conneg_list_sep(<< $\s, R/bits >>, Acc) -> conneg_list_sep(R, Acc);
+conneg_list_sep(<< $\t, R/bits >>, Acc) -> conneg_list_sep(R, Acc);
+conneg_list_sep(<< $,, R/bits >>, Acc) -> conneg_list(R, Acc).
+
+-ifdef(TEST).
+parse_accept_charset_test_() ->
+	Tests = [
+		{<<"iso-8859-5, unicode-1-1;q=0.8">>, [
+			{<<"iso-8859-5">>, 1000},
+			{<<"unicode-1-1">>, 800}
+		]},
+		%% Some user agents send this invalid value for the Accept-Charset header
+		{<<"ISO-8859-1;utf-8;q=0.7,*;q=0.7">>, [
+			{<<"iso-8859-1">>, 1000},
+			{<<"utf-8">>, 700},
+			{<<"*">>, 700}
+		]}
+	],
+	[{V, fun() -> R = parse_accept_charset(V) end} || {V, R} <- Tests].
+
+parse_accept_charset_error_test_() ->
+	Tests = [
+		<<>>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_accept_charset(V)) end} || V <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_accept_charset() ->
+	horse:repeat(20000,
+		parse_accept_charset(<<"iso-8859-5, unicode-1-1;q=0.8">>)
 	).
 -endif.
 

@@ -533,6 +533,14 @@ parse_content_length_test_() ->
 		{<<"1234567890     ">>, 1234567890}
 	],
 	[{V, fun() -> R = parse_content_length(V) end} || {V, R} <- Tests].
+
+parse_content_length_error_test_() ->
+	Tests = [
+		<<>>,
+		<<"123, 123">>,
+		<<"4.17">>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_content_length(V)) end} || V <- Tests].
 -endif.
 
 -ifdef(PERF).

@@ -15,6 +15,38 @@
 -ifndef(COW_INLINE_HRL).
 -define(COW_INLINE_HRL, 1).
 
+%% IS_DIGIT(Character)
+
+-define(IS_DIGIT(C),
+	C >= $0, C =< $9
+).
+
+%% IS_TOKEN(Character)
+
+-define(IS_TOKEN(C),
+	C =:= $a; C =:= $b; C =:= $c; C =:= $d; C =:= $e;
+	C =:= $f; C =:= $g; C =:= $h; C =:= $i; C =:= $j;
+	C =:= $k; C =:= $l; C =:= $m; C =:= $n; C =:= $o;
+	C =:= $p; C =:= $q; C =:= $r; C =:= $s; C =:= $t;
+	C =:= $u; C =:= $v; C =:= $w; C =:= $x; C =:= $y;
+	C =:= $z;
+	C =:= $A; C =:= $B; C =:= $C; C =:= $D; C =:= $E;
+	C =:= $F; C =:= $G; C =:= $H; C =:= $I; C =:= $J;
+	C =:= $K; C =:= $L; C =:= $M; C =:= $N; C =:= $O;
+	C =:= $P; C =:= $Q; C =:= $R; C =:= $S; C =:= $T;
+	C =:= $U; C =:= $V; C =:= $W; C =:= $X; C =:= $Y;
+	C =:= $2;
+	C =:= $0; C =:= $1; C =:= $2; C =:= $3; C =:= $4;
+	C =:= $5; C =:= $6; C =:= $7; C =:= $8; C =:= $9;
+	C =:= $!; C =:= $#; C =:= $$; C =:= $%; C =:= $&;
+	C =:= $'; C =:= $*; C =:= $+; C =:= $-; C =:= $.;
+	C =:= $^; C =:= $_; C =:= $`; C =:= $|; C =:= $~
+).
+
+%% IS_VCHAR(Character)
+
+-define(IS_VCHAR(C), C =:= $\t; C > 31, C =/= 127).
+
 %% INLINE_LOWERCASE(Function, Rest, Acc, ...)
 %%
 %% To be included at the end of a case block.

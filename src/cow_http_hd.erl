@@ -14,13 +14,215 @@
 
 -module(cow_http_hd).
 
+-export([parse_accept/1]).
 -export([parse_connection/1]).
 -export([parse_content_length/1]).
 -export([parse_expect/1]).
 -export([parse_max_forwards/1]).
 -export([parse_transfer_encoding/1]).
 
+-type qvalue() :: 0..1000.
+-export_type([qvalue/0]).
+
 -include("cow_inline.hrl").
+
+%% @doc Parse the Accept header.
+
+-spec parse_accept(binary()) -> [{{binary(), binary(), [{binary(), binary()}]}, qvalue(), [binary() | {binary(), binary()}]}].
+parse_accept(<<"*/*">>) ->
+	[{{<<"*">>, <<"*">>, []}, 1000, []}];
+parse_accept(Accept) ->
+	nonempty(media_range_list(Accept, [])).
+
+media_range_list(<<>>, Acc) -> lists:reverse(Acc);
+media_range_list(<< $\s, R/bits >>, Acc) -> media_range_list(R, Acc);
+media_range_list(<< $\t, R/bits >>, Acc) -> media_range_list(R, Acc);
+media_range_list(<< $,, R/bits >>, Acc) -> media_range_list(R, Acc);
+media_range_list(<< C, R/bits >>, Acc) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(media_range_type, R, Acc, <<>>)
+	end.
+
+media_range_type(<< $/, R/bits >>, Acc, T) -> media_range_subtype(R, Acc, T, <<>>);
+%% Special clause for badly behaving user agents that send * instead of */*.
+media_range_type(<< _, R/bits >>, Acc, <<"*">>) -> media_range_before_param(R, Acc, <<"*">>, <<"*">>, []);
+media_range_type(<< C, R/bits >>, Acc, T) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(media_range_type, R, Acc, T)
+	end.
+
+media_range_subtype(<<>>, Acc, T, S) when S =/= <<>> -> lists:reverse([{{T, S, []}, 1000, []}|Acc]);
+media_range_subtype(<< $,, R/bits >>, Acc, T, S) when S =/= <<>> -> media_range_list(R, [{{T, S, []}, 1000, []}|Acc]);
+media_range_subtype(<< $;, R/bits >>, Acc, T, S) when S =/= <<>> -> media_range_before_param(R, Acc, T, S, []);
+media_range_subtype(<< $\s, R/bits >>, Acc, T, S) when S =/= <<>> -> media_range_before_semicolon(R, Acc, T, S, []);
+media_range_subtype(<< $\t, R/bits >>, Acc, T, S) when S =/= <<>> -> media_range_before_semicolon(R, Acc, T, S, []);
+media_range_subtype(<< C, R/bits >>, Acc, T, S) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(media_range_subtype, R, Acc, T, S)
+	end.
+
+media_range_before_semicolon(<<>>, Acc, T, S, P) -> lists:reverse([{{T, S, lists:reverse(P)}, 1000, []}|Acc]);
+media_range_before_semicolon(<< $,, R/bits >>, Acc, T, S, P) -> media_range_list(R, [{{T, S, lists:reverse(P)}, 1000, []}|Acc]);
+media_range_before_semicolon(<< $;, R/bits >>, Acc, T, S, P) -> media_range_before_param(R, Acc, T, S, P);
+media_range_before_semicolon(<< $\s, R/bits >>, Acc, T, S, P) -> media_range_before_semicolon(R, Acc, T, S, P);
+media_range_before_semicolon(<< $\t, R/bits >>, Acc, T, S, P) -> media_range_before_semicolon(R, Acc, T, S, P).
+
+media_range_before_param(<< $\s, R/bits >>, Acc, T, S, P) -> media_range_before_param(R, Acc, T, S, P);
+media_range_before_param(<< $\t, R/bits >>, Acc, T, S, P) -> media_range_before_param(R, Acc, T, S, P);
+%% Special clause for badly behaving user agents that send .123 instead of 0.123.
+media_range_before_param(<< $q, $=, $., R/bits >>, Acc, T, S, P) -> media_range_broken_weight(R, Acc, T, S, P);
+media_range_before_param(<< $q, $=, R/bits >>, Acc, T, S, P) -> media_range_weight(R, Acc, T, S, P);
+media_range_before_param(<< C, R/bits >>, Acc, T, S, P) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(media_range_param, R, Acc, T, S, P, <<>>)
+	end.
+
+media_range_param(<< $=, $", R/bits >>, Acc, T, S, P, K) -> media_range_quoted(R, Acc, T, S, P, K, <<>>);
+media_range_param(<< $=, R/bits >>, Acc, T, S, P, K) -> media_range_value(R, Acc, T, S, P, K, <<>>);
+media_range_param(<< C, R/bits >>, Acc, T, S, P, K) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(media_range_param, R, Acc, T, S, P, K)
+	end.
+
+media_range_quoted(<< $", R/bits >>, Acc, T, S, P, K, V) -> media_range_before_semicolon(R, Acc, T, S, [{K, V}|P]);
+media_range_quoted(<< $\\, C, R/bits >>, Acc, T, S, P, K, V) when ?IS_VCHAR(C) -> media_range_quoted(R, Acc, T, S, P, K, << V/binary, C >>);
+media_range_quoted(<< C, R/bits >>, Acc, T, S, P, K, V) when ?IS_VCHAR(C) -> media_range_quoted(R, Acc, T, S, P, K, << V/binary, C >>).
+
+media_range_value(<<>>, Acc, T, S, P, K, V) -> lists:reverse([{{T, S, lists:reverse([{K, V}|P])}, 1000, []}|Acc]);
+media_range_value(<< $,, R/bits >>, Acc, T, S, P, K, V) -> media_range_list(R, [{{T, S, lists:reverse([{K, V}|P])}, 1000, []}|Acc]);
+media_range_value(<< $;, R/bits >>, Acc, T, S, P, K, V) -> media_range_before_param(R, Acc, T, S, [{K, V}|P]);
+media_range_value(<< $\s, R/bits >>, Acc, T, S, P, K, V) -> media_range_before_semicolon(R, Acc, T, S, [{K, V}|P]);
+media_range_value(<< $\t, R/bits >>, Acc, T, S, P, K, V) -> media_range_before_semicolon(R, Acc, T, S, [{K, V}|P]);
+media_range_value(<< C, R/bits >>, Acc, T, S, P, K, V) when ?IS_TOKEN(C) -> media_range_value(R, Acc, T, S, P, K, << V/binary, C >>).
+
+%% Special function for badly behaving user agents that send .123 instead of 0.123.
+media_range_broken_weight(<< A, B, C, R/bits >>, Acc, T, S, P)
+	when ?IS_DIGIT(A), ?IS_DIGIT(B), ?IS_DIGIT(C) ->
+		accept_before_semicolon(R, Acc, T, S, P, (A - $0) * 100 + (B - $0) * 10 + (C - $0), []);
+media_range_broken_weight(<< A, B, R/bits >>, Acc, T, S, P)
+	when ?IS_DIGIT(A), ?IS_DIGIT(B) ->
+		accept_before_semicolon(R, Acc, T, S, P, (A - $0) * 100 + (B - $0) * 10, []);
+media_range_broken_weight(<< A, R/bits >>, Acc, T, S, P)
+	when ?IS_DIGIT(A) ->
+		accept_before_semicolon(R, Acc, T, S, P, (A - $0) * 100, []).
+
+media_range_weight(<< "1.000", R/bits >>, Acc, T, S, P) -> accept_before_semicolon(R, Acc, T, S, P, 1000, []);
+media_range_weight(<< "1.00", R/bits >>, Acc, T, S, P) -> accept_before_semicolon(R, Acc, T, S, P, 1000, []);
+media_range_weight(<< "1.0", R/bits >>, Acc, T, S, P) -> accept_before_semicolon(R, Acc, T, S, P, 1000, []);
+media_range_weight(<< "1.", R/bits >>, Acc, T, S, P) -> accept_before_semicolon(R, Acc, T, S, P, 1000, []);
+media_range_weight(<< "1", R/bits >>, Acc, T, S, P) -> accept_before_semicolon(R, Acc, T, S, P, 1000, []);
+media_range_weight(<< "0.", A, B, C, R/bits >>, Acc, T, S, P)
+	when ?IS_DIGIT(A), ?IS_DIGIT(B), ?IS_DIGIT(C) ->
+		accept_before_semicolon(R, Acc, T, S, P, (A - $0) * 100 + (B - $0) * 10 + (C - $0), []);
+media_range_weight(<< "0.", A, B, R/bits >>, Acc, T, S, P)
+	when ?IS_DIGIT(A), ?IS_DIGIT(B) ->
+		accept_before_semicolon(R, Acc, T, S, P, (A - $0) * 100 + (B - $0) * 10, []);
+media_range_weight(<< "0.", A, R/bits >>, Acc, T, S, P)
+	when ?IS_DIGIT(A) ->
+		accept_before_semicolon(R, Acc, T, S, P, (A - $0) * 100, []);
+media_range_weight(<< "0.", R/bits >>, Acc, T, S, P) -> accept_before_semicolon(R, Acc, T, S, P, 0, []);
+media_range_weight(<< "0", R/bits >>, Acc, T, S, P) -> accept_before_semicolon(R, Acc, T, S, P, 0, []).
+
+accept_before_semicolon(<<>>, Acc, T, S, P, Q, E) -> lists:reverse([{{T, S, lists:reverse(P)}, Q, lists:reverse(E)}|Acc]);
+accept_before_semicolon(<< $,, R/bits >>, Acc, T, S, P, Q, E) -> media_range_list(R, [{{T, S, lists:reverse(P)}, Q, lists:reverse(E)}|Acc]);
+accept_before_semicolon(<< $;, R/bits >>, Acc, T, S, P, Q, E) -> accept_before_ext(R, Acc, T, S, P, Q, E);
+accept_before_semicolon(<< $\s, R/bits >>, Acc, T, S, P, Q, E) -> accept_before_semicolon(R, Acc, T, S, P, Q, E);
+accept_before_semicolon(<< $\t, R/bits >>, Acc, T, S, P, Q, E) -> accept_before_semicolon(R, Acc, T, S, P, Q, E).
+
+accept_before_ext(<< $\s, R/bits >>, Acc, T, S, P, Q, E) -> accept_before_ext(R, Acc, T, S, P, Q, E);
+accept_before_ext(<< $\t, R/bits >>, Acc, T, S, P, Q, E) -> accept_before_ext(R, Acc, T, S, P, Q, E);
+accept_before_ext(<< C, R/bits >>, Acc, T, S, P, Q, E) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(accept_ext, R, Acc, T, S, P, Q, E, <<>>)
+	end.
+
+accept_ext(<<>>, Acc, T, S, P, Q, E, K) -> lists:reverse([{{T, S, lists:reverse(P)}, Q, lists:reverse([K|E])}|Acc]);
+accept_ext(<< $,, R/bits >>, Acc, T, S, P, Q, E, K) -> media_range_list(R, [{{T, S, lists:reverse(P)}, Q, lists:reverse([K|E])}|Acc]);
+accept_ext(<< $;, R/bits >>, Acc, T, S, P, Q, E, K) -> accept_before_ext(R, Acc, T, S, P, Q, [K|E]);
+accept_ext(<< $\s, R/bits >>, Acc, T, S, P, Q, E, K) -> accept_before_semicolon(R, Acc, T, S, P, Q, [K|E]);
+accept_ext(<< $\t, R/bits >>, Acc, T, S, P, Q, E, K) -> accept_before_semicolon(R, Acc, T, S, P, Q, [K|E]);
+accept_ext(<< $=, $", R/bits >>, Acc, T, S, P, Q, E, K) -> accept_quoted(R, Acc, T, S, P, Q, E, K, <<>>);
+accept_ext(<< $=, R/bits >>, Acc, T, S, P, Q, E, K) -> accept_value(R, Acc, T, S, P, Q, E, K, <<>>);
+accept_ext(<< C, R/bits >>, Acc, T, S, P, Q, E, K) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(accept_ext, R, Acc, T, S, P, Q, E, K)
+	end.
+
+accept_quoted(<< $", R/bits >>, Acc, T, S, P, Q, E, K, V) -> accept_before_semicolon(R, Acc, T, S, P, Q, [{K, V}|E]);
+accept_quoted(<< $\\, C, R/bits >>, Acc, T, S, P, Q, E, K, V) when ?IS_VCHAR(C) -> accept_quoted(R, Acc, T, S, P, Q, E, K, << V/binary, C >>);
+accept_quoted(<< C, R/bits >>, Acc, T, S, P, Q, E, K, V) when ?IS_VCHAR(C) -> accept_quoted(R, Acc, T, S, P, Q, E, K, << V/binary, C >>).
+
+accept_value(<<>>, Acc, T, S, P, Q, E, K, V) -> lists:reverse([{{T, S, lists:reverse(P)}, Q, lists:reverse([{K, V}|E])}|Acc]);
+accept_value(<< $,, R/bits >>, Acc, T, S, P, Q, E, K, V) -> media_range_list(R, [{{T, S, lists:reverse(P)}, Q, lists:reverse([{K, V}|E])}|Acc]);
+accept_value(<< $;, R/bits >>, Acc, T, S, P, Q, E, K, V) -> accept_before_semicolon(R, Acc, T, S, P, Q, [{K, V}|E]);
+accept_value(<< $\s, R/bits >>, Acc, T, S, P, Q, E, K, V) -> accept_before_semicolon(R, Acc, T, S, P, Q, [{K, V}|E]);
+accept_value(<< $\t, R/bits >>, Acc, T, S, P, Q, E, K, V) -> accept_before_semicolon(R, Acc, T, S, P, Q, [{K, V}|E]);
+accept_value(<< C, R/bits >>, Acc, T, S, P, Q, E, K, V) when ?IS_TOKEN(C) -> accept_value(R, Acc, T, S, P, Q, E, K, << V/binary, C >>).
+
+-ifdef(TEST).
+parse_accept_test_() ->
+	Tests = [
+		{<<"audio/*; q=0.2, audio/basic">>, [
+			{{<<"audio">>, <<"*">>, []}, 200, []},
+			{{<<"audio">>, <<"basic">>, []}, 1000, []}
+		]},
+		{<<"text/plain; q=0.5, text/html, "
+		   "text/x-dvi; q=0.8, text/x-c">>, [
+		   {{<<"text">>, <<"plain">>, []}, 500, []},
+		   {{<<"text">>, <<"html">>, []}, 1000, []},
+		   {{<<"text">>, <<"x-dvi">>, []}, 800, []},
+		   {{<<"text">>, <<"x-c">>, []}, 1000, []}
+		]},
+		{<<"text/*, text/html, text/html;level=1, */*">>, [
+			{{<<"text">>, <<"*">>, []}, 1000, []},
+			{{<<"text">>, <<"html">>, []}, 1000, []},
+			{{<<"text">>, <<"html">>, [{<<"level">>, <<"1">>}]}, 1000, []},
+			{{<<"*">>, <<"*">>, []}, 1000, []}
+		]},
+		{<<"text/*;q=0.3, text/html;q=0.7, text/html;level=1, "
+		   "text/html;level=2;q=0.4, */*;q=0.5">>, [
+		   {{<<"text">>, <<"*">>, []}, 300, []},
+		   {{<<"text">>, <<"html">>, []}, 700, []},
+		   {{<<"text">>, <<"html">>, [{<<"level">>, <<"1">>}]}, 1000, []},
+		   {{<<"text">>, <<"html">>, [{<<"level">>, <<"2">>}]}, 400, []},
+		   {{<<"*">>, <<"*">>, []}, 500, []}
+		]},
+		{<<"text/html;level=1;quoted=\"hi hi hi\";"
+		   "q=0.123;standalone;complex=gits, text/plain">>, [
+			{{<<"text">>, <<"html">>,
+				[{<<"level">>, <<"1">>}, {<<"quoted">>, <<"hi hi hi">>}]}, 123,
+				[<<"standalone">>, {<<"complex">>, <<"gits">>}]},
+			{{<<"text">>, <<"plain">>, []}, 1000, []}
+		]},
+		{<<"text/html, image/gif, image/jpeg, *; q=.2, */*; q=.2">>, [
+			{{<<"text">>, <<"html">>, []}, 1000, []},
+			{{<<"image">>, <<"gif">>, []}, 1000, []},
+			{{<<"image">>, <<"jpeg">>, []}, 1000, []},
+			{{<<"*">>, <<"*">>, []}, 200, []},
+			{{<<"*">>, <<"*">>, []}, 200, []}
+		]}
+	],
+	[{V, fun() -> R = parse_accept(V) end} || {V, R} <- Tests].
+
+parse_accept_error_test_() ->
+	Tests = [
+		<<>>,
+		<<"   ">>,
+		<<"audio/basic, */;q=0.5">>,
+		<<"audio/, audio/basic">>,
+		<<"aud\tio/basic">>,
+		<<"audio/basic;t=\"zero \\", 0, " woo\"">>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_accept(V)) end} || V <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_accept() ->
+	horse:repeat(20000,
+		parse_accept(<<"text/*;q=0.3, text/html;q=0.7, text/html;level=1, "
+			"text/html;level=2;q=0.4, */*;q=0.5">>)
+	).
+-endif.
 
 %% @doc Parse the Connection header.
 

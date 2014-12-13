@@ -16,6 +16,7 @@
 
 -export([parse_accept/1]).
 -export([parse_accept_charset/1]).
+-export([parse_accept_encoding/1]).
 -export([parse_connection/1]).
 -export([parse_content_length/1]).
 -export([parse_expect/1]).
@@ -314,6 +315,41 @@ parse_accept_charset_error_test_() ->
 horse_parse_accept_charset() ->
 	horse:repeat(20000,
 		parse_accept_charset(<<"iso-8859-5, unicode-1-1;q=0.8">>)
+	).
+-endif.
+
+%% @doc Parse the Accept-Encoding header.
+
+-spec parse_accept_encoding(binary()) -> [{binary(), qvalue()}].
+parse_accept_encoding(Encoding) ->
+	conneg_list(Encoding, []).
+
+-ifdef(TEST).
+parse_accept_encoding_test_() ->
+	Tests = [
+		{<<>>, []},
+		{<<"*">>, [{<<"*">>, 1000}]},
+		{<<"compress, gzip">>, [
+			{<<"compress">>, 1000},
+			{<<"gzip">>, 1000}
+		]},
+		{<<"compress;q=0.5, gzip;q=1.0">>, [
+			{<<"compress">>, 500},
+			{<<"gzip">>, 1000}
+		]},
+		{<<"gzip;q=1.0, identity; q=0.5, *;q=0">>, [
+			{<<"gzip">>, 1000},
+			{<<"identity">>, 500},
+			{<<"*">>, 0}
+		]}
+	],
+	[{V, fun() -> R = parse_accept_encoding(V) end} || {V, R} <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_accept_encoding() ->
+	horse:repeat(20000,
+		parse_accept_encoding(<<"gzip;q=1.0, identity; q=0.5, *;q=0">>)
 	).
 -endif.
 

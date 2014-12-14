@@ -20,9 +20,13 @@
 -export([parse_accept_language/1]).
 -export([parse_connection/1]).
 -export([parse_content_length/1]).
+-export([parse_content_type/1]).
 -export([parse_expect/1]).
 -export([parse_max_forwards/1]).
 -export([parse_transfer_encoding/1]).
+
+-type media_type() :: {binary(), binary(), [{binary(), binary()}]}.
+-export_type([media_type/0]).
 
 -type qvalue() :: 0..1000.
 -export_type([qvalue/0]).
@@ -31,11 +35,34 @@
 
 -ifdef(TEST).
 -include_lib("triq/include/triq.hrl").
+
+alpha_chars() -> lists:seq($a, $z) ++ lists:seq($A, $Z).
+digit_chars() -> lists:seq($0, $9).
+
+tchar() -> oneof([$!, $#, $$, $%, $&, $', $*, $+, $-, $., $^, $_, $`, $|, $~] ++ digit_chars() ++ alpha_chars()).
+token() -> ?LET(T, non_empty(list(tchar())), list_to_binary(T)).
+
+qdtext() ->
+	oneof([$\t, $\s, $!] ++ lists:seq(16#23, 16#5b) ++ lists:seq(16#5d, 16#7e) ++ lists:seq(16#80, 16#ff)).
+
+quoted_pair() ->
+	[$\\, oneof([$\t, $\s] ++ lists:seq(16#21, 16#7e) ++ lists:seq(16#80, 16#ff))].
+
+quoted_string() ->
+	[$", list(frequency([{100, qdtext()}, {1, quoted_pair()}])), $"].
+
+%% Helper function for ( token / quoted-string ) values.
+unquote([$", V, $"]) -> unquote(V, <<>>);
+unquote(V) -> V.
+
+unquote([], Acc) -> Acc;
+unquote([[$\\, C]|Tail], Acc) -> unquote(Tail, << Acc/binary, C >>);
+unquote([C|Tail], Acc) -> unquote(Tail, << Acc/binary, C >>).
 -endif.
 
 %% @doc Parse the Accept header.
 
--spec parse_accept(binary()) -> [{{binary(), binary(), [{binary(), binary()}]}, qvalue(), [binary() | {binary(), binary()}]}].
+-spec parse_accept(binary()) -> [{media_type(), qvalue(), [binary() | {binary(), binary()}]}].
 parse_accept(<<"*/*">>) ->
 	[{{<<"*">>, <<"*">>, []}, 1000, []}];
 parse_accept(Accept) ->
@@ -563,6 +590,146 @@ horse_parse_content_length_zero() ->
 horse_parse_content_length_giga() ->
 	horse:repeat(100000,
 		parse_content_length(<<"1234567890">>)
+	).
+-endif.
+
+%% @doc Parse the Content-Type header.
+
+-spec parse_content_type(binary()) -> media_type().
+parse_content_type(<< C, R/bits >>) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(media_type, R, <<>>)
+	end.
+
+media_type(<< $/, C, R/bits >>, T) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(media_subtype, R, T, <<>>)
+	end;
+media_type(<< C, R/bits >>, T) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(media_type, R, T)
+	end.
+
+media_subtype(<<>>, T, S) -> {T, S, []};
+media_subtype(<< $;, R/bits >>, T, S) -> media_before_param(R, T, S, []);
+media_subtype(<< $\s, R/bits >>, T, S) -> media_before_semicolon(R, T, S, []);
+media_subtype(<< $\t, R/bits >>, T, S) -> media_before_semicolon(R, T, S, []);
+media_subtype(<< C, R/bits >>, T, S) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(media_subtype, R, T, S)
+	end.
+
+media_before_semicolon(<<>>, T, S, P) -> {T, S, lists:reverse(P)};
+media_before_semicolon(<< $;, R/bits >>, T, S, P) -> media_before_param(R, T, S, P);
+media_before_semicolon(<< $\s, R/bits >>, T, S, P) -> media_before_semicolon(R, T, S, P);
+media_before_semicolon(<< $\t, R/bits >>, T, S, P) -> media_before_semicolon(R, T, S, P).
+
+media_before_param(<< $\s, R/bits >>, T, S, P) -> media_before_param(R, T, S, P);
+media_before_param(<< $\t, R/bits >>, T, S, P) -> media_before_param(R, T, S, P);
+media_before_param(<< "charset=", $", R/bits >>, T, S, P) -> media_charset_quoted(R, T, S, P, <<>>);
+media_before_param(<< "charset=", R/bits >>, T, S, P) -> media_charset(R, T, S, P, <<>>);
+media_before_param(<< C, R/bits >>, T, S, P) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(media_param, R, T, S, P, <<>>)
+	end.
+
+media_charset_quoted(<< $", R/bits >>, T, S, P, V) ->
+	media_before_semicolon(R, T, S, [{<<"charset">>, V}|P]);
+media_charset_quoted(<< $\\, C, R/bits >>, T, S, P, V) when ?IS_VCHAR(C) ->
+	case C of
+		?INLINE_LOWERCASE(media_charset_quoted, R, T, S, P, V)
+	end;
+media_charset_quoted(<< C, R/bits >>, T, S, P, V) when ?IS_VCHAR(C) ->
+	case C of
+		?INLINE_LOWERCASE(media_charset_quoted, R, T, S, P, V)
+	end.
+
+media_charset(<<>>, T, S, P, V) -> {T, S, lists:reverse([{<<"charset">>, V}|P])};
+
+media_charset(<< $;, R/bits >>, T, S, P, V) -> media_before_param(R, T, S, [{<<"charset">>, V}|P]);
+media_charset(<< $\s, R/bits >>, T, S, P, V) -> media_before_semicolon(R, T, S, [{<<"charset">>, V}|P]);
+media_charset(<< $\t, R/bits >>, T, S, P, V) -> media_before_semicolon(R, T, S, [{<<"charset">>, V}|P]);
+media_charset(<< C, R/bits >>, T, S, P, V) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(media_charset, R, T, S, P, V)
+	end.
+
+media_param(<< $=, $", R/bits >>, T, S, P, K) -> media_quoted(R, T, S, P, K, <<>>);
+media_param(<< $=, R/bits >>, T, S, P, K) -> media_value(R, T, S, P, K, <<>>);
+media_param(<< C, R/bits >>, T, S, P, K) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(media_param, R, T, S, P, K)
+	end.
+
+media_quoted(<< $", R/bits >>, T, S, P, K, V) -> media_before_semicolon(R, T, S, [{K, V}|P]);
+media_quoted(<< $\\, C, R/bits >>, T, S, P, K, V) when ?IS_VCHAR(C) -> media_quoted(R, T, S, P, K, << V/binary, C >>);
+media_quoted(<< C, R/bits >>, T, S, P, K, V) when ?IS_VCHAR(C) -> media_quoted(R, T, S, P, K, << V/binary, C >>).
+
+media_value(<<>>, T, S, P, K, V) -> {T, S, lists:reverse([{K, V}|P])};
+media_value(<< $;, R/bits >>, T, S, P, K, V) -> media_before_param(R, T, S, [{K, V}|P]);
+media_value(<< $\s, R/bits >>, T, S, P, K, V) -> media_before_semicolon(R, T, S, [{K, V}|P]);
+media_value(<< $\t, R/bits >>, T, S, P, K, V) -> media_before_semicolon(R, T, S, [{K, V}|P]);
+media_value(<< C, R/bits >>, T, S, P, K, V) when ?IS_TOKEN(C) -> media_value(R, T, S, P, K, << V/binary, C >>).
+
+-ifdef(TEST).
+media_type_parameter() ->
+	frequency([
+		{90, {token(), oneof([token(), quoted_string()])}},
+		{10, {<<"charset">>, oneof([token(), quoted_string()])}}
+	]).
+
+media_type() ->
+	?LET({T, S, P},
+		{token(), token(), list(media_type_parameter())},
+		{T, S, P, iolist_to_binary([T, $/, S, [[$;, K, $=, V] || {K, V} <- P]])}
+	).
+
+prop_parse_content_type() ->
+	?FORALL({T, S, P, MediaType},
+		media_type(),
+		begin
+			{ResT, ResS, ResP} = parse_content_type(MediaType),
+			ExpectedP = [case ?INLINE_LOWERCASE_BC(K) of
+				<<"charset">> -> {<<"charset">>, ?INLINE_LOWERCASE_BC(unquote(V))};
+				LowK -> {LowK, unquote(V)}
+			end || {K, V} <- P],
+			ResT =:= ?INLINE_LOWERCASE_BC(T)
+				andalso ResS =:= ?INLINE_LOWERCASE_BC(S)
+				andalso ResP =:= ExpectedP
+		end
+	).
+
+parse_content_type_test_() ->
+	Tests = [
+		{<<"text/html;charset=utf-8">>,
+			{<<"text">>, <<"html">>, [{<<"charset">>, <<"utf-8">>}]}},
+		{<<"text/html;charset=UTF-8">>,
+			{<<"text">>, <<"html">>, [{<<"charset">>, <<"utf-8">>}]}},
+		{<<"Text/HTML;Charset=\"utf-8\"">>,
+			{<<"text">>, <<"html">>, [{<<"charset">>, <<"utf-8">>}]}},
+		{<<"text/html; charset=\"utf-8\"">>,
+			{<<"text">>, <<"html">>, [{<<"charset">>, <<"utf-8">>}]}},
+		{<<"text/html; charset=ISO-8859-4">>,
+			{<<"text">>, <<"html">>, [{<<"charset">>, <<"iso-8859-4">>}]}},
+		{<<"text/plain; charset=iso-8859-4">>,
+			{<<"text">>, <<"plain">>, [{<<"charset">>, <<"iso-8859-4">>}]}},
+		{<<"multipart/form-data  \t;Boundary=\"MultipartIsUgly\"">>,
+			{<<"multipart">>, <<"form-data">>, [
+				{<<"boundary">>, <<"MultipartIsUgly">>}
+			]}},
+		{<<"foo/bar; one=FirstParam; two=SecondParam">>,
+			{<<"foo">>, <<"bar">>, [
+				{<<"one">>, <<"FirstParam">>},
+				{<<"two">>, <<"SecondParam">>}
+			]}}
+	],
+	[{V, fun() -> R = parse_content_type(V) end} || {V, R} <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_content_type() ->
+	horse:repeat(200000,
+		parse_content_type(<<"text/html;charset=utf-8">>)
 	).
 -endif.
 

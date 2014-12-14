@@ -29,7 +29,7 @@
 	C =:= $K; C =:= $L; C =:= $M; C =:= $N; C =:= $O;
 	C =:= $P; C =:= $Q; C =:= $R; C =:= $S; C =:= $T;
 	C =:= $U; C =:= $V; C =:= $W; C =:= $X; C =:= $Y;
-	C =:= $2
+	C =:= $Z
 ).
 
 %% IS_DIGIT(Character)

@@ -29,6 +29,10 @@
 
 -include("cow_inline.hrl").
 
+-ifdef(TEST).
+-include_lib("triq/include/triq.hrl").
+-endif.
+
 %% @doc Parse the Accept header.
 
 -spec parse_accept(binary()) -> [{{binary(), binary(), [{binary(), binary()}]}, qvalue(), [binary() | {binary(), binary()}]}].
@@ -523,6 +527,13 @@ parse_content_length(<< $8, R/bits >>) -> number(R, 8);
 parse_content_length(<< $9, R/bits >>) -> number(R, 9).
 
 -ifdef(TEST).
+prop_parse_content_length() ->
+	?FORALL(
+		X,
+		non_neg_integer(),
+		X =:= parse_content_length(integer_to_binary(X))
+	).
+
 parse_content_length_test_() ->
 	Tests = [
 		{<<"0">>, 0},

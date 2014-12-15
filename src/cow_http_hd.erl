@@ -36,17 +36,45 @@
 -ifdef(TEST).
 -include_lib("triq/include/triq.hrl").
 
-alpha_chars() -> lists:seq($a, $z) ++ lists:seq($A, $Z).
-digit_chars() -> lists:seq($0, $9).
+ows() ->
+	list(oneof([$\s, $\t])).
 
-tchar() -> oneof([$!, $#, $$, $%, $&, $', $*, $+, $-, $., $^, $_, $`, $|, $~] ++ digit_chars() ++ alpha_chars()).
-token() -> ?LET(T, non_empty(list(tchar())), list_to_binary(T)).
+alpha_chars() -> "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".
+digit_chars() -> "0123456789".
+alphanum_chars() -> "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".
+
+tchar() ->
+	frequency([
+		{1, oneof([$!, $#, $$, $%, $&, $', $*, $+, $-, $., $^, $_, $`, $|, $~])},
+		{99, oneof(alphanum_chars())}
+	]).
+
+token() ->
+	?LET(T,
+		non_empty(list(tchar())),
+		list_to_binary(T)).
+
+obs_text() ->
+	[128,129,130,131,132,133,134,135,136,137,138,139,140,141,142,143,144,145,
+	146,147,148,149,150,151,152,153,154,155,156,157,158,159,160,161,162,163,
+	164,165,166,167,168,169,170,171,172,173,174,175,176,177,178,179,180,181,
+	182,183,184,185,186,187,188,189,190,191,192,193,194,195,196,197,198,199,
+	200,201,202,203,204,205,206,207,208,209,210,211,212,213,214,215,216,217,
+	218,219,220,221,222,223,224,225,226,227,228,229,230,231,232,233,234,235,
+	236,237,238,239,240,241,242,243,244,245,246,247,248,249,250,251,252,253,
+	254,255].
 
 qdtext() ->
-	oneof([$\t, $\s, $!] ++ lists:seq(16#23, 16#5b) ++ lists:seq(16#5d, 16#7e) ++ lists:seq(16#80, 16#ff)).
+	frequency([
+		{99, oneof("\t\s!#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~")},
+		{1, oneof(obs_text())}
+	]).
 
 quoted_pair() ->
-	[$\\, oneof([$\t, $\s] ++ lists:seq(16#21, 16#7e) ++ lists:seq(16#80, 16#ff))].
+	[$\\, frequency([
+		{99, oneof("\t\s!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~")},
+		{1, oneof(obs_text())}
+	])].
 
 quoted_string() ->
 	[$", list(frequency([{100, qdtext()}, {1, quoted_pair()}])), $"].
@@ -58,6 +86,24 @@ unquote(V) -> V.
 unquote([], Acc) -> Acc;
 unquote([[$\\, C]|Tail], Acc) -> unquote(Tail, << Acc/binary, C >>);
 unquote([C|Tail], Acc) -> unquote(Tail, << Acc/binary, C >>).
+
+parameter() ->
+	?SUCHTHAT({K, _, _, _},
+		{token(), oneof([token(), quoted_string()]), ows(), ows()},
+		K =/= <<"q">>).
+
+weight() ->
+	frequency([
+		{90, int(0, 1000)},
+		{10, undefined}
+	]).
+
+%% Helper function for weight's qvalue formatting.
+qvalue_to_iodata(0) -> <<"0">>;
+qvalue_to_iodata(Q) when Q < 10 -> [<<"0.00">>, integer_to_binary(Q)];
+qvalue_to_iodata(Q) when Q < 100 -> [<<"0.0">>, integer_to_binary(Q)];
+qvalue_to_iodata(Q) when Q < 1000 -> [<<"0.">>, integer_to_binary(Q)];
+qvalue_to_iodata(1000) -> <<"1">>.
 -endif.
 
 %% @doc Parse the Accept header.
@@ -66,7 +112,7 @@ unquote([C|Tail], Acc) -> unquote(Tail, << Acc/binary, C >>).
 parse_accept(<<"*/*">>) ->
 	[{{<<"*">>, <<"*">>, []}, 1000, []}];
 parse_accept(Accept) ->
-	nonempty(media_range_list(Accept, [])).
+	media_range_list(Accept, []).
 
 media_range_list(<<>>, Acc) -> lists:reverse(Acc);
 media_range_list(<< $\s, R/bits >>, Acc) -> media_range_list(R, Acc);
@@ -79,7 +125,7 @@ media_range_list(<< C, R/bits >>, Acc) when ?IS_TOKEN(C) ->
 
 media_range_type(<< $/, R/bits >>, Acc, T) -> media_range_subtype(R, Acc, T, <<>>);
 %% Special clause for badly behaving user agents that send * instead of */*.
-media_range_type(<< _, R/bits >>, Acc, <<"*">>) -> media_range_before_param(R, Acc, <<"*">>, <<"*">>, []);
+media_range_type(<< $;, R/bits >>, Acc, <<"*">>) -> media_range_before_param(R, Acc, <<"*">>, <<"*">>, []);
 media_range_type(<< C, R/bits >>, Acc, T) when ?IS_TOKEN(C) ->
 	case C of
 		?INLINE_LOWERCASE(media_range_type, R, Acc, T)
@@ -188,14 +234,63 @@ accept_quoted(<< C, R/bits >>, Acc, T, S, P, Q, E, K, V) when ?IS_VCHAR(C) -> ac
 
 accept_value(<<>>, Acc, T, S, P, Q, E, K, V) -> lists:reverse([{{T, S, lists:reverse(P)}, Q, lists:reverse([{K, V}|E])}|Acc]);
 accept_value(<< $,, R/bits >>, Acc, T, S, P, Q, E, K, V) -> media_range_list(R, [{{T, S, lists:reverse(P)}, Q, lists:reverse([{K, V}|E])}|Acc]);
-accept_value(<< $;, R/bits >>, Acc, T, S, P, Q, E, K, V) -> accept_before_semicolon(R, Acc, T, S, P, Q, [{K, V}|E]);
+accept_value(<< $;, R/bits >>, Acc, T, S, P, Q, E, K, V) -> accept_before_ext(R, Acc, T, S, P, Q, [{K, V}|E]);
 accept_value(<< $\s, R/bits >>, Acc, T, S, P, Q, E, K, V) -> accept_before_semicolon(R, Acc, T, S, P, Q, [{K, V}|E]);
 accept_value(<< $\t, R/bits >>, Acc, T, S, P, Q, E, K, V) -> accept_before_semicolon(R, Acc, T, S, P, Q, [{K, V}|E]);
 accept_value(<< C, R/bits >>, Acc, T, S, P, Q, E, K, V) when ?IS_TOKEN(C) -> accept_value(R, Acc, T, S, P, Q, E, K, << V/binary, C >>).
 
 -ifdef(TEST).
+accept_ext() ->
+	oneof([token(), parameter()]).
+
+accept_params() ->
+	frequency([
+		{90, []},
+		{10, list(accept_ext())}
+	]).
+
+accept() ->
+	?LET({T, S, P, W, E},
+		{token(), token(), list(parameter()), weight(), accept_params()},
+		{T, S, P, W, E, iolist_to_binary([T, $/, S,
+			[[OWS1, $;, OWS2, K, $=, V] || {K, V, OWS1, OWS2} <- P],
+			case W of
+				undefined -> [];
+				_ -> [
+					[<<";q=">>, qvalue_to_iodata(W)],
+					[case Ext of
+						{K, V, OWS1, OWS2} -> [OWS1, $;, OWS2, K, $=, V];
+						K -> [$;, K]
+					end || Ext <- E]]
+			end])}
+	).
+
+prop_parse_accept() ->
+	?FORALL(L,
+		non_empty(list(accept())),
+		begin
+			<< _, Accept/binary >> = iolist_to_binary([[$,, A] || {_, _, _, _, _, A} <- L]),
+			ResL = parse_accept(Accept),
+			CheckedL = [begin
+				ExpectedP = [{?INLINE_LOWERCASE_BC(K), unquote(V)} || {K, V, _, _} <- P],
+				ExpectedE = [case Ext of
+					{K, V, _, _} -> {?INLINE_LOWERCASE_BC(K), unquote(V)};
+					K -> ?INLINE_LOWERCASE_BC(K)
+				end || Ext <- E],
+				ResT =:= ?INLINE_LOWERCASE_BC(T)
+					andalso ResS =:= ?INLINE_LOWERCASE_BC(S)
+					andalso ResP =:= ExpectedP
+					andalso (ResW =:= W orelse (W =:= undefined andalso ResW =:= 1000))
+					andalso ((W =:= undefined andalso ResE =:= []) orelse (W =/= undefined andalso ResE =:= ExpectedE))
+			end || {{T, S, P, W, E, _}, {{ResT, ResS, ResP}, ResW, ResE}} <- lists:zip(L, ResL)],
+			[true] =:= lists:usort(CheckedL)
+		end
+	).
+
 parse_accept_test_() ->
 	Tests = [
+		{<<>>, []},
+		{<<"   ">>, []},
 		{<<"audio/*; q=0.2, audio/basic">>, [
 			{{<<"audio">>, <<"*">>, []}, 200, []},
 			{{<<"audio">>, <<"basic">>, []}, 1000, []}
@@ -240,8 +335,6 @@ parse_accept_test_() ->
 
 parse_accept_error_test_() ->
 	Tests = [
-		<<>>,
-		<<"   ">>,
 		<<"audio/basic, */;q=0.5">>,
 		<<"audio/, audio/basic">>,
 		<<"aud\tio/basic">>,
@@ -674,14 +767,14 @@ media_value(<< C, R/bits >>, T, S, P, K, V) when ?IS_TOKEN(C) -> media_value(R, 
 -ifdef(TEST).
 media_type_parameter() ->
 	frequency([
-		{90, {token(), oneof([token(), quoted_string()])}},
-		{10, {<<"charset">>, oneof([token(), quoted_string()])}}
+		{90, parameter()},
+		{10, {<<"charset">>, oneof([token(), quoted_string()]), <<>>, <<>>}}
 	]).
 
 media_type() ->
 	?LET({T, S, P},
 		{token(), token(), list(media_type_parameter())},
-		{T, S, P, iolist_to_binary([T, $/, S, [[$;, K, $=, V] || {K, V} <- P]])}
+		{T, S, P, iolist_to_binary([T, $/, S, [[OWS1, $;, OWS2, K, $=, V] || {K, V, OWS1, OWS2} <- P]])}
 	).
 
 prop_parse_content_type() ->
@@ -692,7 +785,7 @@ prop_parse_content_type() ->
 			ExpectedP = [case ?INLINE_LOWERCASE_BC(K) of
 				<<"charset">> -> {<<"charset">>, ?INLINE_LOWERCASE_BC(unquote(V))};
 				LowK -> {LowK, unquote(V)}
-			end || {K, V} <- P],
+			end || {K, V, _, _} <- P],
 			ResT =:= ?INLINE_LOWERCASE_BC(T)
 				andalso ResS =:= ?INLINE_LOWERCASE_BC(S)
 				andalso ResP =:= ExpectedP

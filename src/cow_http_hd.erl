@@ -472,6 +472,28 @@ parse_accept_encoding(Encoding) ->
 	conneg_list(Encoding, []).
 
 -ifdef(TEST).
+accept_encoding() ->
+	?LET({E, W},
+		{token(), weight()},
+		{E, W, iolist_to_binary([E, case W of
+			undefined -> [];
+			_ -> [<<";q=">>, qvalue_to_iodata(W)]
+		end])}
+	).
+
+prop_parse_accept_encoding() ->
+	?FORALL(L,
+		non_empty(list(accept_encoding())),
+		begin
+			<< _, AcceptEncoding/binary >> = iolist_to_binary([[$,, A] || {_, _, A} <- L]),
+			ResL = parse_accept_encoding(AcceptEncoding),
+			CheckedL = [begin
+				ResE =:= ?INLINE_LOWERCASE_BC(E)
+					andalso (ResW =:= W orelse (W =:= undefined andalso ResW =:= 1000))
+			end || {{E, W, _}, {ResE, ResW}} <- lists:zip(L, ResL)],
+			[true] =:= lists:usort(CheckedL)
+		end).
+
 parse_accept_encoding_test_() ->
 	Tests = [
 		{<<>>, []},

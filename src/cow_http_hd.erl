@@ -414,6 +414,28 @@ conneg_list_sep(<< $\t, R/bits >>, Acc) -> conneg_list_sep(R, Acc);
 conneg_list_sep(<< $,, R/bits >>, Acc) -> conneg_list(R, Acc).
 
 -ifdef(TEST).
+accept_charset() ->
+	?LET({C, W},
+		{token(), weight()},
+		{C, W, iolist_to_binary([C, case W of
+			undefined -> [];
+			_ -> [<<";q=">>, qvalue_to_iodata(W)]
+		end])}
+	).
+
+prop_parse_accept_charset() ->
+	?FORALL(L,
+		non_empty(list(accept_charset())),
+		begin
+			<< _, AcceptCharset/binary >> = iolist_to_binary([[$,, A] || {_, _, A} <- L]),
+			ResL = parse_accept_charset(AcceptCharset),
+			CheckedL = [begin
+				ResC =:= ?INLINE_LOWERCASE_BC(C)
+					andalso (ResW =:= W orelse (W =:= undefined andalso ResW =:= 1000))
+			end || {{C, W, _}, {ResC, ResW}} <- lists:zip(L, ResL)],
+			[true] =:= lists:usort(CheckedL)
+		end).
+
 parse_accept_charset_test_() ->
 	Tests = [
 		{<<"iso-8859-5, unicode-1-1;q=0.8">>, [

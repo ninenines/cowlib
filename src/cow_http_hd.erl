@@ -43,6 +43,12 @@ alpha_chars() -> "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".
 digit_chars() -> "0123456789".
 alphanum_chars() -> "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".
 
+alpha() ->
+	oneof(alpha_chars()).
+
+alphanum() ->
+	oneof(alphanum_chars()).
+
 tchar() ->
 	frequency([
 		{1, oneof([$!, $#, $$, $%, $&, $', $*, $+, $-, $., $^, $_, $`, $|, $~])},
@@ -600,6 +606,55 @@ language_range_list_sep(<< $\t, R/bits >>, Acc) -> language_range_list_sep(R, Ac
 language_range_list_sep(<< $,, R/bits >>, Acc) -> language_range_list(R, Acc).
 
 -ifdef(TEST).
+language_tag() ->
+	oneof([
+		[alpha()],
+		[alpha(), alpha()],
+		[alpha(), alpha(), alpha()],
+		[alpha(), alpha(), alpha(), alpha()],
+		[alpha(), alpha(), alpha(), alpha(), alpha()],
+		[alpha(), alpha(), alpha(), alpha(), alpha(), alpha()],
+		[alpha(), alpha(), alpha(), alpha(), alpha(), alpha(), alpha()],
+		[alpha(), alpha(), alpha(), alpha(), alpha(), alpha(), alpha(), alpha()]
+	]).
+
+language_subtag() ->
+	[$-, oneof([
+		[alphanum()],
+		[alphanum(), alphanum()],
+		[alphanum(), alphanum(), alphanum()],
+		[alphanum(), alphanum(), alphanum(), alphanum()],
+		[alphanum(), alphanum(), alphanum(), alphanum(), alphanum()],
+		[alphanum(), alphanum(), alphanum(), alphanum(), alphanum(), alphanum()],
+		[alphanum(), alphanum(), alphanum(), alphanum(), alphanum(), alphanum(), alphanum()],
+		[alphanum(), alphanum(), alphanum(), alphanum(), alphanum(), alphanum(), alphanum(), alphanum()]
+	])].
+
+language_range() ->
+	[language_tag(), list(language_subtag())].
+
+accept_language() ->
+	?LET({R, W},
+		{language_range(), weight()},
+		{iolist_to_binary(R), W, iolist_to_binary([R, case W of
+			undefined -> [];
+			_ -> [<<";q=">>, qvalue_to_iodata(W)]
+		end])}
+	).
+
+prop_parse_accept_language() ->
+	?FORALL(L,
+		non_empty(list(accept_language())),
+		begin
+			<< _, AcceptLanguage/binary >> = iolist_to_binary([[$,, A] || {_, _, A} <- L]),
+			ResL = parse_accept_language(AcceptLanguage),
+			CheckedL = [begin
+				ResR =:= ?INLINE_LOWERCASE_BC(R)
+					andalso (ResW =:= W orelse (W =:= undefined andalso ResW =:= 1000))
+			end || {{R, W, _}, {ResR, ResW}} <- lists:zip(L, ResL)],
+			[true] =:= lists:usort(CheckedL)
+		end).
+
 parse_accept_language_test_() ->
 	Tests = [
 		{<<"da, en-gb;q=0.8, en;q=0.7">>, [

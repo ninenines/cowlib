@@ -22,6 +22,7 @@
 -export([parse_content_length/1]).
 -export([parse_content_type/1]).
 -export([parse_expect/1]).
+-export([parse_if_modified_since/1]).
 -export([parse_max_forwards/1]).
 -export([parse_transfer_encoding/1]).
 
@@ -993,6 +994,20 @@ horse_parse_expect() ->
 	).
 -endif.
 
+%% @doc Parse the If-Modified-Since header.
+
+-spec parse_if_modified_since(binary()) -> calendar:datetime().
+parse_if_modified_since(IfModifiedSince) ->
+	http_date(IfModifiedSince).
+
+-ifdef(TEST).
+parse_if_modified_since_test_() ->
+	Tests = [
+		{<<"Sat, 29 Oct 1994 19:43:31 GMT">>, {{1994, 10, 29}, {19, 43, 31}}}
+	],
+	[{V, fun() -> R = parse_if_modified_since(V) end} || {V, R} <- Tests].
+-endif.
+
 %% @doc Parse the Max-Forwards header.
 
 -spec parse_max_forwards(binary()) -> integer().
@@ -1137,3 +1152,198 @@ token_ci_list_sep(<<>>, Acc, T) -> lists:reverse([T|Acc]);
 token_ci_list_sep(<< $\s, R/bits >>, Acc, T) -> token_ci_list_sep(R, Acc, T);
 token_ci_list_sep(<< $\t, R/bits >>, Acc, T) -> token_ci_list_sep(R, Acc, T);
 token_ci_list_sep(<< $,, R/bits >>, Acc, T) -> token_ci_list(R, [T|Acc]).
+
+-define(DIGITS(A, B), ((A - $0) * 10 + (B - $0))).
+-define(DIGITS(A, B, C, D), ((A - $0) * 1000 + (B - $0) * 100 + (C - $0) * 10 + (D - $0))).
+
+http_date(DateBin) ->
+	Date = {{_, _, D}, {H, M, S}} = all_date(DateBin),
+	true = D >= 0 andalso D =< 31,
+	true = H >= 0 andalso H =< 23,
+	true = M >= 0 andalso M =< 59,
+	true = S >= 0 andalso S =< 60, %% Leap second.
+	Date.
+
+all_date(<<"Mon, ", D1, D2, " ", R/bits >>) -> fixdate(R, ?DIGITS(D1, D2));
+all_date(<<"Tue, ", D1, D2, " ", R/bits >>) -> fixdate(R, ?DIGITS(D1, D2));
+all_date(<<"Wed, ", D1, D2, " ", R/bits >>) -> fixdate(R, ?DIGITS(D1, D2));
+all_date(<<"Thu, ", D1, D2, " ", R/bits >>) -> fixdate(R, ?DIGITS(D1, D2));
+all_date(<<"Fri, ", D1, D2, " ", R/bits >>) -> fixdate(R, ?DIGITS(D1, D2));
+all_date(<<"Sat, ", D1, D2, " ", R/bits >>) -> fixdate(R, ?DIGITS(D1, D2));
+all_date(<<"Sun, ", D1, D2, " ", R/bits >>) -> fixdate(R, ?DIGITS(D1, D2));
+all_date(<<"Monday, ", D1, D2, "-", R/bits >>) -> rfc850_date(R, ?DIGITS(D1, D2));
+all_date(<<"Tuesday, ", D1, D2, "-", R/bits >>) -> rfc850_date(R, ?DIGITS(D1, D2));
+all_date(<<"Wednesday, ", D1, D2, "-", R/bits >>) -> rfc850_date(R, ?DIGITS(D1, D2));
+all_date(<<"Thursday, ", D1, D2, "-", R/bits >>) -> rfc850_date(R, ?DIGITS(D1, D2));
+all_date(<<"Friday, ", D1, D2, "-", R/bits >>) -> rfc850_date(R, ?DIGITS(D1, D2));
+all_date(<<"Saturday, ", D1, D2, "-", R/bits >>) -> rfc850_date(R, ?DIGITS(D1, D2));
+all_date(<<"Sunday, ", D1, D2, "-", R/bits >>) -> rfc850_date(R, ?DIGITS(D1, D2));
+all_date(<<"Mon ", R/bits >>) -> asctime_date(R);
+all_date(<<"Tue ", R/bits >>) -> asctime_date(R);
+all_date(<<"Wed ", R/bits >>) -> asctime_date(R);
+all_date(<<"Thu ", R/bits >>) -> asctime_date(R);
+all_date(<<"Fri ", R/bits >>) -> asctime_date(R);
+all_date(<<"Sat ", R/bits >>) -> asctime_date(R);
+all_date(<<"Sun ", R/bits >>) -> asctime_date(R).
+
+fixdate(<<"Jan ", Y1, Y2, Y3, Y4, " ", H1, H2, ":", M1, M2, ":", S1, S2, " GMT">>, Day) ->
+	{{?DIGITS(Y1, Y2, Y3, Y4), 1, Day}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+fixdate(<<"Feb ", Y1, Y2, Y3, Y4, " ", H1, H2, ":", M1, M2, ":", S1, S2, " GMT">>, Day) ->
+	{{?DIGITS(Y1, Y2, Y3, Y4), 2, Day}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+fixdate(<<"Mar ", Y1, Y2, Y3, Y4, " ", H1, H2, ":", M1, M2, ":", S1, S2, " GMT">>, Day) ->
+	{{?DIGITS(Y1, Y2, Y3, Y4), 3, Day}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+fixdate(<<"Apr ", Y1, Y2, Y3, Y4, " ", H1, H2, ":", M1, M2, ":", S1, S2, " GMT">>, Day) ->
+	{{?DIGITS(Y1, Y2, Y3, Y4), 4, Day}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+fixdate(<<"May ", Y1, Y2, Y3, Y4, " ", H1, H2, ":", M1, M2, ":", S1, S2, " GMT">>, Day) ->
+	{{?DIGITS(Y1, Y2, Y3, Y4), 5, Day}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+fixdate(<<"Jun ", Y1, Y2, Y3, Y4, " ", H1, H2, ":", M1, M2, ":", S1, S2, " GMT">>, Day) ->
+	{{?DIGITS(Y1, Y2, Y3, Y4), 6, Day}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+fixdate(<<"Jul ", Y1, Y2, Y3, Y4, " ", H1, H2, ":", M1, M2, ":", S1, S2, " GMT">>, Day) ->
+	{{?DIGITS(Y1, Y2, Y3, Y4), 7, Day}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+fixdate(<<"Aug ", Y1, Y2, Y3, Y4, " ", H1, H2, ":", M1, M2, ":", S1, S2, " GMT">>, Day) ->
+	{{?DIGITS(Y1, Y2, Y3, Y4), 8, Day}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+fixdate(<<"Sep ", Y1, Y2, Y3, Y4, " ", H1, H2, ":", M1, M2, ":", S1, S2, " GMT">>, Day) ->
+	{{?DIGITS(Y1, Y2, Y3, Y4), 9, Day}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+fixdate(<<"Oct ", Y1, Y2, Y3, Y4, " ", H1, H2, ":", M1, M2, ":", S1, S2, " GMT">>, Day) ->
+	{{?DIGITS(Y1, Y2, Y3, Y4), 10, Day}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+fixdate(<<"Nov ", Y1, Y2, Y3, Y4, " ", H1, H2, ":", M1, M2, ":", S1, S2, " GMT">>, Day) ->
+	{{?DIGITS(Y1, Y2, Y3, Y4), 11, Day}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+fixdate(<<"Dec ", Y1, Y2, Y3, Y4, " ", H1, H2, ":", M1, M2, ":", S1, S2, " GMT">>, Day) ->
+	{{?DIGITS(Y1, Y2, Y3, Y4), 12, Day}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}}.
+
+rfc850_date(<<"Jan-", Y1, Y2, " ", H1, H2, ":", M1, M2, ":", S1, S2, " GMT">>, Day) ->
+	{{rfc850_year(?DIGITS(Y1, Y2)), 1, Day}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+rfc850_date(<<"Feb-", Y1, Y2, " ", H1, H2, ":", M1, M2, ":", S1, S2, " GMT">>, Day) ->
+	{{rfc850_year(?DIGITS(Y1, Y2)), 2, Day}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+rfc850_date(<<"Mar-", Y1, Y2, " ", H1, H2, ":", M1, M2, ":", S1, S2, " GMT">>, Day) ->
+	{{rfc850_year(?DIGITS(Y1, Y2)), 3, Day}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+rfc850_date(<<"Apr-", Y1, Y2, " ", H1, H2, ":", M1, M2, ":", S1, S2, " GMT">>, Day) ->
+	{{rfc850_year(?DIGITS(Y1, Y2)), 4, Day}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+rfc850_date(<<"May-", Y1, Y2, " ", H1, H2, ":", M1, M2, ":", S1, S2, " GMT">>, Day) ->
+	{{rfc850_year(?DIGITS(Y1, Y2)), 5, Day}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+rfc850_date(<<"Jun-", Y1, Y2, " ", H1, H2, ":", M1, M2, ":", S1, S2, " GMT">>, Day) ->
+	{{rfc850_year(?DIGITS(Y1, Y2)), 6, Day}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+rfc850_date(<<"Jul-", Y1, Y2, " ", H1, H2, ":", M1, M2, ":", S1, S2, " GMT">>, Day) ->
+	{{rfc850_year(?DIGITS(Y1, Y2)), 7, Day}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+rfc850_date(<<"Aug-", Y1, Y2, " ", H1, H2, ":", M1, M2, ":", S1, S2, " GMT">>, Day) ->
+	{{rfc850_year(?DIGITS(Y1, Y2)), 8, Day}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+rfc850_date(<<"Sep-", Y1, Y2, " ", H1, H2, ":", M1, M2, ":", S1, S2, " GMT">>, Day) ->
+	{{rfc850_year(?DIGITS(Y1, Y2)), 9, Day}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+rfc850_date(<<"Oct-", Y1, Y2, " ", H1, H2, ":", M1, M2, ":", S1, S2, " GMT">>, Day) ->
+	{{rfc850_year(?DIGITS(Y1, Y2)), 10, Day}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+rfc850_date(<<"Nov-", Y1, Y2, " ", H1, H2, ":", M1, M2, ":", S1, S2, " GMT">>, Day) ->
+	{{rfc850_year(?DIGITS(Y1, Y2)), 11, Day}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+rfc850_date(<<"Dec-", Y1, Y2, " ", H1, H2, ":", M1, M2, ":", S1, S2, " GMT">>, Day) ->
+	{{rfc850_year(?DIGITS(Y1, Y2)), 12, Day}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}}.
+
+rfc850_year(Y) when Y > 50 -> Y + 1900;
+rfc850_year(Y) -> Y + 2000.
+
+asctime_date(<<"Jan ", D1, D2, " ", H1, H2, ":", M1, M2, ":", S1, S2, " ", Y1, Y2, Y3, Y4 >>) ->
+	{{?DIGITS(Y1, Y2, Y3, Y4), 1, asctime_day(D1, D2)}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+asctime_date(<<"Feb ", D1, D2, " ", H1, H2, ":", M1, M2, ":", S1, S2, " ", Y1, Y2, Y3, Y4 >>) ->
+	{{?DIGITS(Y1, Y2, Y3, Y4), 2, asctime_day(D1, D2)}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+asctime_date(<<"Mar ", D1, D2, " ", H1, H2, ":", M1, M2, ":", S1, S2, " ", Y1, Y2, Y3, Y4 >>) ->
+	{{?DIGITS(Y1, Y2, Y3, Y4), 3, asctime_day(D1, D2)}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+asctime_date(<<"Apr ", D1, D2, " ", H1, H2, ":", M1, M2, ":", S1, S2, " ", Y1, Y2, Y3, Y4 >>) ->
+	{{?DIGITS(Y1, Y2, Y3, Y4), 4, asctime_day(D1, D2)}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+asctime_date(<<"May ", D1, D2, " ", H1, H2, ":", M1, M2, ":", S1, S2, " ", Y1, Y2, Y3, Y4 >>) ->
+	{{?DIGITS(Y1, Y2, Y3, Y4), 5, asctime_day(D1, D2)}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+asctime_date(<<"Jun ", D1, D2, " ", H1, H2, ":", M1, M2, ":", S1, S2, " ", Y1, Y2, Y3, Y4 >>) ->
+	{{?DIGITS(Y1, Y2, Y3, Y4), 6, asctime_day(D1, D2)}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+asctime_date(<<"Jul ", D1, D2, " ", H1, H2, ":", M1, M2, ":", S1, S2, " ", Y1, Y2, Y3, Y4 >>) ->
+	{{?DIGITS(Y1, Y2, Y3, Y4), 7, asctime_day(D1, D2)}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+asctime_date(<<"Aug ", D1, D2, " ", H1, H2, ":", M1, M2, ":", S1, S2, " ", Y1, Y2, Y3, Y4 >>) ->
+	{{?DIGITS(Y1, Y2, Y3, Y4), 8, asctime_day(D1, D2)}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+asctime_date(<<"Sep ", D1, D2, " ", H1, H2, ":", M1, M2, ":", S1, S2, " ", Y1, Y2, Y3, Y4 >>) ->
+	{{?DIGITS(Y1, Y2, Y3, Y4), 9, asctime_day(D1, D2)}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+asctime_date(<<"Oct ", D1, D2, " ", H1, H2, ":", M1, M2, ":", S1, S2, " ", Y1, Y2, Y3, Y4 >>) ->
+	{{?DIGITS(Y1, Y2, Y3, Y4), 10, asctime_day(D1, D2)}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+asctime_date(<<"Nov ", D1, D2, " ", H1, H2, ":", M1, M2, ":", S1, S2, " ", Y1, Y2, Y3, Y4 >>) ->
+	{{?DIGITS(Y1, Y2, Y3, Y4), 11, asctime_day(D1, D2)}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}};
+asctime_date(<<"Dec ", D1, D2, " ", H1, H2, ":", M1, M2, ":", S1, S2, " ", Y1, Y2, Y3, Y4 >>) ->
+	{{?DIGITS(Y1, Y2, Y3, Y4), 12, asctime_day(D1, D2)}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}}.
+
+asctime_day($\s, D2) -> (D2 - $0);
+asctime_day(D1, D2) -> (D1 - $0) * 10 + (D2 - $0).
+
+-ifdef(TEST).
+day_name() -> oneof(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]).
+day_name_l() -> oneof(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]).
+year() -> int(1951, 2050).
+month() -> int(1, 12).
+day() -> int(1, 31).
+hour() -> int(23).
+minute() -> int(59).
+second() -> int(60).
+
+month(1) -> "Jan";
+month(2) -> "Feb";
+month(3) -> "Mar";
+month(4) -> "Apr";
+month(5) -> "May";
+month(6) -> "Jun";
+month(7) -> "Jul";
+month(8) -> "Aug";
+month(9) -> "Sep";
+month(10) -> "Oct";
+month(11) -> "Nov";
+month(12) -> "Dec".
+
+pad2(I) when I < 10 -> << $0, (I + $0) >>;
+pad2(I) -> integer_to_binary(I).
+
+pad2s(I) when I < 10 -> << $\s, (I + $0) >>;
+pad2s(I) -> integer_to_binary(I).
+
+fixdate_gen() ->
+	?LET({DayName, Y, Mo, D, H, Mi, S},
+		{day_name(), year(), month(), day(), hour(), minute(), second()},
+		{{{Y, Mo, D}, {H, Mi, S}},
+			list_to_binary([DayName, ", ", pad2(D), " ", month(Mo), " ", integer_to_binary(Y),
+			" ", pad2(H), ":", pad2(Mi), ":", pad2(S), " GMT"])}).
+
+rfc850_gen() ->
+	?LET({DayName, Y, Mo, D, H, Mi, S},
+		{day_name_l(), year(), month(), day(), hour(), minute(), second()},
+		{{{Y, Mo, D}, {H, Mi, S}},
+			list_to_binary([DayName, ", ", pad2(D), "-", month(Mo), "-", pad2(Y rem 100),
+			" ", pad2(H), ":", pad2(Mi), ":", pad2(S), " GMT"])}).
+
+asctime_gen() ->
+	?LET({DayName, Y, Mo, D, H, Mi, S},
+		{day_name(), year(), month(), day(), hour(), minute(), second()},
+		{{{Y, Mo, D}, {H, Mi, S}},
+			list_to_binary([DayName, " ", month(Mo), " ", pad2s(D),
+			" ", pad2(H), ":", pad2(Mi), ":", pad2(S), " ", integer_to_binary(Y)])}).
+
+prop_http_date() ->
+	?FORALL({Date, DateBin},
+		oneof([fixdate_gen(), rfc850_gen(), asctime_gen()]),
+		Date =:= http_date(DateBin)).
+
+http_date_test_() ->
+	Tests = [
+		{<<"Sun, 06 Nov 1994 08:49:37 GMT">>, {{1994, 11, 6}, {8, 49, 37}}},
+		{<<"Sunday, 06-Nov-94 08:49:37 GMT">>, {{1994, 11, 6}, {8, 49, 37}}},
+		{<<"Sun Nov  6 08:49:37 1994">>, {{1994, 11, 6}, {8, 49, 37}}}
+	],
+	[{V, fun() -> R = http_date(V) end} || {V, R} <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_http_date_fixdate() ->
+	horse:repeat(200000,
+		http_date(<<"Sun, 06 Nov 1994 08:49:37 GMT">>)
+	).
+
+horse_http_date_rfc850() ->
+	horse:repeat(200000,
+		http_date(<<"Sunday, 06-Nov-94 08:49:37 GMT">>)
+	).
+
+horse_http_date_asctime() ->
+	horse:repeat(200000,
+		http_date(<<"Sun Nov  6 08:49:37 1994">>)
+	).
+-endif.

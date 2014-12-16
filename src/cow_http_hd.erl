@@ -1037,7 +1037,7 @@ parse_max_forwards_error_test_() ->
 
 %% @doc Parse the Transfer-Encoding header.
 %%
-%% @todo Extension parameters.
+%% @todo This function does not support parsing of transfer-parameter.
 
 -spec parse_transfer_encoding(binary()) -> [binary()].
 parse_transfer_encoding(<<"chunked">>) ->
@@ -1046,6 +1046,16 @@ parse_transfer_encoding(TransferEncoding) ->
 	nonempty(token_ci_list(TransferEncoding, [])).
 
 -ifdef(TEST).
+prop_parse_transfer_encoding() ->
+	?FORALL(L,
+		non_empty(list(token())),
+		begin
+			<< _, TransferEncoding/binary >> = iolist_to_binary([[$,, C] || C <- L]),
+			ResL = parse_transfer_encoding(TransferEncoding),
+			CheckedL = [?INLINE_LOWERCASE_BC(Co) =:= ResC || {Co, ResC} <- lists:zip(L, ResL)],
+			[true] =:= lists:usort(CheckedL)
+		end).
+
 parse_transfer_encoding_test_() ->
 	Tests = [
 		{<<"a , , , ">>, [<<"a">>]},

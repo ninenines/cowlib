@@ -701,6 +701,16 @@ parse_connection(Connection) ->
 	nonempty(token_ci_list(Connection, [])).
 
 -ifdef(TEST).
+prop_parse_connection() ->
+	?FORALL(L,
+		non_empty(list(token())),
+		begin
+			<< _, Connection/binary >> = iolist_to_binary([[$,, C] || C <- L]),
+			ResL = parse_connection(Connection),
+			CheckedL = [?INLINE_LOWERCASE_BC(Co) =:= ResC || {Co, ResC} <- lists:zip(L, ResL)],
+			[true] =:= lists:usort(CheckedL)
+		end).
+
 parse_connection_test_() ->
 	Tests = [
 		{<<"close">>, [<<"close">>]},
@@ -709,6 +719,12 @@ parse_connection_test_() ->
 		{<<"keep-alive, Upgrade">>, [<<"keep-alive">>, <<"upgrade">>]}
 	],
 	[{V, fun() -> R = parse_connection(V) end} || {V, R} <- Tests].
+
+parse_connection_error_test_() ->
+	Tests = [
+		<<>>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_connection(V)) end} || V <- Tests].
 -endif.
 
 -ifdef(PERF).

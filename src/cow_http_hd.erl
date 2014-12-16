@@ -21,6 +21,7 @@
 -export([parse_connection/1]).
 -export([parse_content_length/1]).
 -export([parse_content_type/1]).
+-export([parse_date/1]).
 -export([parse_expect/1]).
 -export([parse_if_modified_since/1]).
 -export([parse_if_unmodified_since/1]).
@@ -940,6 +941,20 @@ horse_parse_content_type() ->
 	horse:repeat(200000,
 		parse_content_type(<<"text/html;charset=utf-8">>)
 	).
+-endif.
+
+%% @doc Parse the Date header.
+
+-spec parse_date(binary()) -> calendar:datetime().
+parse_date(Date) ->
+	http_date(Date).
+
+-ifdef(TEST).
+parse_date_test_() ->
+	Tests = [
+		{<<"Tue, 15 Nov 1994 08:12:31 GMT">>, {{1994, 11, 15}, {8, 12, 31}}}
+	],
+	[{V, fun() -> R = parse_date(V) end} || {V, R} <- Tests].
 -endif.
 
 %% @doc Parse the Expect header.

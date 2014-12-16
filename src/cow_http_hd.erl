@@ -956,6 +956,17 @@ parse_expect(<<"100-", C, O, N, T, I, M, U, E, Rest/bits >>)
 	continue.
 
 -ifdef(TEST).
+expect() ->
+	?LET(E,
+		[$1, $0, $0, $-,
+			oneof([$c, $C]), oneof([$o, $O]), oneof([$n, $N]),
+			oneof([$t, $T]), oneof([$i, $I]), oneof([$n, $N]),
+			oneof([$u, $U]), oneof([$e, $E])],
+		list_to_binary(E)).
+
+prop_parse_expect() ->
+	?FORALL(E, expect(), continue =:= parse_expect(E)).
+
 parse_expect_test_() ->
 	Tests = [
 		<<"100-continue">>,

@@ -23,6 +23,7 @@
 -export([parse_content_type/1]).
 -export([parse_expect/1]).
 -export([parse_if_modified_since/1]).
+-export([parse_if_unmodified_since/1]).
 -export([parse_max_forwards/1]).
 -export([parse_transfer_encoding/1]).
 
@@ -1006,6 +1007,20 @@ parse_if_modified_since_test_() ->
 		{<<"Sat, 29 Oct 1994 19:43:31 GMT">>, {{1994, 10, 29}, {19, 43, 31}}}
 	],
 	[{V, fun() -> R = parse_if_modified_since(V) end} || {V, R} <- Tests].
+-endif.
+
+%% @doc Parse the If-Unmodified-Since header.
+
+-spec parse_if_unmodified_since(binary()) -> calendar:datetime().
+parse_if_unmodified_since(IfModifiedSince) ->
+	http_date(IfModifiedSince).
+
+-ifdef(TEST).
+parse_if_unmodified_since_test_() ->
+	Tests = [
+		{<<"Sat, 29 Oct 1994 19:43:31 GMT">>, {{1994, 10, 29}, {19, 43, 31}}}
+	],
+	[{V, fun() -> R = parse_if_unmodified_since(V) end} || {V, R} <- Tests].
 -endif.
 
 %% @doc Parse the Max-Forwards header.

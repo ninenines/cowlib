@@ -436,9 +436,9 @@ prop_parse_accept_charset() ->
 			<< _, AcceptCharset/binary >> = iolist_to_binary([[$,, A] || {_, _, A} <- L]),
 			ResL = parse_accept_charset(AcceptCharset),
 			CheckedL = [begin
-				ResC =:= ?INLINE_LOWERCASE_BC(C)
+				ResC =:= ?INLINE_LOWERCASE_BC(Ch)
 					andalso (ResW =:= W orelse (W =:= undefined andalso ResW =:= 1000))
-			end || {{C, W, _}, {ResC, ResW}} <- lists:zip(L, ResL)],
+			end || {{Ch, W, _}, {ResC, ResW}} <- lists:zip(L, ResL)],
 			[true] =:= lists:usort(CheckedL)
 		end).
 

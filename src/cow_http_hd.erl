@@ -1009,6 +1009,13 @@ parse_max_forwards(<< $8, R/bits >>) -> number(R, 8);
 parse_max_forwards(<< $9, R/bits >>) -> number(R, 9).
 
 -ifdef(TEST).
+prop_parse_max_forwards() ->
+	?FORALL(
+		X,
+		non_neg_integer(),
+		X =:= parse_max_forwards(integer_to_binary(X))
+	).
+
 parse_max_forwards_test_() ->
 	Tests = [
 		{<<"0">>, 0},
@@ -1019,6 +1026,14 @@ parse_max_forwards_test_() ->
 		{<<"1234567890     ">>, 1234567890}
 	],
 	[{V, fun() -> R = parse_max_forwards(V) end} || {V, R} <- Tests].
+
+parse_max_forwards_error_test_() ->
+	Tests = [
+		<<>>,
+		<<"123, 123">>,
+		<<"4.17">>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_content_length(V)) end} || V <- Tests].
 -endif.
 
 %% @doc Parse the Transfer-Encoding header.

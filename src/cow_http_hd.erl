@@ -40,7 +40,6 @@ ows() ->
 	list(oneof([$\s, $\t])).
 
 alpha_chars() -> "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".
-digit_chars() -> "0123456789".
 alphanum_chars() -> "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".
 
 alpha() ->

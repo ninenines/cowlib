@@ -25,6 +25,7 @@
 -export([parse_expect/1]).
 -export([parse_if_match/1]).
 -export([parse_if_modified_since/1]).
+-export([parse_if_none_match/1]).
 -export([parse_if_unmodified_since/1]).
 -export([parse_last_modified/1]).
 -export([parse_max_forwards/1]).
@@ -1101,6 +1102,41 @@ parse_if_modified_since_test_() ->
 		{<<"Sat, 29 Oct 1994 19:43:31 GMT">>, {{1994, 10, 29}, {19, 43, 31}}}
 	],
 	[{V, fun() -> R = parse_if_modified_since(V) end} || {V, R} <- Tests].
+-endif.
+
+%% @doc Parse the If-None-Match header.
+
+-spec parse_if_none_match(binary()) -> '*' | [etag()].
+parse_if_none_match(<<"*">>) ->
+	'*';
+parse_if_none_match(IfNoneMatch) ->
+	nonempty(etag_list(IfNoneMatch, [])).
+
+-ifdef(TEST).
+parse_if_none_match_test_() ->
+	Tests = [
+		{<<"\"xyzzy\"">>, [{strong, <<"xyzzy">>}]},
+		{<<"W/\"xyzzy\"">>, [{weak, <<"xyzzy">>}]},
+		{<<"\"xyzzy\", \"r2d2xxxx\", \"c3piozzzz\"">>,
+			[{strong, <<"xyzzy">>}, {strong, <<"r2d2xxxx">>}, {strong, <<"c3piozzzz">>}]},
+		{<<"W/\"xyzzy\", W/\"r2d2xxxx\", W/\"c3piozzzz\"">>,
+			[{weak, <<"xyzzy">>}, {weak, <<"r2d2xxxx">>}, {weak, <<"c3piozzzz">>}]},
+		{<<"*">>, '*'}
+	],
+	[{V, fun() -> R = parse_if_none_match(V) end} || {V, R} <- Tests].
+
+parse_if_none_match_error_test_() ->
+	Tests = [
+		<<>>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_if_none_match(V)) end} || V <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_if_none_match() ->
+	horse:repeat(200000,
+		parse_if_none_match(<<"W/\"xyzzy\", W/\"r2d2xxxx\", W/\"c3piozzzz\"">>)
+	).
 -endif.
 
 %% @doc Parse the If-Unmodified-Since header.

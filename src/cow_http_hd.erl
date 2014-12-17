@@ -779,6 +779,7 @@ parse_content_length_test_() ->
 		{<<"42    ">>, 42},
 		{<<"69\t">>, 69},
 		{<<"1337">>, 1337},
+		{<<"3495">>, 3495},
 		{<<"1234567890">>, 1234567890},
 		{<<"1234567890     ">>, 1234567890}
 	],
@@ -1123,7 +1124,8 @@ parse_transfer_encoding_test_() ->
 		{<<" , , , a">>, [<<"a">>]},
 		{<<"a , , b">>, [<<"a">>, <<"b">>]},
 		{<<"chunked">>, [<<"chunked">>]},
-		{<<"chunked, something">>, [<<"chunked">>, <<"something">>]}
+		{<<"chunked, something">>, [<<"chunked">>, <<"something">>]},
+		{<<"gzip, chunked">>, [<<"gzip">>, <<"chunked">>]}
 	],
 	[{V, fun() -> R = parse_transfer_encoding(V) end} || {V, R} <- Tests].
 

@@ -24,6 +24,7 @@
 -export([parse_date/1]).
 -export([parse_etag/1]).
 -export([parse_expect/1]).
+-export([parse_expires/1]).
 -export([parse_if_match/1]).
 -export([parse_if_modified_since/1]).
 -export([parse_if_none_match/1]).
@@ -1076,6 +1077,43 @@ parse_expect_error_test_() ->
 horse_parse_expect() ->
 	horse:repeat(200000,
 		parse_expect(<<"100-continue">>)
+	).
+-endif.
+
+%% @doc Parse the Expires header.
+%%
+%% Recipients must interpret invalid date formats as a date
+%% in the past. The value "0" is commonly used.
+
+-spec parse_expires(binary()) -> calendar:datetime().
+parse_expires(<<"0">>) ->
+	{{1, 1, 1}, {0, 0, 0}};
+parse_expires(Expires) ->
+	try
+		cow_date:parse_date(Expires)
+	catch _:_ ->
+		{{1, 1, 1}, {0, 0, 0}}
+	end.
+
+-ifdef(TEST).
+parse_expires_test_() ->
+	Tests = [
+		{<<"0">>, {{1, 1, 1}, {0, 0, 0}}},
+		{<<"Thu, 01 Dec 1994 nope invalid">>, {{1, 1, 1}, {0, 0, 0}}},
+		{<<"Thu, 01 Dec 1994 16:00:00 GMT">>, {{1994, 12, 1}, {16, 0, 0}}}
+	],
+	[{V, fun() -> R = parse_expires(V) end} || {V, R} <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_expires_0() ->
+	horse:repeat(200000,
+		parse_expires(<<"0">>)
+	).
+
+horse_parse_expires_invalid() ->
+	horse:repeat(200000,
+		parse_expires(<<"Thu, 01 Dec 1994 nope invalid">>)
 	).
 -endif.
 

@@ -28,6 +28,7 @@
 -export([parse_last_modified/1]).
 -export([parse_max_forwards/1]).
 -export([parse_transfer_encoding/1]).
+-export([parse_upgrade/1]).
 
 -type media_type() :: {binary(), binary(), [{binary(), binary()}]}.
 -export_type([media_type/0]).
@@ -1148,6 +1149,86 @@ horse_parse_transfer_encoding_custom() ->
 	horse:repeat(200000,
 		parse_transfer_encoding(<<"chunked, something">>)
 	).
+-endif.
+
+%% @doc Parse the Upgrade header.
+%%
+%% It is unclear from the RFC whether the values here are
+%% case sensitive.
+%%
+%% We handle them in a case insensitive manner because they
+%% are described as case insensitive in the Websocket RFC.
+
+-spec parse_upgrade(binary()) -> [binary()].
+parse_upgrade(Upgrade) ->
+	nonempty(protocol_list(Upgrade, [])).
+
+protocol_list(<<>>, Acc) -> lists:reverse(Acc);
+protocol_list(<< $\s, R/bits >>, Acc) -> protocol_list(R, Acc);
+protocol_list(<< $\t, R/bits >>, Acc) -> protocol_list(R, Acc);
+protocol_list(<< $,, R/bits >>, Acc) -> protocol_list(R, Acc);
+protocol_list(<< C, R/bits >>, Acc) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(protocol_name, R, Acc, <<>>)
+	end.
+
+protocol_name(<<>>, Acc, P) -> lists:reverse([P|Acc]);
+protocol_name(<< $\s, R/bits >>, Acc, P) -> protocol_list_sep(R, [P|Acc]);
+protocol_name(<< $\t, R/bits >>, Acc, P) -> protocol_list_sep(R, [P|Acc]);
+protocol_name(<< $,, R/bits >>, Acc, P) -> protocol_list(R, [P|Acc]);
+protocol_name(<< $/, C, R/bits >>, Acc, P) ->
+	case C of
+		?INLINE_LOWERCASE(protocol_version, R, Acc, << P/binary, $/ >>)
+	end;
+protocol_name(<< C, R/bits >>, Acc, P) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(protocol_name, R, Acc, P)
+	end.
+
+protocol_version(<<>>, Acc, P) -> lists:reverse([P|Acc]);
+protocol_version(<< $\s, R/bits >>, Acc, P) -> protocol_list_sep(R, [P|Acc]);
+protocol_version(<< $\t, R/bits >>, Acc, P) -> protocol_list_sep(R, [P|Acc]);
+protocol_version(<< $,, R/bits >>, Acc, P) -> protocol_list(R, [P|Acc]);
+protocol_version(<< C, R/bits >>, Acc, P) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(protocol_version, R, Acc, P)
+	end.
+
+protocol_list_sep(<<>>, Acc) -> lists:reverse(Acc);
+protocol_list_sep(<< $\s, R/bits >>, Acc) -> protocol_list_sep(R, Acc);
+protocol_list_sep(<< $\t, R/bits >>, Acc) -> protocol_list_sep(R, Acc);
+protocol_list_sep(<< $,, R/bits >>, Acc) -> protocol_list(R, Acc).
+
+-ifdef(TEST).
+protocols() ->
+	?LET(P,
+		oneof([token(), [token(), $/, token()]]),
+		iolist_to_binary(P)).
+
+prop_parse_upgrade() ->
+	?FORALL(L,
+		non_empty(list(protocols())),
+		begin
+			<< _, Upgrade/binary >> = iolist_to_binary([[$,, P] || P <- L]),
+			ResL = parse_upgrade(Upgrade),
+			CheckedL = [?INLINE_LOWERCASE_BC(P) =:= ResP || {P, ResP} <- lists:zip(L, ResL)],
+			[true] =:= lists:usort(CheckedL)
+		end).
+
+parse_upgrade_test_() ->
+	Tests = [
+		{<<"HTTP/2.0, SHTTP/1.3, IRC/6.9, RTA/x11">>,
+			[<<"http/2.0">>, <<"shttp/1.3">>, <<"irc/6.9">>, <<"rta/x11">>]},
+		{<<"HTTP/2.0">>, [<<"http/2.0">>]}
+	],
+	[{V, fun() -> R = parse_transfer_encoding(V) end} || {V, R} <- Tests].
+
+parse_upgrade_error_test_() ->
+	Tests = [
+		<<>>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_upgrade(V)) end}
+		|| V <- Tests].
 -endif.
 
 %% Internal.

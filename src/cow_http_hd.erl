@@ -23,12 +23,16 @@
 -export([parse_content_type/1]).
 -export([parse_date/1]).
 -export([parse_expect/1]).
+-export([parse_if_match/1]).
 -export([parse_if_modified_since/1]).
 -export([parse_if_unmodified_since/1]).
 -export([parse_last_modified/1]).
 -export([parse_max_forwards/1]).
 -export([parse_transfer_encoding/1]).
 -export([parse_upgrade/1]).
+
+-type etag() :: {weak | strong, binary()}.
+-export_type([etag/0]).
 
 -type media_type() :: {binary(), binary(), [{binary(), binary()}]}.
 -export_type([media_type/0]).
@@ -1010,6 +1014,78 @@ parse_expect_error_test_() ->
 horse_parse_expect() ->
 	horse:repeat(200000,
 		parse_expect(<<"100-continue">>)
+	).
+-endif.
+
+%% @doc Parse the If-Match header.
+
+-spec parse_if_match(binary()) -> '*' | [etag()].
+parse_if_match(<<"*">>) ->
+	'*';
+parse_if_match(IfMatch) ->
+	nonempty(etag_list(IfMatch, [])).
+
+etag_list(<<>>, Acc) -> lists:reverse(Acc);
+etag_list(<< $\s, R/bits >>, Acc) -> etag_list(R, Acc);
+etag_list(<< $\t, R/bits >>, Acc) -> etag_list(R, Acc);
+etag_list(<< $,, R/bits >>, Acc) -> etag_list(R, Acc);
+etag_list(<< $W, $/, $", R/bits >>, Acc) -> etagc(R, Acc, weak, <<>>);
+etag_list(<< $", R/bits >>, Acc) -> etagc(R, Acc, strong, <<>>).
+
+etagc(<< $", R/bits >>, Acc, Strength, Tag) -> etag_list_sep(R, [{Strength, Tag}|Acc]);
+etagc(<< C, R/bits >>, Acc, Strength, Tag) when ?IS_ETAGC(C) -> etagc(R, Acc, Strength, << Tag/binary, C >>).
+
+etag_list_sep(<<>>, Acc) -> lists:reverse(Acc);
+etag_list_sep(<< $\s, R/bits >>, Acc) -> etag_list_sep(R, Acc);
+etag_list_sep(<< $\t, R/bits >>, Acc) -> etag_list_sep(R, Acc);
+etag_list_sep(<< $,, R/bits >>, Acc) -> etag_list(R, Acc).
+
+-ifdef(TEST).
+etagc() ->
+	?SUCHTHAT(C, int(16#21, 16#ff), C =/= 16#22 andalso C =/= 16#7f).
+
+etag() ->
+	?LET({Strength, Tag},
+		{oneof([weak, strong]), list(etagc())},
+		begin
+			TagBin = list_to_binary(Tag),
+			{{Strength, TagBin},
+				case Strength of
+					weak -> << $W, $/, $", TagBin/binary, $" >>;
+					strong -> << $", TagBin/binary, $" >>
+				end}
+		end).
+
+prop_parse_if_match() ->
+	?FORALL(L,
+		non_empty(list(etag())),
+		begin
+			<< _, IfMatch/binary >> = iolist_to_binary([[$,, T] || {_, T} <- L]),
+			ResL = parse_if_match(IfMatch),
+			CheckedL = [T =:= ResT || {{T, _}, ResT} <- lists:zip(L, ResL)],
+			[true] =:= lists:usort(CheckedL)
+		end).
+
+parse_if_match_test_() ->
+	Tests = [
+		{<<"\"xyzzy\"">>, [{strong, <<"xyzzy">>}]},
+		{<<"\"xyzzy\", \"r2d2xxxx\", \"c3piozzzz\"">>,
+			[{strong, <<"xyzzy">>}, {strong, <<"r2d2xxxx">>}, {strong, <<"c3piozzzz">>}]},
+		{<<"*">>, '*'}
+	],
+	[{V, fun() -> R = parse_if_match(V) end} || {V, R} <- Tests].
+
+parse_if_match_error_test_() ->
+	Tests = [
+		<<>>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_if_match(V)) end} || V <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_if_match() ->
+	horse:repeat(200000,
+		parse_if_match(<<"\"xyzzy\", \"r2d2xxxx\", \"c3piozzzz\"">>)
 	).
 -endif.
 

@@ -39,6 +39,10 @@
 	C =:= $5; C =:= $6; C =:= $7; C =:= $8; C =:= $9
 ).
 
+%% IS_ETAGC(Character)
+
+-define(IS_ETAGC(C), C =:= 16#21; C >= 16#23, C =/= 16#7f).
+
 %% IS_TOKEN(Character)
 
 -define(IS_TOKEN(C),

@@ -22,6 +22,7 @@
 -export([parse_content_length/1]).
 -export([parse_content_type/1]).
 -export([parse_date/1]).
+-export([parse_etag/1]).
 -export([parse_expect/1]).
 -export([parse_if_match/1]).
 -export([parse_if_modified_since/1]).
@@ -965,6 +966,66 @@ parse_date_test_() ->
 	[{V, fun() -> R = parse_date(V) end} || {V, R} <- Tests].
 -endif.
 
+%% @doc Parse the ETag header.
+
+-spec parse_etag(binary()) -> etag().
+parse_etag(<< $W, $/, $", R/bits >>) ->
+	etag(R, weak, <<>>);
+parse_etag(<< $", R/bits >>) ->
+	etag(R, strong, <<>>).
+
+etag(<< $", R/bits >>, Strength, Tag) ->
+	ws_end(R),
+	{Strength, Tag};
+etag(<< C, R/bits >>, Strength, Tag) when ?IS_ETAGC(C) ->
+	etag(R, Strength, << Tag/binary, C >>).
+
+-ifdef(TEST).
+etagc() ->
+	?SUCHTHAT(C, int(16#21, 16#ff), C =/= 16#22 andalso C =/= 16#7f).
+
+etag() ->
+	?LET({Strength, Tag},
+		{oneof([weak, strong]), list(etagc())},
+		begin
+			TagBin = list_to_binary(Tag),
+			{{Strength, TagBin},
+				case Strength of
+					weak -> << $W, $/, $", TagBin/binary, $" >>;
+					strong -> << $", TagBin/binary, $" >>
+				end}
+		end).
+
+prop_parse_etag() ->
+	?FORALL({Tag, TagBin},
+		etag(),
+		Tag =:= parse_etag(TagBin)).
+
+parse_etag_test_() ->
+	Tests = [
+		{<<"\"xyzzy\"">>, {strong, <<"xyzzy">>}},
+		{<<"W/\"xyzzy\"">>, {weak, <<"xyzzy">>}},
+		{<<"\"\"">>, {strong, <<>>}}
+	],
+	[{V, fun() -> R = parse_etag(V) end} || {V, R} <- Tests].
+
+parse_etag_error_test_() ->
+	Tests = [
+		<<>>,
+		<<"\"">>,
+		<<"W">>,
+		<<"W/">>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_etag(V)) end} || V <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_etag() ->
+	horse:repeat(200000,
+		parse_etag(<<"W/\"xyzzy\"">>)
+	).
+-endif.
+
 %% @doc Parse the Expect header.
 
 -spec parse_expect(binary()) -> continue.
@@ -1042,21 +1103,6 @@ etag_list_sep(<< $\t, R/bits >>, Acc) -> etag_list_sep(R, Acc);
 etag_list_sep(<< $,, R/bits >>, Acc) -> etag_list(R, Acc).
 
 -ifdef(TEST).
-etagc() ->
-	?SUCHTHAT(C, int(16#21, 16#ff), C =/= 16#22 andalso C =/= 16#7f).
-
-etag() ->
-	?LET({Strength, Tag},
-		{oneof([weak, strong]), list(etagc())},
-		begin
-			TagBin = list_to_binary(Tag),
-			{{Strength, TagBin},
-				case Strength of
-					weak -> << $W, $/, $", TagBin/binary, $" >>;
-					strong -> << $", TagBin/binary, $" >>
-				end}
-		end).
-
 prop_parse_if_match() ->
 	?FORALL(L,
 		non_empty(list(etag())),

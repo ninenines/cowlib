@@ -1091,11 +1091,11 @@ etag_list(<<>>, Acc) -> lists:reverse(Acc);
 etag_list(<< $\s, R/bits >>, Acc) -> etag_list(R, Acc);
 etag_list(<< $\t, R/bits >>, Acc) -> etag_list(R, Acc);
 etag_list(<< $,, R/bits >>, Acc) -> etag_list(R, Acc);
-etag_list(<< $W, $/, $", R/bits >>, Acc) -> etagc(R, Acc, weak, <<>>);
-etag_list(<< $", R/bits >>, Acc) -> etagc(R, Acc, strong, <<>>).
+etag_list(<< $W, $/, $", R/bits >>, Acc) -> etag(R, Acc, weak, <<>>);
+etag_list(<< $", R/bits >>, Acc) -> etag(R, Acc, strong, <<>>).
 
-etagc(<< $", R/bits >>, Acc, Strength, Tag) -> etag_list_sep(R, [{Strength, Tag}|Acc]);
-etagc(<< C, R/bits >>, Acc, Strength, Tag) when ?IS_ETAGC(C) -> etagc(R, Acc, Strength, << Tag/binary, C >>).
+etag(<< $", R/bits >>, Acc, Strength, Tag) -> etag_list_sep(R, [{Strength, Tag}|Acc]);
+etag(<< C, R/bits >>, Acc, Strength, Tag) when ?IS_ETAGC(C) -> etag(R, Acc, Strength, << Tag/binary, C >>).
 
 etag_list_sep(<<>>, Acc) -> lists:reverse(Acc);
 etag_list_sep(<< $\s, R/bits >>, Acc) -> etag_list_sep(R, Acc);

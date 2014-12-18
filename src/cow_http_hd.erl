@@ -31,6 +31,7 @@
 -export([parse_if_unmodified_since/1]).
 -export([parse_last_modified/1]).
 -export([parse_max_forwards/1]).
+-export([parse_sec_websocket_extensions/1]).
 -export([parse_sec_websocket_protocol_client/1]).
 -export([parse_sec_websocket_version_client/1]).
 -export([parse_transfer_encoding/1]).
@@ -1293,6 +1294,117 @@ parse_max_forwards_error_test_() ->
 		<<"4.17">>
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_content_length(V)) end} || V <- Tests].
+-endif.
+
+%% @doc Parse the Sec-WebSocket-Extensions request header.
+
+-spec parse_sec_websocket_extensions(binary()) -> [{binary(), [binary() | {binary(), binary()}]}].
+parse_sec_websocket_extensions(SecWebSocketExtensions) ->
+	nonempty(ws_extension_list(SecWebSocketExtensions, [])).
+
+ws_extension_list(<<>>, Acc) -> lists:reverse(Acc);
+ws_extension_list(<< $\s, R/bits >>, Acc) -> ws_extension_list(R, Acc);
+ws_extension_list(<< $\t, R/bits >>, Acc) -> ws_extension_list(R, Acc);
+ws_extension_list(<< $,, R/bits >>, Acc) -> ws_extension_list(R, Acc);
+ws_extension_list(<< C, R/bits >>, Acc) when ?IS_TOKEN(C) -> ws_extension(R, Acc, << C >>).
+
+ws_extension(<<>>, Acc, E) -> lists:reverse([{E, []}|Acc]);
+ws_extension(<< $,, R/bits >>, Acc, E) -> ws_extension_list(R, [{E, []}|Acc]);
+ws_extension(<< $;, R/bits >>, Acc, E) -> ws_extension_before_param(R, Acc, E, []);
+ws_extension(<< $\s, R/bits >>, Acc, E) -> ws_extension_before_semicolon(R, Acc, E, []);
+ws_extension(<< $\t, R/bits >>, Acc, E) -> ws_extension_before_semicolon(R, Acc, E, []);
+ws_extension(<< C, R/bits >>, Acc, E) when ?IS_TOKEN(C) -> ws_extension(R, Acc, << E/binary, C >>).
+
+ws_extension_before_semicolon(<<>>, Acc, E, P) -> lists:reverse([{E, lists:reverse(P)}|Acc]);
+ws_extension_before_semicolon(<< $,, R/bits >>, Acc, E, P) -> ws_extension_list(R, [{E, lists:reverse(P)}|Acc]);
+ws_extension_before_semicolon(<< $;, R/bits >>, Acc, E, P) -> ws_extension_before_param(R, Acc, E, P);
+ws_extension_before_semicolon(<< $\s, R/bits >>, Acc, E, P) -> ws_extension_before_semicolon(R, Acc, E, P);
+ws_extension_before_semicolon(<< $\t, R/bits >>, Acc, E, P) -> ws_extension_before_semicolon(R, Acc, E, P).
+
+ws_extension_before_param(<< $\s, R/bits >>, Acc, E, P) -> ws_extension_before_param(R, Acc, E, P);
+ws_extension_before_param(<< $\t, R/bits >>, Acc, E, P) -> ws_extension_before_param(R, Acc, E, P);
+ws_extension_before_param(<< C, R/bits >>, Acc, E, P) when ?IS_TOKEN(C) -> ws_extension_param(R, Acc, E, P, << C >>).
+
+ws_extension_param(<<>>, Acc, E, P, K) -> lists:reverse([{E, lists:reverse([K|P])}|Acc]);
+ws_extension_param(<< $\s, R/bits >>, Acc, E, P, K) -> ws_extension_before_semicolon(R, Acc, E, [K|P]);
+ws_extension_param(<< $\t, R/bits >>, Acc, E, P, K) -> ws_extension_before_semicolon(R, Acc, E, [K|P]);
+ws_extension_param(<< $,, R/bits >>, Acc, E, P, K) -> ws_extension_list(R, [{E, lists:reverse([K|P])}|Acc]);
+ws_extension_param(<< $;, R/bits >>, Acc, E, P, K) -> ws_extension_before_param(R, Acc, E, [K|P]);
+ws_extension_param(<< $=, $", R/bits >>, Acc, E, P, K) -> ws_extension_quoted(R, Acc, E, P, K, <<>>);
+ws_extension_param(<< $=, C, R/bits >>, Acc, E, P, K) when ?IS_TOKEN(C) -> ws_extension_value(R, Acc, E, P, K, << C >>);
+ws_extension_param(<< C, R/bits >>, Acc, E, P, K) when ?IS_TOKEN(C) -> ws_extension_param(R, Acc, E, P, << K/binary, C >>).
+
+ws_extension_quoted(<< $", R/bits >>, Acc, E, P, K, V) -> ws_extension_before_semicolon(R, Acc, E, [{K, V}|P]);
+ws_extension_quoted(<< $\\, C, R/bits >>, Acc, E, P, K, V) when ?IS_TOKEN(C) -> ws_extension_quoted(R, Acc, E, P, K, << V/binary, C >>);
+ws_extension_quoted(<< C, R/bits >>, Acc, E, P, K, V) when ?IS_TOKEN(C) -> ws_extension_quoted(R, Acc, E, P, K, << V/binary, C >>).
+
+ws_extension_value(<<>>, Acc, E, P, K, V) -> lists:reverse([{E, lists:reverse([{K, V}|P])}|Acc]);
+ws_extension_value(<< $\s, R/bits >>, Acc, E, P, K, V) -> ws_extension_before_semicolon(R, Acc, E, [{K, V}|P]);
+ws_extension_value(<< $\t, R/bits >>, Acc, E, P, K, V) -> ws_extension_before_semicolon(R, Acc, E, [{K, V}|P]);
+ws_extension_value(<< $,, R/bits >>, Acc, E, P, K, V) -> ws_extension_list(R, [{E, lists:reverse([{K, V}|P])}|Acc]);
+ws_extension_value(<< $;, R/bits >>, Acc, E, P, K, V) -> ws_extension_before_param(R, Acc, E, [{K, V}|P]);
+ws_extension_value(<< C, R/bits >>, Acc, E, P, K, V) when ?IS_TOKEN(C) -> ws_extension_value(R, Acc, E, P, K, << V/binary, C >>).
+
+-ifdef(TEST).
+quoted_token() ->
+	?LET(T,
+		non_empty(list(frequency([
+			{99, tchar()},
+			{1, [$\\, tchar()]}
+		]))),
+		[$", T, $"]).
+
+ws_extension() ->
+	?LET({E, PL},
+		{token(), list({ows(), ows(), oneof([token(), {token(), oneof([token(), quoted_token()])}])})},
+		{E, PL, iolist_to_binary([E,
+			[case P of
+				{OWS1, OWS2, {K, V}} -> [OWS1, $;, OWS2, K, $=, V];
+				{OWS1, OWS2, K} -> [OWS1, $;, OWS2, K]
+			end || P <- PL]
+		])}).
+
+prop_parse_sec_websocket_extensions() ->
+	?FORALL(L,
+		non_empty(list(ws_extension())),
+		begin
+			<< _, SecWebsocketExtensions/binary >> = iolist_to_binary([[$,, E] || {_, _, E} <- L]),
+			ResL = parse_sec_websocket_extensions(SecWebsocketExtensions),
+			CheckedL = [begin
+				ExpectedPL = [case P of
+					{_, _, {K, V}} -> {K, unquote(V)};
+					{_, _, K} -> K
+				end || P <- PL],
+				E =:= ResE andalso ExpectedPL =:= ResPL
+			end || {{E, PL, _}, {ResE, ResPL}} <- lists:zip(L, ResL)],
+			[true] =:= lists:usort(CheckedL)
+		end).
+
+parse_sec_websocket_extensions_test_() ->
+	Tests = [
+		{<<"foo">>, [{<<"foo">>, []}]},
+		{<<"bar; baz=2">>, [{<<"bar">>, [{<<"baz">>, <<"2">>}]}]},
+		{<<"foo, bar; baz=2">>, [{<<"foo">>, []}, {<<"bar">>, [{<<"baz">>, <<"2">>}]}]},
+		{<<"deflate-stream">>, [{<<"deflate-stream">>, []}]},
+		{<<"mux; max-channels=4; flow-control, deflate-stream">>,
+			[{<<"mux">>, [{<<"max-channels">>, <<"4">>}, <<"flow-control">>]}, {<<"deflate-stream">>, []}]},
+		{<<"private-extension">>, [{<<"private-extension">>, []}]}
+	],
+	[{V, fun() -> R = parse_sec_websocket_extensions(V) end} || {V, R} <- Tests].
+
+parse_sec_websocket_extensions_error_test_() ->
+	Tests = [
+		<<>>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_sec_websocket_extensions(V)) end}
+		|| V <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_sec_websocket_extensions() ->
+	horse:repeat(200000,
+		parse_sec_websocket_extensions(<<"mux; max-channels=4; flow-control, deflate-stream">>)
+	).
 -endif.
 
 %% @doc Parse the Sec-WebSocket-Protocol request header.

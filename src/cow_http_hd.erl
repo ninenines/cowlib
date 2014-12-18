@@ -31,6 +31,7 @@
 -export([parse_if_unmodified_since/1]).
 -export([parse_last_modified/1]).
 -export([parse_max_forwards/1]).
+-export([parse_sec_websocket_protocol_client/1]).
 -export([parse_sec_websocket_version_client/1]).
 -export([parse_transfer_encoding/1]).
 -export([parse_upgrade/1]).
@@ -1292,6 +1293,34 @@ parse_max_forwards_error_test_() ->
 		<<"4.17">>
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_content_length(V)) end} || V <- Tests].
+-endif.
+
+%% @doc Parse the Sec-WebSocket-Protocol request header.
+
+-spec parse_sec_websocket_protocol_client(binary()) -> [binary()].
+parse_sec_websocket_protocol_client(SecWebSocketProtocol) ->
+	nonempty(token_ci_list(SecWebSocketProtocol, [])).
+
+-ifdef(TEST).
+parse_sec_websocket_protocol_client_test_() ->
+	Tests = [
+		{<<"chat, superchat">>, [<<"chat">>, <<"superchat">>]}
+	],
+	[{V, fun() -> R = parse_sec_websocket_protocol_client(V) end} || {V, R} <- Tests].
+
+parse_sec_websocket_protocol_client_error_test_() ->
+	Tests = [
+		<<>>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_sec_websocket_protocol_client(V)) end}
+		|| V <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_sec_websocket_protocol_client() ->
+	horse:repeat(200000,
+		parse_sec_websocket_protocol_client(<<"chat, superchat">>)
+	).
 -endif.
 
 %% @doc Parse the Sec-WebSocket-Version request header.

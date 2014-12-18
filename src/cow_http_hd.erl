@@ -1256,7 +1256,7 @@ parse_last_modified_test_() ->
 
 %% @doc Parse the Max-Forwards header.
 
--spec parse_max_forwards(binary()) -> integer().
+-spec parse_max_forwards(binary()) -> non_neg_integer().
 parse_max_forwards(<< $0, R/bits >>) -> number(R, 0);
 parse_max_forwards(<< $1, R/bits >>) -> number(R, 1);
 parse_max_forwards(<< $2, R/bits >>) -> number(R, 2);

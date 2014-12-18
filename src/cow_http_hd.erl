@@ -31,6 +31,7 @@
 -export([parse_if_unmodified_since/1]).
 -export([parse_last_modified/1]).
 -export([parse_max_forwards/1]).
+-export([parse_sec_websocket_version_client/1]).
 -export([parse_transfer_encoding/1]).
 -export([parse_upgrade/1]).
 
@@ -1291,6 +1292,50 @@ parse_max_forwards_error_test_() ->
 		<<"4.17">>
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_content_length(V)) end} || V <- Tests].
+-endif.
+
+%% @doc Parse the Sec-WebSocket-Version request header.
+
+-spec parse_sec_websocket_version_client(binary()) -> 0..255.
+parse_sec_websocket_version_client(SecWebSocketVersion) when byte_size(SecWebSocketVersion) < 4 ->
+	Version = binary_to_integer(SecWebSocketVersion),
+	true = Version >= 0 andalso Version =< 255,
+	Version.
+
+-ifdef(TEST).
+prop_parse_sec_websocket_version_client() ->
+	?FORALL(Version,
+		int(0, 255),
+		Version =:= parse_sec_websocket_version_client(integer_to_binary(Version))).
+
+parse_sec_websocket_version_client_test_() ->
+	Tests = [
+		{<<"13">>, 13},
+		{<<"25">>, 25}
+	],
+	[{V, fun() -> R = parse_sec_websocket_version_client(V) end} || {V, R} <- Tests].
+
+parse_sec_websocket_version_client_error_test_() ->
+	Tests = [
+		<<>>,
+		<<" ">>,
+		<<"7, 8, 13">>,
+		<<"invalid">>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_sec_websocket_version_client(V)) end}
+		|| V <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_sec_websocket_version_client_13() ->
+	horse:repeat(200000,
+		parse_sec_websocket_version_client(<<"13">>)
+	).
+
+horse_parse_sec_websocket_version_client_255() ->
+	horse:repeat(200000,
+		parse_sec_websocket_version_client(<<"255">>)
+	).
 -endif.
 
 %% @doc Parse the Transfer-Encoding header.

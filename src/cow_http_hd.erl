@@ -19,6 +19,7 @@
 -export([parse_accept_encoding/1]).
 -export([parse_accept_language/1]).
 -export([parse_connection/1]).
+-export([parse_content_encoding/1]).
 -export([parse_content_length/1]).
 -export([parse_content_type/1]).
 -export([parse_date/1]).
@@ -755,6 +756,33 @@ horse_parse_connection_keepalive() ->
 horse_parse_connection_keepalive_upgrade() ->
 	horse:repeat(200000,
 		parse_connection(<<"keep-alive, upgrade">>)
+	).
+-endif.
+
+%% @doc Parse the Content-Encoding header.
+
+-spec parse_content_encoding(binary()) -> [binary()].
+parse_content_encoding(ContentEncoding) ->
+	nonempty(token_ci_list(ContentEncoding, [])).
+
+-ifdef(TEST).
+parse_content_encoding_test_() ->
+	Tests = [
+		{<<"gzip">>, [<<"gzip">>]}
+	],
+	[{V, fun() -> R = parse_content_encoding(V) end} || {V, R} <- Tests].
+
+parse_content_encoding_error_test_() ->
+	Tests = [
+		<<>>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_content_encoding(V)) end} || V <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_content_encoding() ->
+	horse:repeat(200000,
+		parse_content_encoding(<<"gzip">>)
 	).
 -endif.
 

@@ -36,6 +36,7 @@
 -export([parse_sec_websocket_extensions/1]).
 -export([parse_sec_websocket_protocol_client/1]).
 -export([parse_sec_websocket_version_client/1]).
+-export([parse_trailer/1]).
 -export([parse_transfer_encoding/1]).
 -export([parse_upgrade/1]).
 
@@ -1805,6 +1806,33 @@ horse_parse_sec_websocket_version_client_13() ->
 horse_parse_sec_websocket_version_client_255() ->
 	horse:repeat(200000,
 		parse_sec_websocket_version_client(<<"255">>)
+	).
+-endif.
+
+%% @doc Parse the Trailer header.
+
+-spec parse_trailer(binary()) -> [binary()].
+parse_trailer(Trailer) ->
+	nonempty(token_ci_list(Trailer, [])).
+
+-ifdef(TEST).
+parse_trailer_test_() ->
+	Tests = [
+		{<<"Date, Content-MD5">>, [<<"date">>, <<"content-md5">>]}
+	],
+	[{V, fun() -> R = parse_trailer(V) end} || {V, R} <- Tests].
+
+parse_trailer_error_test_() ->
+	Tests = [
+		<<>>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_trailer(V)) end} || V <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_trailer() ->
+	horse:repeat(200000,
+		parse_trailer(<<"Date, Content-MD5">>)
 	).
 -endif.
 

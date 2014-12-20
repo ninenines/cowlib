@@ -20,6 +20,7 @@
 -export([parse_accept_language/1]).
 -export([parse_connection/1]).
 -export([parse_content_encoding/1]).
+-export([parse_content_language/1]).
 -export([parse_content_length/1]).
 -export([parse_content_type/1]).
 -export([parse_date/1]).
@@ -57,12 +58,16 @@ ows() ->
 
 alpha_chars() -> "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".
 alphanum_chars() -> "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".
+digit_chars() -> "0123456789".
 
 alpha() ->
 	oneof(alpha_chars()).
 
 alphanum() ->
 	oneof(alphanum_chars()).
+
+digit() ->
+	oneof(digit_chars()).
 
 tchar() ->
 	frequency([
@@ -621,7 +626,7 @@ language_range_list_sep(<< $\t, R/bits >>, Acc) -> language_range_list_sep(R, Ac
 language_range_list_sep(<< $,, R/bits >>, Acc) -> language_range_list(R, Acc).
 
 -ifdef(TEST).
-language_tag() ->
+language_range_tag() ->
 	oneof([
 		[alpha()],
 		[alpha(), alpha()],
@@ -633,7 +638,7 @@ language_tag() ->
 		[alpha(), alpha(), alpha(), alpha(), alpha(), alpha(), alpha(), alpha()]
 	]).
 
-language_subtag() ->
+language_range_subtag() ->
 	[$-, oneof([
 		[alphanum()],
 		[alphanum(), alphanum()],
@@ -646,7 +651,7 @@ language_subtag() ->
 	])].
 
 language_range() ->
-	[language_tag(), list(language_subtag())].
+	[language_range_tag(), list(language_range_subtag())].
 
 accept_language() ->
 	?LET({R, W},
@@ -783,6 +788,327 @@ parse_content_encoding_error_test_() ->
 horse_parse_content_encoding() ->
 	horse:repeat(200000,
 		parse_content_encoding(<<"gzip">>)
+	).
+-endif.
+
+%% @doc Parse the Content-Language header.
+%%
+%% We do not support irregular deprecated tags that do not match the ABNF.
+
+-spec parse_content_language(binary()) -> [binary()].
+parse_content_language(ContentLanguage) ->
+	nonempty(langtag_list(ContentLanguage, [])).
+
+langtag_list(<<>>, Acc) -> lists:reverse(Acc);
+langtag_list(<< $\s, R/bits >>, Acc) -> langtag_list(R, Acc);
+langtag_list(<< $\t, R/bits >>, Acc) -> langtag_list(R, Acc);
+langtag_list(<< $,, R/bits >>, Acc) -> langtag_list(R, Acc);
+langtag_list(<< A, B, C, R/bits >>, Acc) when ?IS_ALPHA(A), ?IS_ALPHA(B), ?IS_ALPHA(C) ->
+	langtag_extlang(R, Acc, << ?LC(A), ?LC(B), ?LC(C) >>, 0);
+langtag_list(<< A, B, R/bits >>, Acc) when ?IS_ALPHA(A), ?IS_ALPHA(B) ->
+	langtag_extlang(R, Acc, << ?LC(A), ?LC(B) >>, 0);
+langtag_list(<< X, R/bits >>, Acc) when X =:= $x; X =:= $X -> langtag_privateuse_sub(R, Acc, << $x >>, 0).
+
+langtag_extlang(<<>>, Acc, T, _) -> lists:reverse([T|Acc]);
+langtag_extlang(<< $,, R/bits >>, Acc, T, _) -> langtag_list(R, [T|Acc]);
+langtag_extlang(<< $\s, R/bits >>, Acc, T, _) -> langtag_list_sep(R, [T|Acc]);
+langtag_extlang(<< $\t, R/bits >>, Acc, T, _) -> langtag_list_sep(R, [T|Acc]);
+langtag_extlang(<< $-, A, B, C, D, E, F, G, H, R/bits >>, Acc, T, _)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D),
+			?IS_ALPHANUM(E), ?IS_ALPHANUM(F), ?IS_ALPHANUM(G), ?IS_ALPHANUM(H) ->
+	langtag_variant(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C), ?LC(D), ?LC(E), ?LC(F), ?LC(G), ?LC(H) >>);
+langtag_extlang(<< $-, A, B, C, D, E, F, G, R/bits >>, Acc, T, _)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D),
+			?IS_ALPHANUM(E), ?IS_ALPHANUM(F), ?IS_ALPHANUM(G) ->
+	langtag_variant(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C), ?LC(D), ?LC(E), ?LC(F), ?LC(G) >>);
+langtag_extlang(<< $-, A, B, C, D, E, F, R/bits >>, Acc, T, _)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D),
+			?IS_ALPHANUM(E), ?IS_ALPHANUM(F) ->
+	langtag_variant(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C), ?LC(D), ?LC(E), ?LC(F) >>);
+langtag_extlang(<< $-, A, B, C, D, E, R/bits >>, Acc, T, _)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D), ?IS_ALPHANUM(E) ->
+	langtag_variant(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C), ?LC(D), ?LC(E) >>);
+langtag_extlang(<< $-, A, B, C, D, R/bits >>, Acc, T, _)
+		when ?IS_ALPHA(A), ?IS_ALPHA(B), ?IS_ALPHA(C), ?IS_ALPHA(D) ->
+	langtag_region(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C), ?LC(D) >>);
+langtag_extlang(<< $-, A, B, C, R/bits >>, Acc, T, N)
+		when ?IS_ALPHA(A), ?IS_ALPHA(B), ?IS_ALPHA(C) ->
+	case N of
+		2 -> langtag_script(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C) >>);
+		_ -> langtag_extlang(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C) >>, N + 1)
+	end;
+langtag_extlang(R, Acc, T, _) -> langtag_region(R, Acc, T).
+
+langtag_script(<<>>, Acc, T) -> lists:reverse([T|Acc]);
+langtag_script(<< $,, R/bits >>, Acc, T) -> langtag_list(R, [T|Acc]);
+langtag_script(<< $\s, R/bits >>, Acc, T) -> langtag_list_sep(R, [T|Acc]);
+langtag_script(<< $\t, R/bits >>, Acc, T) -> langtag_list_sep(R, [T|Acc]);
+langtag_script(<< $-, A, B, C, D, E, F, G, H, R/bits >>, Acc, T)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D),
+			?IS_ALPHANUM(E), ?IS_ALPHANUM(F), ?IS_ALPHANUM(G), ?IS_ALPHANUM(H) ->
+	langtag_variant(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C), ?LC(D), ?LC(E), ?LC(F), ?LC(G), ?LC(H) >>);
+langtag_script(<< $-, A, B, C, D, E, F, G, R/bits >>, Acc, T)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D),
+			?IS_ALPHANUM(E), ?IS_ALPHANUM(F), ?IS_ALPHANUM(G) ->
+	langtag_variant(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C), ?LC(D), ?LC(E), ?LC(F), ?LC(G) >>);
+langtag_script(<< $-, A, B, C, D, E, F, R/bits >>, Acc, T)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D),
+			?IS_ALPHANUM(E), ?IS_ALPHANUM(F) ->
+	langtag_variant(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C), ?LC(D), ?LC(E), ?LC(F) >>);
+langtag_script(<< $-, A, B, C, D, E, R/bits >>, Acc, T)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D), ?IS_ALPHANUM(E) ->
+	langtag_variant(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C), ?LC(D), ?LC(E) >>);
+langtag_script(<< $-, A, B, C, D, R/bits >>, Acc, T)
+		when ?IS_ALPHA(A), ?IS_ALPHA(B), ?IS_ALPHA(C), ?IS_ALPHA(D) ->
+	langtag_region(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C), ?LC(D) >>);
+langtag_script(R, Acc, T) ->
+	langtag_region(R, Acc, T).
+
+langtag_region(<<>>, Acc, T) -> lists:reverse([T|Acc]);
+langtag_region(<< $,, R/bits >>, Acc, T) -> langtag_list(R, [T|Acc]);
+langtag_region(<< $\s, R/bits >>, Acc, T) -> langtag_list_sep(R, [T|Acc]);
+langtag_region(<< $\t, R/bits >>, Acc, T) -> langtag_list_sep(R, [T|Acc]);
+langtag_region(<< $-, A, B, C, D, E, F, G, H, R/bits >>, Acc, T)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D),
+			?IS_ALPHANUM(E), ?IS_ALPHANUM(F), ?IS_ALPHANUM(G), ?IS_ALPHANUM(H) ->
+	langtag_variant(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C), ?LC(D), ?LC(E), ?LC(F), ?LC(G), ?LC(H) >>);
+langtag_region(<< $-, A, B, C, D, E, F, G, R/bits >>, Acc, T)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D),
+			?IS_ALPHANUM(E), ?IS_ALPHANUM(F), ?IS_ALPHANUM(G) ->
+	langtag_variant(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C), ?LC(D), ?LC(E), ?LC(F), ?LC(G) >>);
+langtag_region(<< $-, A, B, C, D, E, F, R/bits >>, Acc, T)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D),
+			?IS_ALPHANUM(E), ?IS_ALPHANUM(F) ->
+	langtag_variant(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C), ?LC(D), ?LC(E), ?LC(F) >>);
+langtag_region(<< $-, A, B, C, D, E, R/bits >>, Acc, T)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D), ?IS_ALPHANUM(E) ->
+	langtag_variant(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C), ?LC(D), ?LC(E) >>);
+langtag_region(<< $-, A, B, C, D, R/bits >>, Acc, T)
+		when ?IS_DIGIT(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D) ->
+	langtag_variant(R, Acc, << T/binary, $-, A, ?LC(B), ?LC(C), ?LC(D) >>);
+langtag_region(<< $-, A, B, R/bits >>, Acc, T) when ?IS_ALPHA(A), ?IS_ALPHA(B) ->
+	langtag_variant(R, Acc, << T/binary, $-, ?LC(A), ?LC(B) >>);
+langtag_region(<< $-, A, B, C, R/bits >>, Acc, T) when ?IS_DIGIT(A), ?IS_DIGIT(B), ?IS_DIGIT(C) ->
+	langtag_variant(R, Acc, << T/binary, $-, A, B, C >>);
+langtag_region(R, Acc, T) ->
+	langtag_variant(R, Acc, T).
+
+langtag_variant(<<>>, Acc, T) -> lists:reverse([T|Acc]);
+langtag_variant(<< $,, R/bits >>, Acc, T) -> langtag_list(R, [T|Acc]);
+langtag_variant(<< $\s, R/bits >>, Acc, T) -> langtag_list_sep(R, [T|Acc]);
+langtag_variant(<< $\t, R/bits >>, Acc, T) -> langtag_list_sep(R, [T|Acc]);
+langtag_variant(<< $-, A, B, C, D, E, F, G, H, R/bits >>, Acc, T)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D),
+			?IS_ALPHANUM(E), ?IS_ALPHANUM(F), ?IS_ALPHANUM(G), ?IS_ALPHANUM(H) ->
+	langtag_variant(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C), ?LC(D), ?LC(E), ?LC(F), ?LC(G), ?LC(H) >>);
+langtag_variant(<< $-, A, B, C, D, E, F, G, R/bits >>, Acc, T)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D),
+			?IS_ALPHANUM(E), ?IS_ALPHANUM(F), ?IS_ALPHANUM(G) ->
+	langtag_variant(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C), ?LC(D), ?LC(E), ?LC(F), ?LC(G) >>);
+langtag_variant(<< $-, A, B, C, D, E, F, R/bits >>, Acc, T)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D),
+			?IS_ALPHANUM(E), ?IS_ALPHANUM(F) ->
+	langtag_variant(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C), ?LC(D), ?LC(E), ?LC(F) >>);
+langtag_variant(<< $-, A, B, C, D, E, R/bits >>, Acc, T)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D), ?IS_ALPHANUM(E) ->
+	langtag_variant(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C), ?LC(D), ?LC(E) >>);
+langtag_variant(<< $-, A, B, C, D, R/bits >>, Acc, T)
+		when ?IS_DIGIT(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D) ->
+	langtag_variant(R, Acc, << T/binary, $-, A, ?LC(B), ?LC(C), ?LC(D) >>);
+langtag_variant(R, Acc, T) ->
+	langtag_extension(R, Acc, T).
+
+langtag_extension(<<>>, Acc, T) -> lists:reverse([T|Acc]);
+langtag_extension(<< $,, R/bits >>, Acc, T) -> langtag_list(R, [T|Acc]);
+langtag_extension(<< $\s, R/bits >>, Acc, T) -> langtag_list_sep(R, [T|Acc]);
+langtag_extension(<< $\t, R/bits >>, Acc, T) -> langtag_list_sep(R, [T|Acc]);
+langtag_extension(<< $-, X, R/bits >>, Acc, T) when X =:= $x; X =:= $X -> langtag_privateuse_sub(R, Acc, << T/binary, $-, $x >>, 0);
+langtag_extension(<< $-, S, R/bits >>, Acc, T) when ?IS_ALPHANUM(S) -> langtag_extension_sub(R, Acc, << T/binary, $-, ?LC(S) >>, 0).
+
+langtag_extension_sub(<<>>, Acc, T, N) when N > 0 -> lists:reverse([T|Acc]);
+langtag_extension_sub(<< $,, R/bits >>, Acc, T, N) when N > 0 -> langtag_list(R, [T|Acc]);
+langtag_extension_sub(<< $\s, R/bits >>, Acc, T, N) when N > 0 -> langtag_list_sep(R, [T|Acc]);
+langtag_extension_sub(<< $\t, R/bits >>, Acc, T, N) when N > 0 -> langtag_list_sep(R, [T|Acc]);
+langtag_extension_sub(<< $-, A, B, C, D, E, F, G, H, R/bits >>, Acc, T, N)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D),
+			?IS_ALPHANUM(E), ?IS_ALPHANUM(F), ?IS_ALPHANUM(G), ?IS_ALPHANUM(H) ->
+	langtag_extension_sub(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C), ?LC(D), ?LC(E), ?LC(F), ?LC(G), ?LC(H) >>, N + 1);
+langtag_extension_sub(<< $-, A, B, C, D, E, F, G, R/bits >>, Acc, T, N)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D),
+			?IS_ALPHANUM(E), ?IS_ALPHANUM(F), ?IS_ALPHANUM(G) ->
+	langtag_extension_sub(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C), ?LC(D), ?LC(E), ?LC(F), ?LC(G) >>, N + 1);
+langtag_extension_sub(<< $-, A, B, C, D, E, F, R/bits >>, Acc, T, N)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D),
+			?IS_ALPHANUM(E), ?IS_ALPHANUM(F) ->
+	langtag_extension_sub(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C), ?LC(D), ?LC(E), ?LC(F) >>, N + 1);
+langtag_extension_sub(<< $-, A, B, C, D, E, R/bits >>, Acc, T, N)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D), ?IS_ALPHANUM(E) ->
+	langtag_extension_sub(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C), ?LC(D), ?LC(E) >>, N + 1);
+langtag_extension_sub(<< $-, A, B, C, D, R/bits >>, Acc, T, N)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D)  ->
+	langtag_extension_sub(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C), ?LC(D) >>, N + 1);
+langtag_extension_sub(<< $-, A, B, C, R/bits >>, Acc, T, N)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C)  ->
+	langtag_extension_sub(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C) >>, N + 1);
+langtag_extension_sub(<< $-, A, B, R/bits >>, Acc, T, N)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B)  ->
+	langtag_extension_sub(R, Acc, << T/binary, $-, ?LC(A), ?LC(B) >>, N + 1);
+langtag_extension_sub(R, Acc, T, N) when N > 0 ->
+	langtag_extension(R, Acc, T).
+
+langtag_privateuse_sub(<<>>, Acc, T, N) when N > 0 -> lists:reverse([T|Acc]);
+langtag_privateuse_sub(<< $,, R/bits >>, Acc, T, N) when N > 0 -> langtag_list(R, [T|Acc]);
+langtag_privateuse_sub(<< $\s, R/bits >>, Acc, T, N) when N > 0 -> langtag_list_sep(R, [T|Acc]);
+langtag_privateuse_sub(<< $\t, R/bits >>, Acc, T, N) when N > 0 -> langtag_list_sep(R, [T|Acc]);
+langtag_privateuse_sub(<< $-, A, B, C, D, E, F, G, H, R/bits >>, Acc, T, N)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D),
+			?IS_ALPHANUM(E), ?IS_ALPHANUM(F), ?IS_ALPHANUM(G), ?IS_ALPHANUM(H) ->
+	langtag_privateuse_sub(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C), ?LC(D), ?LC(E), ?LC(F), ?LC(G), ?LC(H) >>, N + 1);
+langtag_privateuse_sub(<< $-, A, B, C, D, E, F, G, R/bits >>, Acc, T, N)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D),
+			?IS_ALPHANUM(E), ?IS_ALPHANUM(F), ?IS_ALPHANUM(G) ->
+	langtag_privateuse_sub(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C), ?LC(D), ?LC(E), ?LC(F), ?LC(G) >>, N + 1);
+langtag_privateuse_sub(<< $-, A, B, C, D, E, F, R/bits >>, Acc, T, N)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D),
+			?IS_ALPHANUM(E), ?IS_ALPHANUM(F)  ->
+	langtag_privateuse_sub(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C), ?LC(D), ?LC(E), ?LC(F) >>, N + 1);
+langtag_privateuse_sub(<< $-, A, B, C, D, E, R/bits >>, Acc, T, N)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D), ?IS_ALPHANUM(E) ->
+	langtag_privateuse_sub(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C), ?LC(D), ?LC(E) >>, N + 1);
+langtag_privateuse_sub(<< $-, A, B, C, D, R/bits >>, Acc, T, N)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D) ->
+	langtag_privateuse_sub(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C), ?LC(D) >>, N + 1);
+langtag_privateuse_sub(<< $-, A, B, C, R/bits >>, Acc, T, N)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C) ->
+	langtag_privateuse_sub(R, Acc, << T/binary, $-, ?LC(A), ?LC(B), ?LC(C) >>, N + 1);
+langtag_privateuse_sub(<< $-, A, B, R/bits >>, Acc, T, N)
+		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B) ->
+	langtag_privateuse_sub(R, Acc, << T/binary, $-, ?LC(A), ?LC(B) >>, N + 1);
+langtag_privateuse_sub(<< $-, A, R/bits >>, Acc, T, N)
+		when ?IS_ALPHANUM(A) ->
+	langtag_privateuse_sub(R, Acc, << T/binary, $-, ?LC(A) >>, N + 1).
+
+langtag_list_sep(<<>>, Acc) -> lists:reverse(Acc);
+langtag_list_sep(<< $,, R/bits >>, Acc) -> langtag_list(R, Acc);
+langtag_list_sep(<< $\s, R/bits >>, Acc) -> langtag_list_sep(R, Acc);
+langtag_list_sep(<< $\t, R/bits >>, Acc) -> langtag_list_sep(R, Acc).
+
+-ifdef(TEST).
+vector(Min, Max, Dom) -> ?LET(N, choose(Min, Max), vector(N, Dom)).
+small_list(Dom) -> vector(0, 10, Dom).
+small_non_empty_list(Dom) -> vector(1, 10, Dom).
+
+langtag_language() -> vector(2, 3, alpha()).
+langtag_extlang() -> vector(0, 3, [$-, alpha(), alpha(), alpha()]).
+langtag_script() -> oneof([[], [$-, alpha(), alpha(), alpha(), alpha()]]).
+langtag_region() -> oneof([[], [$-, alpha(), alpha()], [$-, digit(), digit(), digit()]]).
+
+langtag_variant() ->
+	small_list(frequency([
+		{4, [$-, vector(5, 8, alphanum())]},
+		{1, [$-, digit(), alphanum(), alphanum(), alphanum()]}
+	])).
+
+langtag_extension() ->
+	small_list([$-, ?SUCHTHAT(S, alphanum(), S =/= $x andalso S =/= $X),
+		small_non_empty_list([$-, vector(2, 8, alphanum())])
+	]).
+
+langtag_privateuse() -> oneof([[], [$-, langtag_privateuse_nodash()]]).
+langtag_privateuse_nodash() -> [oneof([$x, $X]), small_non_empty_list([$-, vector(1, 8, alphanum())])].
+private_language_tag() -> ?LET(T, langtag_privateuse_nodash(), iolist_to_binary(T)).
+
+language_tag() ->
+	?LET(IoList,
+		[langtag_language(), langtag_extlang(), langtag_script(), langtag_region(),
+			langtag_variant(), langtag_extension(), langtag_privateuse()],
+		iolist_to_binary(IoList)).
+
+content_language() ->
+	?LET(L,
+		non_empty(list(frequency([
+			{90, language_tag()},
+			{10, private_language_tag()}
+		]))),
+		begin
+			<< _, ContentLanguage/binary >> = iolist_to_binary([[$,, T] || T <- L]),
+			{L, ContentLanguage}
+		end).
+
+prop_parse_content_language() ->
+	?FORALL({L, ContentLanguage},
+		content_language(),
+		begin
+			ResL = parse_content_language(ContentLanguage),
+			CheckedL = [?INLINE_LOWERCASE_BC(T) =:= ResT || {T, ResT} <- lists:zip(L, ResL)],
+			[true] =:= lists:usort(CheckedL)
+		end).
+
+parse_content_language_test_() ->
+	Tests = [
+		{<<"de">>, [<<"de">>]},
+		{<<"fr">>, [<<"fr">>]},
+		{<<"ja">>, [<<"ja">>]},
+		{<<"zh-Hant">>, [<<"zh-hant">>]},
+		{<<"zh-Hans">>, [<<"zh-hans">>]},
+		{<<"sr-Cyrl">>, [<<"sr-cyrl">>]},
+		{<<"sr-Latn">>, [<<"sr-latn">>]},
+		{<<"zh-cmn-Hans-CN">>, [<<"zh-cmn-hans-cn">>]},
+		{<<"cmn-Hans-CN">>, [<<"cmn-hans-cn">>]},
+		{<<"zh-yue-HK">>, [<<"zh-yue-hk">>]},
+		{<<"yue-HK">>, [<<"yue-hk">>]},
+		{<<"zh-Hans-CN">>, [<<"zh-hans-cn">>]},
+		{<<"sr-Latn-RS">>, [<<"sr-latn-rs">>]},
+		{<<"sl-rozaj">>, [<<"sl-rozaj">>]},
+		{<<"sl-rozaj-biske">>, [<<"sl-rozaj-biske">>]},
+		{<<"sl-nedis">>, [<<"sl-nedis">>]},
+		{<<"de-CH-1901">>, [<<"de-ch-1901">>]},
+		{<<"sl-IT-nedis">>, [<<"sl-it-nedis">>]},
+		{<<"hy-Latn-IT-arevela">>, [<<"hy-latn-it-arevela">>]},
+		{<<"de-DE">>, [<<"de-de">>]},
+		{<<"en-US">>, [<<"en-us">>]},
+		{<<"es-419">>, [<<"es-419">>]},
+		{<<"de-CH-x-phonebk">>, [<<"de-ch-x-phonebk">>]},
+		{<<"az-Arab-x-AZE-derbend">>, [<<"az-arab-x-aze-derbend">>]},
+		{<<"x-whatever">>, [<<"x-whatever">>]},
+		{<<"qaa-Qaaa-QM-x-southern">>, [<<"qaa-qaaa-qm-x-southern">>]},
+		{<<"de-Qaaa">>, [<<"de-qaaa">>]},
+		{<<"sr-Latn-QM">>, [<<"sr-latn-qm">>]},
+		{<<"sr-Qaaa-RS">>, [<<"sr-qaaa-rs">>]},
+		{<<"en-US-u-islamcal">>, [<<"en-us-u-islamcal">>]},
+		{<<"zh-CN-a-myext-x-private">>, [<<"zh-cn-a-myext-x-private">>]},
+		{<<"en-a-myext-b-another">>, [<<"en-a-myext-b-another">>]},
+		{<<"mn-Cyrl-MN">>, [<<"mn-cyrl-mn">>]},
+		{<<"MN-cYRL-mn">>, [<<"mn-cyrl-mn">>]},
+		{<<"mN-cYrL-Mn">>, [<<"mn-cyrl-mn">>]},
+		{<<"az-Arab-IR">>, [<<"az-arab-ir">>]},
+		{<<"zh-gan">>, [<<"zh-gan">>]},
+		{<<"zh-yue">>, [<<"zh-yue">>]},
+		{<<"zh-cmn">>, [<<"zh-cmn">>]},
+		{<<"de-AT">>, [<<"de-at">>]},
+		{<<"de-CH-1996">>, [<<"de-ch-1996">>]},
+		{<<"en-Latn-GB-boont-r-extended-sequence-x-private">>,
+			[<<"en-latn-gb-boont-r-extended-sequence-x-private">>]},
+		{<<"el-x-koine">>, [<<"el-x-koine">>]},
+		{<<"el-x-attic">>, [<<"el-x-attic">>]},
+		{<<"fr, en-US, es-419, az-Arab, x-pig-latin, man-Nkoo-GN">>,
+			[<<"fr">>, <<"en-us">>, <<"es-419">>, <<"az-arab">>, <<"x-pig-latin">>, <<"man-nkoo-gn">>]},
+		{<<"da">>, [<<"da">>]},
+		{<<"mi, en">>, [<<"mi">>, <<"en">>]}
+	],
+	[{V, fun() -> R = parse_content_language(V) end} || {V, R} <- Tests].
+
+parse_content_language_error_test_() ->
+	Tests = [
+		<<>>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_content_language(V)) end} || V <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_content_language() ->
+	horse:repeat(100000,
+		parse_content_language(<<"fr, en-US, es-419, az-Arab, x-pig-latin, man-Nkoo-GN">>)
 	).
 -endif.
 

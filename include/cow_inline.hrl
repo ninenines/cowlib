@@ -18,26 +18,30 @@
 %% IS_ALPHA(Character)
 
 -define(IS_ALPHA(C),
-	C =:= $a; C =:= $b; C =:= $c; C =:= $d; C =:= $e;
-	C =:= $f; C =:= $g; C =:= $h; C =:= $i; C =:= $j;
-	C =:= $k; C =:= $l; C =:= $m; C =:= $n; C =:= $o;
-	C =:= $p; C =:= $q; C =:= $r; C =:= $s; C =:= $t;
-	C =:= $u; C =:= $v; C =:= $w; C =:= $x; C =:= $y;
-	C =:= $z;
-	C =:= $A; C =:= $B; C =:= $C; C =:= $D; C =:= $E;
-	C =:= $F; C =:= $G; C =:= $H; C =:= $I; C =:= $J;
-	C =:= $K; C =:= $L; C =:= $M; C =:= $N; C =:= $O;
-	C =:= $P; C =:= $Q; C =:= $R; C =:= $S; C =:= $T;
-	C =:= $U; C =:= $V; C =:= $W; C =:= $X; C =:= $Y;
+	C =:= $a orelse C =:= $b orelse C =:= $c orelse C =:= $d orelse C =:= $e orelse
+	C =:= $f orelse C =:= $g orelse C =:= $h orelse C =:= $i orelse C =:= $j orelse
+	C =:= $k orelse C =:= $l orelse C =:= $m orelse C =:= $n orelse C =:= $o orelse
+	C =:= $p orelse C =:= $q orelse C =:= $r orelse C =:= $s orelse C =:= $t orelse
+	C =:= $u orelse C =:= $v orelse C =:= $w orelse C =:= $x orelse C =:= $y orelse
+	C =:= $z orelse
+	C =:= $A orelse C =:= $B orelse C =:= $C orelse C =:= $D orelse C =:= $E orelse
+	C =:= $F orelse C =:= $G orelse C =:= $H orelse C =:= $I orelse C =:= $J orelse
+	C =:= $K orelse C =:= $L orelse C =:= $M orelse C =:= $N orelse C =:= $O orelse
+	C =:= $P orelse C =:= $Q orelse C =:= $R orelse C =:= $S orelse C =:= $T orelse
+	C =:= $U orelse C =:= $V orelse C =:= $W orelse C =:= $X orelse C =:= $Y orelse
 	C =:= $Z
 ).
 
 %% IS_DIGIT(Character)
 
 -define(IS_DIGIT(C),
-	C =:= $0; C =:= $1; C =:= $2; C =:= $3; C =:= $4;
-	C =:= $5; C =:= $6; C =:= $7; C =:= $8; C =:= $9
+	C =:= $0 orelse C =:= $1 orelse C =:= $2 orelse C =:= $3 orelse C =:= $4 orelse
+	C =:= $5 orelse C =:= $6 orelse C =:= $7 orelse C =:= $8 orelse C =:= $9
 ).
+
+%% IS_ALPHANUM(Character)
+
+-define(IS_ALPHANUM(C), ?IS_ALPHA(C) orelse ?IS_DIGIT(C)).
 
 %% IS_ETAGC(Character)
 
@@ -46,15 +50,47 @@
 %% IS_TOKEN(Character)
 
 -define(IS_TOKEN(C),
-	?IS_ALPHA(C); ?IS_DIGIT(C);
-	C =:= $!; C =:= $#; C =:= $$; C =:= $%; C =:= $&;
-	C =:= $'; C =:= $*; C =:= $+; C =:= $-; C =:= $.;
-	C =:= $^; C =:= $_; C =:= $`; C =:= $|; C =:= $~
+	?IS_ALPHA(C) orelse ?IS_DIGIT(C)
+	orelse C =:= $! orelse C =:= $# orelse C =:= $$ orelse C =:= $% orelse C =:= $&
+	orelse C =:= $' orelse C =:= $* orelse C =:= $+ orelse C =:= $- orelse C =:= $.
+	orelse C =:= $^ orelse C =:= $_ orelse C =:= $` orelse C =:= $| orelse C =:= $~
 ).
 
 %% IS_VCHAR(Character)
 
 -define(IS_VCHAR(C), C =:= $\t; C > 31, C =/= 127).
+
+%% LC(Character)
+
+-define(LC(C), case C of
+	$A -> $a;
+	$B -> $b;
+	$C -> $c;
+	$D -> $d;
+	$E -> $e;
+	$F -> $f;
+	$G -> $g;
+	$H -> $h;
+	$I -> $i;
+	$J -> $j;
+	$K -> $k;
+	$L -> $l;
+	$M -> $m;
+	$N -> $n;
+	$O -> $o;
+	$P -> $p;
+	$Q -> $q;
+	$R -> $r;
+	$S -> $s;
+	$T -> $t;
+	$U -> $u;
+	$V -> $v;
+	$W -> $w;
+	$X -> $x;
+	$Y -> $y;
+	$Z -> $z;
+	_ -> C
+end).
 
 %% INLINE_LOWERCASE(Function, Rest, Acc, ...)
 %%

@@ -53,21 +53,18 @@
 -ifdef(TEST).
 -include_lib("triq/include/triq.hrl").
 
-ows() ->
-	list(oneof([$\s, $\t])).
+vector(Min, Max, Dom) -> ?LET(N, choose(Min, Max), vector(N, Dom)).
+small_list(Dom) -> vector(0, 10, Dom).
+small_non_empty_list(Dom) -> vector(1, 10, Dom).
 
 alpha_chars() -> "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".
 alphanum_chars() -> "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".
 digit_chars() -> "0123456789".
 
-alpha() ->
-	oneof(alpha_chars()).
-
-alphanum() ->
-	oneof(alphanum_chars()).
-
-digit() ->
-	oneof(digit_chars()).
+ows() -> list(oneof([$\s, $\t])).
+alpha() -> oneof(alpha_chars()).
+alphanum() -> oneof(alphanum_chars()).
+digit() -> oneof(digit_chars()).
 
 tchar() ->
 	frequency([
@@ -81,25 +78,25 @@ token() ->
 		list_to_binary(T)).
 
 obs_text() ->
-	[128,129,130,131,132,133,134,135,136,137,138,139,140,141,142,143,144,145,
+	oneof([128,129,130,131,132,133,134,135,136,137,138,139,140,141,142,143,144,145,
 	146,147,148,149,150,151,152,153,154,155,156,157,158,159,160,161,162,163,
 	164,165,166,167,168,169,170,171,172,173,174,175,176,177,178,179,180,181,
 	182,183,184,185,186,187,188,189,190,191,192,193,194,195,196,197,198,199,
 	200,201,202,203,204,205,206,207,208,209,210,211,212,213,214,215,216,217,
 	218,219,220,221,222,223,224,225,226,227,228,229,230,231,232,233,234,235,
 	236,237,238,239,240,241,242,243,244,245,246,247,248,249,250,251,252,253,
-	254,255].
+	254,255]).
 
 qdtext() ->
 	frequency([
 		{99, oneof("\t\s!#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~")},
-		{1, oneof(obs_text())}
+		{1, obs_text()}
 	]).
 
 quoted_pair() ->
 	[$\\, frequency([
 		{99, oneof("\t\s!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~")},
-		{1, oneof(obs_text())}
+		{1, obs_text()}
 	])].
 
 quoted_string() ->
@@ -272,12 +269,12 @@ accept_ext() ->
 accept_params() ->
 	frequency([
 		{90, []},
-		{10, list(accept_ext())}
+		{10, small_list(accept_ext())}
 	]).
 
 accept() ->
 	?LET({T, S, P, W, E},
-		{token(), token(), list(parameter()), weight(), accept_params()},
+		{token(), token(), small_list(parameter()), weight(), accept_params()},
 		{T, S, P, W, E, iolist_to_binary([T, $/, S,
 			[[OWS1, $;, OWS2, K, $=, V] || {K, V, OWS1, OWS2} <- P],
 			case W of
@@ -651,7 +648,7 @@ language_range_subtag() ->
 	])].
 
 language_range() ->
-	[language_range_tag(), list(language_range_subtag())].
+	[language_range_tag(), small_list(language_range_subtag())].
 
 accept_language() ->
 	?LET({R, W},
@@ -994,10 +991,6 @@ langtag_list_sep(<< $\s, R/bits >>, Acc) -> langtag_list_sep(R, Acc);
 langtag_list_sep(<< $\t, R/bits >>, Acc) -> langtag_list_sep(R, Acc).
 
 -ifdef(TEST).
-vector(Min, Max, Dom) -> ?LET(N, choose(Min, Max), vector(N, Dom)).
-small_list(Dom) -> vector(0, 10, Dom).
-small_non_empty_list(Dom) -> vector(1, 10, Dom).
-
 langtag_language() -> vector(2, 3, alpha()).
 langtag_extlang() -> vector(0, 3, [$-, alpha(), alpha(), alpha()]).
 langtag_script() -> oneof([[], [$-, alpha(), alpha(), alpha(), alpha()]]).
@@ -1257,7 +1250,7 @@ media_type_parameter() ->
 
 media_type() ->
 	?LET({T, S, P},
-		{token(), token(), list(media_type_parameter())},
+		{token(), token(), small_list(media_type_parameter())},
 		{T, S, P, iolist_to_binary([T, $/, S, [[OWS1, $;, OWS2, K, $=, V] || {K, V, OWS1, OWS2} <- P]])}
 	).
 
@@ -1710,7 +1703,7 @@ quoted_token() ->
 
 ws_extension() ->
 	?LET({E, PL},
-		{token(), list({ows(), ows(), oneof([token(), {token(), oneof([token(), quoted_token()])}])})},
+		{token(), small_list({ows(), ows(), oneof([token(), {token(), oneof([token(), quoted_token()])}])})},
 		{E, PL, iolist_to_binary([E,
 			[case P of
 				{OWS1, OWS2, {K, V}} -> [OWS1, $;, OWS2, K, $=, V];

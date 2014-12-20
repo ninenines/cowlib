@@ -62,15 +62,15 @@ alpha_chars() -> "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".
 alphanum_chars() -> "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".
 digit_chars() -> "0123456789".
 
-ows() -> list(oneof([$\s, $\t])).
-alpha() -> oneof(alpha_chars()).
-alphanum() -> oneof(alphanum_chars()).
-digit() -> oneof(digit_chars()).
+ows() -> list(elements([$\s, $\t])).
+alpha() -> elements(alpha_chars()).
+alphanum() -> elements(alphanum_chars()).
+digit() -> elements(digit_chars()).
 
 tchar() ->
 	frequency([
-		{1, oneof([$!, $#, $$, $%, $&, $', $*, $+, $-, $., $^, $_, $`, $|, $~])},
-		{99, oneof(alphanum_chars())}
+		{1, elements([$!, $#, $$, $%, $&, $', $*, $+, $-, $., $^, $_, $`, $|, $~])},
+		{99, elements(alphanum_chars())}
 	]).
 
 token() ->
@@ -79,24 +79,17 @@ token() ->
 		list_to_binary(T)).
 
 obs_text() ->
-	oneof([128,129,130,131,132,133,134,135,136,137,138,139,140,141,142,143,144,145,
-	146,147,148,149,150,151,152,153,154,155,156,157,158,159,160,161,162,163,
-	164,165,166,167,168,169,170,171,172,173,174,175,176,177,178,179,180,181,
-	182,183,184,185,186,187,188,189,190,191,192,193,194,195,196,197,198,199,
-	200,201,202,203,204,205,206,207,208,209,210,211,212,213,214,215,216,217,
-	218,219,220,221,222,223,224,225,226,227,228,229,230,231,232,233,234,235,
-	236,237,238,239,240,241,242,243,244,245,246,247,248,249,250,251,252,253,
-	254,255]).
+	choose(128, 255).
 
 qdtext() ->
 	frequency([
-		{99, oneof("\t\s!#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~")},
+		{99, elements("\t\s!#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~")},
 		{1, obs_text()}
 	]).
 
 quoted_pair() ->
 	[$\\, frequency([
-		{99, oneof("\t\s!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~")},
+		{99, elements("\t\s!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~")},
 		{1, obs_text()}
 	])].
 
@@ -991,7 +984,7 @@ langtag_extension() ->
 	]).
 
 langtag_privateuse() -> oneof([[], [$-, langtag_privateuse_nodash()]]).
-langtag_privateuse_nodash() -> [oneof([$x, $X]), small_non_empty_list([$-, vector(1, 8, alphanum())])].
+langtag_privateuse_nodash() -> [elements([$x, $X]), small_non_empty_list([$-, vector(1, 8, alphanum())])].
 private_language_tag() -> ?LET(T, langtag_privateuse_nodash(), iolist_to_binary(T)).
 
 language_tag() ->
@@ -1320,7 +1313,7 @@ etagc() ->
 
 etag() ->
 	?LET({Strength, Tag},
-		{oneof([weak, strong]), list(etagc())},
+		{elements([weak, strong]), list(etagc())},
 		begin
 			TagBin = list_to_binary(Tag),
 			{{Strength, TagBin},
@@ -1378,9 +1371,9 @@ parse_expect(<<"100-", C, O, N, T, I, M, U, E, Rest/bits >>)
 expect() ->
 	?LET(E,
 		[$1, $0, $0, $-,
-			oneof([$c, $C]), oneof([$o, $O]), oneof([$n, $N]),
-			oneof([$t, $T]), oneof([$i, $I]), oneof([$n, $N]),
-			oneof([$u, $U]), oneof([$e, $E])],
+			elements([$c, $C]), elements([$o, $O]), elements([$n, $N]),
+			elements([$t, $T]), elements([$i, $I]), elements([$n, $N]),
+			elements([$u, $U]), elements([$e, $E])],
 		list_to_binary(E)).
 
 prop_parse_expect() ->

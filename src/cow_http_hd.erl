@@ -624,28 +624,10 @@ language_range_list_sep(<< $,, R/bits >>, Acc) -> language_range_list(R, Acc).
 
 -ifdef(TEST).
 language_range_tag() ->
-	oneof([
-		[alpha()],
-		[alpha(), alpha()],
-		[alpha(), alpha(), alpha()],
-		[alpha(), alpha(), alpha(), alpha()],
-		[alpha(), alpha(), alpha(), alpha(), alpha()],
-		[alpha(), alpha(), alpha(), alpha(), alpha(), alpha()],
-		[alpha(), alpha(), alpha(), alpha(), alpha(), alpha(), alpha()],
-		[alpha(), alpha(), alpha(), alpha(), alpha(), alpha(), alpha(), alpha()]
-	]).
+	vector(1, 8, alpha()).
 
 language_range_subtag() ->
-	[$-, oneof([
-		[alphanum()],
-		[alphanum(), alphanum()],
-		[alphanum(), alphanum(), alphanum()],
-		[alphanum(), alphanum(), alphanum(), alphanum()],
-		[alphanum(), alphanum(), alphanum(), alphanum(), alphanum()],
-		[alphanum(), alphanum(), alphanum(), alphanum(), alphanum(), alphanum()],
-		[alphanum(), alphanum(), alphanum(), alphanum(), alphanum(), alphanum(), alphanum()],
-		[alphanum(), alphanum(), alphanum(), alphanum(), alphanum(), alphanum(), alphanum(), alphanum()]
-	])].
+	[$-, vector(1, 8, alphanum())].
 
 language_range() ->
 	[language_range_tag(), small_list(language_range_subtag())].

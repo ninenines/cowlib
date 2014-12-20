@@ -284,7 +284,7 @@ accept() ->
 
 prop_parse_accept() ->
 	?FORALL(L,
-		non_empty(list(accept())),
+		vector(1, 50, accept()),
 		begin
 			<< _, Accept/binary >> = iolist_to_binary([[$,, A] || {_, _, _, _, _, A} <- L]),
 			ResL = parse_accept(Accept),
@@ -1689,7 +1689,7 @@ ws_extension() ->
 
 prop_parse_sec_websocket_extensions() ->
 	?FORALL(L,
-		non_empty(list(ws_extension())),
+		vector(1, 50, ws_extension()),
 		begin
 			<< _, SecWebsocketExtensions/binary >> = iolist_to_binary([[$,, E] || {_, _, E} <- L]),
 			ResL = parse_sec_websocket_extensions(SecWebsocketExtensions),

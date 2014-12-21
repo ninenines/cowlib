@@ -1287,12 +1287,11 @@ prop_parse_content_length() ->
 parse_content_length_test_() ->
 	Tests = [
 		{<<"0">>, 0},
-		{<<"42    ">>, 42},
-		{<<"69\t">>, 69},
+		{<<"42">>, 42},
+		{<<"69">>, 69},
 		{<<"1337">>, 1337},
 		{<<"3495">>, 3495},
-		{<<"1234567890">>, 1234567890},
-		{<<"1234567890     ">>, 1234567890}
+		{<<"1234567890">>, 1234567890}
 	],
 	[{V, fun() -> R = parse_content_length(V) end} || {V, R} <- Tests].
 
@@ -1479,8 +1478,7 @@ parse_etag(<< $W, $/, $", R/bits >>) ->
 parse_etag(<< $", R/bits >>) ->
 	etag(R, strong, <<>>).
 
-etag(<< $", R/bits >>, Strength, Tag) ->
-	ws_end(R),
+etag(<< $" >>, Strength, Tag) ->
 	{Strength, Tag};
 etag(<< C, R/bits >>, Strength, Tag) when ?IS_ETAGC(C) ->
 	etag(R, Strength, << Tag/binary, C >>).
@@ -1534,15 +1532,13 @@ horse_parse_etag() ->
 %% @doc Parse the Expect header.
 
 -spec parse_expect(binary()) -> continue.
-parse_expect(<<"100-continue", Rest/bits >>) ->
-	ws_end(Rest),
+parse_expect(<<"100-continue">>) ->
 	continue;
-parse_expect(<<"100-", C, O, N, T, I, M, U, E, Rest/bits >>)
+parse_expect(<<"100-", C, O, N, T, I, M, U, E >>)
 	when C =:= $C orelse C =:= $c, O =:= $O orelse O =:= $o,
 		N =:= $N orelse N =:= $n, T =:= $T orelse T =:= $t,
 		I =:= $I orelse I =:= $i, M =:= $N orelse M =:= $n,
 		U =:= $U orelse U =:= $u, E =:= $E orelse E =:= $e ->
-	ws_end(Rest),
 	continue.
 
 -ifdef(TEST).
@@ -1562,8 +1558,7 @@ parse_expect_test_() ->
 		<<"100-continue">>,
 		<<"100-CONTINUE">>,
 		<<"100-Continue">>,
-		<<"100-CoNtInUe">>,
-		<<"100-continue    ">>
+		<<"100-CoNtInUe">>
 	],
 	[{V, fun() -> continue = parse_expect(V) end} || V <- Tests].
 
@@ -1780,11 +1775,10 @@ prop_parse_max_forwards() ->
 parse_max_forwards_test_() ->
 	Tests = [
 		{<<"0">>, 0},
-		{<<"42    ">>, 42},
-		{<<"69\t">>, 69},
+		{<<"42">>, 42},
+		{<<"69">>, 69},
 		{<<"1337">>, 1337},
-		{<<"1234567890">>, 1234567890},
-		{<<"1234567890     ">>, 1234567890}
+		{<<"1234567890">>, 1234567890}
 	],
 	[{V, fun() -> R = parse_max_forwards(V) end} || {V, R} <- Tests].
 
@@ -2148,7 +2142,7 @@ parse_upgrade_error_test_() ->
 %% Only return if the list is not empty.
 nonempty(L) when L =/= [] -> L.
 
-%% Parse a number optionally followed by whitespace.
+%% Parse a number.
 number(<< $0, R/bits >>, Acc) -> number(R, Acc * 10);
 number(<< $1, R/bits >>, Acc) -> number(R, Acc * 10 + 1);
 number(<< $2, R/bits >>, Acc) -> number(R, Acc * 10 + 2);
@@ -2159,13 +2153,7 @@ number(<< $6, R/bits >>, Acc) -> number(R, Acc * 10 + 6);
 number(<< $7, R/bits >>, Acc) -> number(R, Acc * 10 + 7);
 number(<< $8, R/bits >>, Acc) -> number(R, Acc * 10 + 8);
 number(<< $9, R/bits >>, Acc) -> number(R, Acc * 10 + 9);
-number(<< $\s, R/bits >>, Acc) -> ws_end(R), Acc;
-number(<< $\t, R/bits >>, Acc) -> ws_end(R), Acc;
 number(<<>>, Acc) -> Acc.
-
-ws_end(<< $\s, R/bits >>) -> ws_end(R);
-ws_end(<< $\t, R/bits >>) -> ws_end(R);
-ws_end(<<>>) -> ok.
 
 %% Parse a list of case insensitive tokens.
 token_ci_list(<<>>, Acc) -> lists:reverse(Acc);

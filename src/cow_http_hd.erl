@@ -18,6 +18,7 @@
 -export([parse_accept_charset/1]).
 -export([parse_accept_encoding/1]).
 -export([parse_accept_language/1]).
+-export([parse_cache_control/1]).
 -export([parse_connection/1]).
 -export([parse_content_encoding/1]).
 -export([parse_content_language/1]).
@@ -680,6 +681,183 @@ parse_accept_language_error_test_() ->
 horse_parse_accept_language() ->
 	horse:repeat(20000,
 		parse_accept_language(<<"da, en-gb;q=0.8, en;q=0.7">>)
+	).
+-endif.
+
+%% @doc Parse the Cache-Control header.
+%%
+%% In the fields list case, we do not support escaping, which shouldn't be needed anyway.
+
+-spec parse_cache_control(binary())
+	-> [binary() | {binary(), binary()} | {binary(), non_neg_integer()} | {binary(), [binary()]}].
+parse_cache_control(<<"no-cache">>) ->
+	[<<"no-cache">>];
+parse_cache_control(<<"max-age=0">>) ->
+	[{<<"max-age">>, 0}];
+parse_cache_control(CacheControl) ->
+	nonempty(cache_directive_list(CacheControl, [])).
+
+cache_directive_list(<<>>, Acc) -> lists:reverse(Acc);
+cache_directive_list(<< $\s, R/bits >>, Acc) -> cache_directive_list(R, Acc);
+cache_directive_list(<< $\t, R/bits >>, Acc) -> cache_directive_list(R, Acc);
+cache_directive_list(<< $,, R/bits >>, Acc) -> cache_directive_list(R, Acc);
+cache_directive_list(<< C, R/bits >>, Acc) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(cache_directive, R, Acc, <<>>)
+	end.
+
+cache_directive(<<>>, Acc, T) -> lists:reverse([T|Acc]);
+cache_directive(<< $\s, R/bits >>, Acc, T) -> cache_directive_list_sep(R, [T|Acc]);
+cache_directive(<< $\t, R/bits >>, Acc, T) -> cache_directive_list_sep(R, [T|Acc]);
+cache_directive(<< $,, R/bits >>, Acc, T) -> cache_directive_list(R, [T|Acc]);
+cache_directive(<< $=, $", R/bits >>, Acc, T = <<"no-cache">>) -> cache_directive_fields_list(R, Acc, T, []);
+cache_directive(<< $=, $", R/bits >>, Acc, T = <<"private">>) -> cache_directive_fields_list(R, Acc, T, []);
+cache_directive(<< $=, $", R/bits >>, Acc, T) -> cache_directive_quoted_string(R, Acc, T, <<>>);
+cache_directive(<< $=, C, R/bits >>, Acc, T = <<"max-age">>) when ?IS_DIGIT(C) -> cache_directive_delta(R, Acc, T, (C - $0));
+cache_directive(<< $=, C, R/bits >>, Acc, T = <<"max-stale">>) when ?IS_DIGIT(C) -> cache_directive_delta(R, Acc, T, (C - $0));
+cache_directive(<< $=, C, R/bits >>, Acc, T = <<"min-fresh">>) when ?IS_DIGIT(C) -> cache_directive_delta(R, Acc, T, (C - $0));
+cache_directive(<< $=, C, R/bits >>, Acc, T = <<"s-maxage">>) when ?IS_DIGIT(C) -> cache_directive_delta(R, Acc, T, (C - $0));
+cache_directive(<< $=, C, R/bits >>, Acc, T) when ?IS_TOKEN(C) -> cache_directive_token(R, Acc, T, << C >>);
+cache_directive(<< C, R/bits >>, Acc, T) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(cache_directive, R, Acc, T)
+	end.
+
+cache_directive_delta(<<>>, Acc, K, V) -> lists:reverse([{K, V}|Acc]);
+cache_directive_delta(<< $\s, R/bits >>, Acc, K, V) -> cache_directive_list_sep(R, [{K, V}|Acc]);
+cache_directive_delta(<< $\t, R/bits >>, Acc, K, V) -> cache_directive_list_sep(R, [{K, V}|Acc]);
+cache_directive_delta(<< $,, R/bits >>, Acc, K, V) -> cache_directive_list(R, [{K, V}|Acc]);
+cache_directive_delta(<< C, R/bits >>, Acc, K, V) when ?IS_DIGIT(C) -> cache_directive_delta(R, Acc, K, V * 10 + (C - $0)).
+
+cache_directive_fields_list(<< $\s, R/bits >>, Acc, K, L) -> cache_directive_fields_list(R, Acc, K, L);
+cache_directive_fields_list(<< $\t, R/bits >>, Acc, K, L) -> cache_directive_fields_list(R, Acc, K, L);
+cache_directive_fields_list(<< $,, R/bits >>, Acc, K, L) -> cache_directive_fields_list(R, Acc, K, L);
+cache_directive_fields_list(<< $", R/bits >>, Acc, K, L) -> cache_directive_list_sep(R, [{K, lists:reverse(L)}|Acc]);
+cache_directive_fields_list(<< C, R/bits >>, Acc, K, L) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(cache_directive_field, R, Acc, K, L, <<>>)
+	end.
+
+cache_directive_field(<< $\s, R/bits >>, Acc, K, L, F) -> cache_directive_fields_list_sep(R, Acc, K, [F|L]);
+cache_directive_field(<< $\t, R/bits >>, Acc, K, L, F) -> cache_directive_fields_list_sep(R, Acc, K, [F|L]);
+cache_directive_field(<< $,, R/bits >>, Acc, K, L, F) -> cache_directive_fields_list(R, Acc, K, [F|L]);
+cache_directive_field(<< $", R/bits >>, Acc, K, L, F) -> cache_directive_list_sep(R, [{K, lists:reverse([F|L])}|Acc]);
+cache_directive_field(<< C, R/bits >>, Acc, K, L, F) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(cache_directive_field, R, Acc, K, L, F)
+	end.
+
+cache_directive_fields_list_sep(<< $\s, R/bits >>, Acc, K, L) -> cache_directive_fields_list_sep(R, Acc, K, L);
+cache_directive_fields_list_sep(<< $\t, R/bits >>, Acc, K, L) -> cache_directive_fields_list_sep(R, Acc, K, L);
+cache_directive_fields_list_sep(<< $,, R/bits >>, Acc, K, L) -> cache_directive_fields_list(R, Acc, K, L);
+cache_directive_fields_list_sep(<< $", R/bits >>, Acc, K, L) -> cache_directive_list_sep(R, [{K, lists:reverse(L)}|Acc]).
+
+cache_directive_token(<<>>, Acc, K, V) -> lists:reverse([{K, V}|Acc]);
+cache_directive_token(<< $\s, R/bits >>, Acc, K, V) -> cache_directive_list_sep(R, [{K, V}|Acc]);
+cache_directive_token(<< $\t, R/bits >>, Acc, K, V) -> cache_directive_list_sep(R, [{K, V}|Acc]);
+cache_directive_token(<< $,, R/bits >>, Acc, K, V) -> cache_directive_list(R, [{K, V}|Acc]);
+cache_directive_token(<< C, R/bits >>, Acc, K, V) when ?IS_TOKEN(C) -> cache_directive_token(R, Acc, K, << V/binary, C >>).
+
+cache_directive_quoted_string(<< $", R/bits >>, Acc, K, V) -> cache_directive_list_sep(R, [{K, V}|Acc]);
+cache_directive_quoted_string(<< $\\, C, R/bits >>, Acc, K, V) when ?IS_VCHAR(C) ->
+	cache_directive_quoted_string(R, Acc, K, << V/binary, C >>);
+cache_directive_quoted_string(<< C, R/bits >>, Acc, K, V) when ?IS_VCHAR(C) ->
+	cache_directive_quoted_string(R, Acc, K, << V/binary, C >>).
+
+cache_directive_list_sep(<<>>, Acc) -> lists:reverse(Acc);
+cache_directive_list_sep(<< $\s, R/bits >>, Acc) -> cache_directive_list_sep(R, Acc);
+cache_directive_list_sep(<< $\t, R/bits >>, Acc) -> cache_directive_list_sep(R, Acc);
+cache_directive_list_sep(<< $,, R/bits >>, Acc) -> cache_directive_list(R, Acc).
+
+-ifdef(TEST).
+cache_directive_unreserved_token() ->
+	?SUCHTHAT(T,
+		token(),
+		T =/= <<"max-age">> andalso T =/= <<"max-stale">> andalso T =/= <<"min-fresh">>
+			andalso T =/= <<"s-maxage">> andalso T =/= <<"no-cache">> andalso T =/= <<"private">>).
+
+cache_directive() ->
+	oneof([
+		token(),
+		{cache_directive_unreserved_token(), token()},
+		{cache_directive_unreserved_token(), quoted_string()},
+		{elements([<<"max-age">>, <<"max-stale">>, <<"min-fresh">>, <<"s-maxage">>]), non_neg_integer()},
+		{fields, elements([<<"no-cache">>, <<"private">>]), small_list(token())}
+	]).
+
+cache_control() ->
+	?LET(L,
+		non_empty(list(cache_directive())),
+		begin
+			<< _, CacheControl/binary >> = iolist_to_binary([[$,,
+				case C of
+					{fields, K, V} -> [K, $=, $", [[F, $,] || F <- V], $"];
+					{K, V} when is_integer(V) -> [K, $=, integer_to_binary(V)];
+					{K, V} -> [K, $=, V];
+					K -> K
+				end] || C <- L]),
+			{L, CacheControl}
+		end).
+
+prop_parse_cache_control() ->
+	?FORALL({L, CacheControl},
+		cache_control(),
+		begin
+			ResL = parse_cache_control(CacheControl),
+			CheckedL = [begin
+				ExpectedC = case C of
+					{fields, K, V} -> {?INLINE_LOWERCASE_BC(K), [?INLINE_LOWERCASE_BC(F) || F <- V]};
+					{K, V} -> {?INLINE_LOWERCASE_BC(K), unquote(V)};
+					K -> ?INLINE_LOWERCASE_BC(K)
+				end,
+				ExpectedC =:= ResC
+			end || {C, ResC} <- lists:zip(L, ResL)],
+			[true] =:= lists:usort(CheckedL)
+		end).
+
+parse_cache_control_test_() ->
+	Tests = [
+		{<<"no-cache">>, [<<"no-cache">>]},
+		{<<"no-store">>, [<<"no-store">>]},
+		{<<"max-age=0">>, [{<<"max-age">>, 0}]},
+		{<<"max-age=30">>, [{<<"max-age">>, 30}]},
+		{<<"private, community=\"UCI\"">>, [<<"private">>, {<<"community">>, <<"UCI">>}]},
+		{<<"private=\"Content-Type, Content-Encoding, Content-Language\"">>,
+			[{<<"private">>, [<<"content-type">>, <<"content-encoding">>, <<"content-language">>]}]}
+	],
+	[{V, fun() -> R = parse_cache_control(V) end} || {V, R} <- Tests].
+
+parse_cache_control_error_test_() ->
+	Tests = [
+		<<>>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_cache_control(V)) end} || V <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_cache_control_no_cache() ->
+	horse:repeat(200000,
+		parse_cache_control(<<"no-cache">>)
+	).
+
+horse_parse_cache_control_max_age_0() ->
+	horse:repeat(200000,
+		parse_cache_control(<<"max-age=0">>)
+	).
+
+horse_parse_cache_control_max_age_30() ->
+	horse:repeat(200000,
+		parse_cache_control(<<"max-age=30">>)
+	).
+
+horse_parse_cache_control_custom() ->
+	horse:repeat(200000,
+		parse_cache_control(<<"private, community=\"UCI\"">>)
+	).
+
+horse_parse_cache_control_fields() ->
+	horse:repeat(200000,
+		parse_cache_control(<<"private=\"Content-Type, Content-Encoding, Content-Language\"">>)
 	).
 -endif.
 

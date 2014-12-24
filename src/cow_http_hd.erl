@@ -37,8 +37,8 @@
 -export([parse_sec_websocket_accept/1]).
 -export([parse_sec_websocket_extensions/1]).
 -export([parse_sec_websocket_key/1]).
--export([parse_sec_websocket_protocol_client/1]).
--export([parse_sec_websocket_version_client/1]).
+-export([parse_sec_websocket_protocol_req/1]).
+-export([parse_sec_websocket_version_req/1]).
 -export([parse_te/1]).
 -export([parse_trailer/1]).
 -export([parse_transfer_encoding/1]).
@@ -1928,73 +1928,73 @@ parse_sec_websocket_key(SecWebSocketKey) ->
 
 %% @doc Parse the Sec-WebSocket-Protocol request header.
 
--spec parse_sec_websocket_protocol_client(binary()) -> [binary()].
-parse_sec_websocket_protocol_client(SecWebSocketProtocol) ->
+-spec parse_sec_websocket_protocol_req(binary()) -> [binary()].
+parse_sec_websocket_protocol_req(SecWebSocketProtocol) ->
 	nonempty(token_ci_list(SecWebSocketProtocol, [])).
 
 -ifdef(TEST).
-parse_sec_websocket_protocol_client_test_() ->
+parse_sec_websocket_protocol_req_test_() ->
 	Tests = [
 		{<<"chat, superchat">>, [<<"chat">>, <<"superchat">>]}
 	],
-	[{V, fun() -> R = parse_sec_websocket_protocol_client(V) end} || {V, R} <- Tests].
+	[{V, fun() -> R = parse_sec_websocket_protocol_req(V) end} || {V, R} <- Tests].
 
-parse_sec_websocket_protocol_client_error_test_() ->
+parse_sec_websocket_protocol_req_error_test_() ->
 	Tests = [
 		<<>>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_sec_websocket_protocol_client(V)) end}
+	[{V, fun() -> {'EXIT', _} = (catch parse_sec_websocket_protocol_req(V)) end}
 		|| V <- Tests].
 -endif.
 
 -ifdef(PERF).
-horse_parse_sec_websocket_protocol_client() ->
+horse_parse_sec_websocket_protocol_req() ->
 	horse:repeat(200000,
-		parse_sec_websocket_protocol_client(<<"chat, superchat">>)
+		parse_sec_websocket_protocol_req(<<"chat, superchat">>)
 	).
 -endif.
 
 %% @doc Parse the Sec-WebSocket-Version request header.
 
--spec parse_sec_websocket_version_client(binary()) -> 0..255.
-parse_sec_websocket_version_client(SecWebSocketVersion) when byte_size(SecWebSocketVersion) < 4 ->
+-spec parse_sec_websocket_version_req(binary()) -> 0..255.
+parse_sec_websocket_version_req(SecWebSocketVersion) when byte_size(SecWebSocketVersion) < 4 ->
 	Version = binary_to_integer(SecWebSocketVersion),
 	true = Version >= 0 andalso Version =< 255,
 	Version.
 
 -ifdef(TEST).
-prop_parse_sec_websocket_version_client() ->
+prop_parse_sec_websocket_version_req() ->
 	?FORALL(Version,
 		int(0, 255),
-		Version =:= parse_sec_websocket_version_client(integer_to_binary(Version))).
+		Version =:= parse_sec_websocket_version_req(integer_to_binary(Version))).
 
-parse_sec_websocket_version_client_test_() ->
+parse_sec_websocket_version_req_test_() ->
 	Tests = [
 		{<<"13">>, 13},
 		{<<"25">>, 25}
 	],
-	[{V, fun() -> R = parse_sec_websocket_version_client(V) end} || {V, R} <- Tests].
+	[{V, fun() -> R = parse_sec_websocket_version_req(V) end} || {V, R} <- Tests].
 
-parse_sec_websocket_version_client_error_test_() ->
+parse_sec_websocket_version_req_error_test_() ->
 	Tests = [
 		<<>>,
 		<<" ">>,
 		<<"7, 8, 13">>,
 		<<"invalid">>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_sec_websocket_version_client(V)) end}
+	[{V, fun() -> {'EXIT', _} = (catch parse_sec_websocket_version_req(V)) end}
 		|| V <- Tests].
 -endif.
 
 -ifdef(PERF).
-horse_parse_sec_websocket_version_client_13() ->
+horse_parse_sec_websocket_version_req_13() ->
 	horse:repeat(200000,
-		parse_sec_websocket_version_client(<<"13">>)
+		parse_sec_websocket_version_req(<<"13">>)
 	).
 
-horse_parse_sec_websocket_version_client_255() ->
+horse_parse_sec_websocket_version_req_255() ->
 	horse:repeat(200000,
-		parse_sec_websocket_version_client(<<"255">>)
+		parse_sec_websocket_version_req(<<"255">>)
 	).
 -endif.
 

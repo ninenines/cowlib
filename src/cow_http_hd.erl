@@ -37,6 +37,7 @@
 -export([parse_sec_websocket_extensions/1]).
 -export([parse_sec_websocket_protocol_client/1]).
 -export([parse_sec_websocket_version_client/1]).
+-export([parse_te/1]).
 -export([parse_trailer/1]).
 -export([parse_transfer_encoding/1]).
 -export([parse_upgrade/1]).
@@ -1974,6 +1975,123 @@ horse_parse_sec_websocket_version_client_255() ->
 	).
 -endif.
 
+%% @doc Parse the TE header.
+%%
+%% This function does not support parsing of transfer-parameter.
+
+-spec parse_te(binary()) -> {trailers | no_trailers, [{binary(), qvalue()}]}.
+parse_te(TE) ->
+	te_list(TE, no_trailers, []).
+
+te_list(<<>>, Trail, Acc) -> {Trail, lists:reverse(Acc)};
+te_list(<< $\s, R/bits >>, Trail, Acc) -> te_list(R, Trail, Acc);
+te_list(<< $\t, R/bits >>, Trail, Acc) -> te_list(R, Trail, Acc);
+te_list(<< $\,, R/bits >>, Trail, Acc) -> te_list(R, Trail, Acc);
+te_list(<< "trailers", R/bits >>, Trail, Acc) -> te(R, Trail, Acc, <<"trailers">>);
+te_list(<< "compress", R/bits >>, Trail, Acc) -> te(R, Trail, Acc, <<"compress">>);
+te_list(<< "deflate", R/bits >>, Trail, Acc) -> te(R, Trail, Acc, <<"deflate">>);
+te_list(<< "gzip", R/bits >>, Trail, Acc) -> te(R, Trail, Acc, <<"gzip">>);
+te_list(<< C, R/bits >>, Trail, Acc) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(te, R, Trail, Acc, <<>>)
+	end.
+
+te(<<>>, _, Acc, T) when T =:= <<"trailers">> -> {trailers, lists:reverse(Acc)};
+te(<<>>, Trail, Acc, T) -> {Trail, lists:reverse([{T, 1000}|Acc])};
+te(<< $,, R/bits >>, _, Acc, T) when T =:= <<"trailers">> -> te_list(R, trailers, Acc);
+te(<< $,, R/bits >>, Trail, Acc, T) -> te_list(R, Trail, [{T, 1000}|Acc]);
+te(<< $;, R/bits >>, Trail, Acc, T) when T =/= <<"trailers">> -> te_before_weight(R, Trail, Acc, T);
+te(<< $\s, R/bits >>, _, Acc, T) when T =:= <<"trailers">> -> te_list_sep(R, trailers, Acc);
+te(<< $\s, R/bits >>, Trail, Acc, T) -> te_before_semicolon(R, Trail, Acc, T);
+te(<< $\t, R/bits >>, _, Acc, T) when T =:= <<"trailers">> -> te_list_sep(R, trailers, Acc);
+te(<< $\t, R/bits >>, Trail, Acc, T) -> te_before_semicolon(R, Trail, Acc, T);
+te(<< C, R/bits >>, Trail, Acc, T) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(te, R, Trail, Acc, T)
+	end.
+
+te_before_semicolon(<<>>, Trail, Acc, T) -> {Trail, lists:reverse([{T, 1000}|Acc])};
+te_before_semicolon(<< $,, R/bits >>, Trail, Acc, T) -> te_list(R, Trail, [{T, 1000}|Acc]);
+te_before_semicolon(<< $;, R/bits >>, Trail, Acc, T) -> te_before_weight(R, Trail, Acc, T);
+te_before_semicolon(<< $\s, R/bits >>, Trail, Acc, T) -> te_before_semicolon(R, Trail, Acc, T);
+te_before_semicolon(<< $\t, R/bits >>, Trail, Acc, T) -> te_before_semicolon(R, Trail, Acc, T).
+
+te_before_weight(<< $\s, R/bits >>, Trail, Acc, T) -> te_before_weight(R, Trail, Acc, T);
+te_before_weight(<< $\t, R/bits >>, Trail, Acc, T) -> te_before_weight(R, Trail, Acc, T);
+te_before_weight(<< $q, $=, R/bits >>, Trail, Acc, T) -> te_weight(R, Trail, Acc, T).
+
+te_weight(<< "1.000", R/bits >>, Trail, Acc, T) -> te_list_sep(R, Trail, [{T, 1000}|Acc]);
+te_weight(<< "1.00", R/bits >>, Trail, Acc, T) -> te_list_sep(R, Trail, [{T, 1000}|Acc]);
+te_weight(<< "1.0", R/bits >>, Trail, Acc, T) -> te_list_sep(R, Trail, [{T, 1000}|Acc]);
+te_weight(<< "1.", R/bits >>, Trail, Acc, T) -> te_list_sep(R, Trail, [{T, 1000}|Acc]);
+te_weight(<< "1", R/bits >>, Trail, Acc, T) -> te_list_sep(R, Trail, [{T, 1000}|Acc]);
+te_weight(<< "0.", A, B, C, R/bits >>, Trail, Acc, T)
+	when A >= $0, A =< $9, B >= $0, B =< $9, C >= $0, C =< $9 ->
+		te_list_sep(R, Trail, [{T, (A - $0) * 100 + (B - $0) * 10 + (C - $0)}|Acc]);
+te_weight(<< "0.", A, B, R/bits >>, Trail, Acc, T)
+	when A >= $0, A =< $9, B >= $0, B =< $9 ->
+		te_list_sep(R, Trail, [{T, (A - $0) * 100 + (B - $0) * 10}|Acc]);
+te_weight(<< "0.", A, R/bits >>, Trail, Acc, T)
+	when A >= $0, A =< $9 ->
+		te_list_sep(R, Trail, [{T, (A - $0) * 100}|Acc]);
+te_weight(<< "0.", R/bits >>, Trail, Acc, T) -> te_list_sep(R, Trail, [{T, 0}|Acc]);
+te_weight(<< "0", R/bits >>, Trail, Acc, T) -> te_list_sep(R, Trail, [{T, 0}|Acc]).
+
+te_list_sep(<<>>, Trail, Acc) -> {Trail, lists:reverse(Acc)};
+te_list_sep(<< $\s, R/bits >>, Trail, Acc) -> te_list_sep(R, Trail, Acc);
+te_list_sep(<< $\t, R/bits >>, Trail, Acc) -> te_list_sep(R, Trail, Acc);
+te_list_sep(<< $,, R/bits >>, Trail, Acc) -> te_list(R, Trail, Acc).
+
+-ifdef(TEST).
+te() ->
+	?LET({Trail, L},
+		{elements([trailers, no_trailers]),
+			small_non_empty_list({?SUCHTHAT(T, token(), T =/= <<"trailers">>), weight()})},
+		{Trail, L, begin
+			L2 = case Trail of
+				no_trailers -> L;
+				trailers ->
+					Rand = random:uniform(length(L) + 1) - 1,
+					{Before, After} = lists:split(Rand, L),
+					Before ++ [{<<"trailers">>, undefined}|After]
+			end,
+			<< _, TE/binary >> = iolist_to_binary([case W of
+				undefined -> [$,, T];
+				_ -> [$,, T, <<";q=">>, qvalue_to_iodata(W)]
+			end || {T, W} <- L2]),
+			TE
+		end}
+	).
+
+prop_parse_te() ->
+	random:seed(os:timestamp()),
+	?FORALL({Trail, L, TE},
+		te(),
+		begin
+			{ResTrail, ResL} = parse_te(TE),
+			CheckedL = [begin
+				ResT =:= ?INLINE_LOWERCASE_BC(T)
+					andalso (ResW =:= W orelse (W =:= undefined andalso ResW =:= 1000))
+			end || {{T, W}, {ResT, ResW}} <- lists:zip(L, ResL)],
+			ResTrail =:= Trail andalso [true] =:= lists:usort(CheckedL)
+		end).
+
+parse_te_test_() ->
+	Tests = [
+		{<<"deflate">>, {no_trailers, [{<<"deflate">>, 1000}]}},
+		{<<>>, {no_trailers, []}},
+		{<<"trailers, deflate;q=0.5">>, {trailers, [{<<"deflate">>, 500}]}}
+	],
+	[{V, fun() -> R = parse_te(V) end} || {V, R} <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_te() ->
+	horse:repeat(200000,
+		parse_te(<<"trailers, deflate;q=0.5">>)
+	).
+-endif.
+
 %% @doc Parse the Trailer header.
 
 -spec parse_trailer(binary()) -> [binary()].
@@ -2003,7 +2121,7 @@ horse_parse_trailer() ->
 
 %% @doc Parse the Transfer-Encoding header.
 %%
-%% @todo This function does not support parsing of transfer-parameter.
+%% This function does not support parsing of transfer-parameter.
 
 -spec parse_transfer_encoding(binary()) -> [binary()].
 parse_transfer_encoding(<<"chunked">>) ->

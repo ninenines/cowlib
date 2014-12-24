@@ -806,13 +806,13 @@ prop_parse_cache_control() ->
 		begin
 			ResL = parse_cache_control(CacheControl),
 			CheckedL = [begin
-				ExpectedC = case C of
+				ExpectedCc = case Cc of
 					{fields, K, V} -> {?INLINE_LOWERCASE_BC(K), [?INLINE_LOWERCASE_BC(F) || F <- V]};
 					{K, V} -> {?INLINE_LOWERCASE_BC(K), unquote(V)};
 					K -> ?INLINE_LOWERCASE_BC(K)
 				end,
-				ExpectedC =:= ResC
-			end || {C, ResC} <- lists:zip(L, ResL)],
+				ExpectedCc =:= ResCc
+			end || {Cc, ResCc} <- lists:zip(L, ResL)],
 			[true] =:= lists:usort(CheckedL)
 		end).
 

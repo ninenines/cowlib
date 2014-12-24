@@ -38,6 +38,7 @@
 -export([parse_sec_websocket_extensions/1]).
 -export([parse_sec_websocket_key/1]).
 -export([parse_sec_websocket_protocol_req/1]).
+-export([parse_sec_websocket_protocol_resp/1]).
 -export([parse_sec_websocket_version_req/1]).
 -export([parse_te/1]).
 -export([parse_trailer/1]).
@@ -1951,6 +1952,48 @@ parse_sec_websocket_protocol_req_error_test_() ->
 horse_parse_sec_websocket_protocol_req() ->
 	horse:repeat(200000,
 		parse_sec_websocket_protocol_req(<<"chat, superchat">>)
+	).
+-endif.
+
+%% @doc Parse the Sec-Websocket-Protocol response header.
+
+-spec parse_sec_websocket_protocol_resp(binary()) -> binary().
+parse_sec_websocket_protocol_resp(<< C, R/bits >>) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(token_ci, R, <<>>)
+	end.
+
+token_ci(<<>>, T) -> T;
+token_ci(<< C, R/bits >>, T) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(token_ci, R, T)
+	end.
+
+-ifdef(TEST).
+prop_parse_sec_websocket_protocol_resp() ->
+	?FORALL(T,
+		token(),
+		?INLINE_LOWERCASE_BC(T) =:= parse_sec_websocket_protocol_resp(T)).
+
+parse_sec_websocket_protocol_resp_test_() ->
+	Tests = [
+		{<<"chat">>, <<"chat">>},
+		{<<"CHAT">>, <<"chat">>}
+	],
+	[{V, fun() -> R = parse_sec_websocket_protocol_resp(V) end} || {V, R} <- Tests].
+
+parse_sec_websocket_protocol_resp_error_test_() ->
+	Tests = [
+		<<>>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_sec_websocket_protocol_resp(V)) end}
+		|| V <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_sec_websocket_protocol_resp() ->
+	horse:repeat(200000,
+		parse_sec_websocket_protocol_resp(<<"chat">>)
 	).
 -endif.
 

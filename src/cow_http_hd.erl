@@ -34,7 +34,9 @@
 -export([parse_if_unmodified_since/1]).
 -export([parse_last_modified/1]).
 -export([parse_max_forwards/1]).
+-export([parse_sec_websocket_accept/1]).
 -export([parse_sec_websocket_extensions/1]).
+-export([parse_sec_websocket_key/1]).
 -export([parse_sec_websocket_protocol_client/1]).
 -export([parse_sec_websocket_version_client/1]).
 -export([parse_te/1]).
@@ -1792,6 +1794,16 @@ parse_max_forwards_error_test_() ->
 	[{V, fun() -> {'EXIT', _} = (catch parse_content_length(V)) end} || V <- Tests].
 -endif.
 
+%% @doc Dummy parsing function for the Sec-WebSocket-Accept header.
+%%
+%% The argument is returned without any processing. This value is
+%% expected to be matched directly by the client so no parsing is
+%% needed.
+
+-spec parse_sec_websocket_accept(binary()) -> binary().
+parse_sec_websocket_accept(SecWebSocketAccept) ->
+	SecWebSocketAccept.
+
 %% @doc Parse the Sec-WebSocket-Extensions request header.
 
 -spec parse_sec_websocket_extensions(binary()) -> [{binary(), [binary() | {binary(), binary()}]}].
@@ -1902,6 +1914,17 @@ horse_parse_sec_websocket_extensions() ->
 		parse_sec_websocket_extensions(<<"mux; max-channels=4; flow-control, deflate-stream">>)
 	).
 -endif.
+
+%% @doc Dummy parsing function for the Sec-WebSocket-Key header.
+%%
+%% The argument is returned without any processing. This value is
+%% expected to be prepended to a static value, the result of which
+%% hashed to form a new base64 value returned in Sec-WebSocket-Accept,
+%% therefore no parsing is needed.
+
+-spec parse_sec_websocket_key(binary()) -> binary().
+parse_sec_websocket_key(SecWebSocketKey) ->
+	SecWebSocketKey.
 
 %% @doc Parse the Sec-WebSocket-Protocol request header.
 

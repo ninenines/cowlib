@@ -1271,17 +1271,10 @@ horse_parse_content_language() ->
 %% The value has at least one digit, and may be followed by whitespace.
 
 -spec parse_content_length(binary()) -> non_neg_integer().
-parse_content_length(<< $0 >>) -> 0;
-parse_content_length(<< $0, R/bits >>) -> number(R, 0);
-parse_content_length(<< $1, R/bits >>) -> number(R, 1);
-parse_content_length(<< $2, R/bits >>) -> number(R, 2);
-parse_content_length(<< $3, R/bits >>) -> number(R, 3);
-parse_content_length(<< $4, R/bits >>) -> number(R, 4);
-parse_content_length(<< $5, R/bits >>) -> number(R, 5);
-parse_content_length(<< $6, R/bits >>) -> number(R, 6);
-parse_content_length(<< $7, R/bits >>) -> number(R, 7);
-parse_content_length(<< $8, R/bits >>) -> number(R, 8);
-parse_content_length(<< $9, R/bits >>) -> number(R, 9).
+parse_content_length(ContentLength) ->
+	I = binary_to_integer(ContentLength),
+	true = I >= 0,
+	I.
 
 -ifdef(TEST).
 prop_parse_content_length() ->
@@ -1760,16 +1753,10 @@ parse_last_modified_test_() ->
 %% @doc Parse the Max-Forwards header.
 
 -spec parse_max_forwards(binary()) -> non_neg_integer().
-parse_max_forwards(<< $0, R/bits >>) -> number(R, 0);
-parse_max_forwards(<< $1, R/bits >>) -> number(R, 1);
-parse_max_forwards(<< $2, R/bits >>) -> number(R, 2);
-parse_max_forwards(<< $3, R/bits >>) -> number(R, 3);
-parse_max_forwards(<< $4, R/bits >>) -> number(R, 4);
-parse_max_forwards(<< $5, R/bits >>) -> number(R, 5);
-parse_max_forwards(<< $6, R/bits >>) -> number(R, 6);
-parse_max_forwards(<< $7, R/bits >>) -> number(R, 7);
-parse_max_forwards(<< $8, R/bits >>) -> number(R, 8);
-parse_max_forwards(<< $9, R/bits >>) -> number(R, 9).
+parse_max_forwards(MaxForwards) ->
+	I = binary_to_integer(MaxForwards),
+	true = I >= 0,
+	I.
 
 -ifdef(TEST).
 prop_parse_max_forwards() ->
@@ -2387,19 +2374,6 @@ parse_upgrade_error_test_() ->
 
 %% Only return if the list is not empty.
 nonempty(L) when L =/= [] -> L.
-
-%% Parse a number.
-number(<< $0, R/bits >>, Acc) -> number(R, Acc * 10);
-number(<< $1, R/bits >>, Acc) -> number(R, Acc * 10 + 1);
-number(<< $2, R/bits >>, Acc) -> number(R, Acc * 10 + 2);
-number(<< $3, R/bits >>, Acc) -> number(R, Acc * 10 + 3);
-number(<< $4, R/bits >>, Acc) -> number(R, Acc * 10 + 4);
-number(<< $5, R/bits >>, Acc) -> number(R, Acc * 10 + 5);
-number(<< $6, R/bits >>, Acc) -> number(R, Acc * 10 + 6);
-number(<< $7, R/bits >>, Acc) -> number(R, Acc * 10 + 7);
-number(<< $8, R/bits >>, Acc) -> number(R, Acc * 10 + 8);
-number(<< $9, R/bits >>, Acc) -> number(R, Acc * 10 + 9);
-number(<<>>, Acc) -> Acc.
 
 %% Parse a list of case insensitive tokens.
 token_ci_list(<<>>, Acc) -> lists:reverse(Acc);

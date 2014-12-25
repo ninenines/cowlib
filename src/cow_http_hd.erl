@@ -54,6 +54,9 @@
 -type qvalue() :: 0..1000.
 -export_type([qvalue/0]).
 
+-type websocket_version() :: 0..255.
+-export_type([websocket_version/0]).
+
 -include("cow_inline.hrl").
 
 -ifdef(TEST).
@@ -1999,7 +2002,7 @@ horse_parse_sec_websocket_protocol_resp() ->
 
 %% @doc Parse the Sec-WebSocket-Version request header.
 
--spec parse_sec_websocket_version_req(binary()) -> 0..255.
+-spec parse_sec_websocket_version_req(binary()) -> websocket_version().
 parse_sec_websocket_version_req(SecWebSocketVersion) when byte_size(SecWebSocketVersion) < 4 ->
 	Version = binary_to_integer(SecWebSocketVersion),
 	true = Version >= 0 andalso Version =< 255,
@@ -2038,6 +2041,65 @@ horse_parse_sec_websocket_version_req_13() ->
 horse_parse_sec_websocket_version_req_255() ->
 	horse:repeat(200000,
 		parse_sec_websocket_version_req(<<"255">>)
+	).
+-endif.
+
+%% @doc Parse the Sec-WebSocket-Version response header.
+
+-spec parse_sec_websocket_version_resp(binary()) -> [websocket_version()].
+parse_sec_websocket_version_resp(SecWebSocketVersion) ->
+	nonempty(ws_version_list(SecWebSocketVersion, [])).
+
+ws_version_list(<<>>, Acc) -> lists:reverse(Acc);
+ws_version_list(<< $\s, R/bits >>, Acc) -> ws_version_list(R, Acc);
+ws_version_list(<< $\t, R/bits >>, Acc) -> ws_version_list(R, Acc);
+ws_version_list(<< $,, R/bits >>, Acc) -> ws_version_list(R, Acc);
+ws_version_list(<< C, R/bits >>, Acc) when ?IS_DIGIT(C) -> ws_version(R, Acc, C - $0).
+
+ws_version(<<>>, Acc, V) -> lists:reverse([V|Acc]);
+ws_version(<< $\s, R/bits >>, Acc, V) -> ws_version_list_sep(R, [V|Acc]);
+ws_version(<< $\t, R/bits >>, Acc, V) -> ws_version_list_sep(R, [V|Acc]);
+ws_version(<< $,, R/bits >>, Acc, V) -> ws_version_list(R, [V|Acc]);
+ws_version(<< C, R/bits >>, Acc, V) when ?IS_DIGIT(C) -> ws_version(R, Acc, V * 10 + C - $0).
+
+ws_version_list_sep(<<>>, Acc) -> lists:reverse(Acc);
+ws_version_list_sep(<< $\s, R/bits >>, Acc) -> ws_version_list_sep(R, Acc);
+ws_version_list_sep(<< $\t, R/bits >>, Acc) -> ws_version_list_sep(R, Acc);
+ws_version_list_sep(<< $,, R/bits >>, Acc) -> ws_version_list(R, Acc).
+
+-ifdef(TEST).
+sec_websocket_version_resp() ->
+	?LET(L,
+		non_empty(list({ows(), ows(), int(0, 255)})),
+		begin
+			<< _, SecWebSocketVersion/binary >> = iolist_to_binary(
+				[[OWS1, $,, OWS2, integer_to_binary(V)] || {OWS1, OWS2, V} <- L]),
+			{[V || {_, _, V} <- L], SecWebSocketVersion}
+		end).
+
+prop_parse_sec_websocket_version_resp() ->
+	?FORALL({L, SecWebSocketVersion},
+		sec_websocket_version_resp(),
+		L =:= parse_sec_websocket_version_resp(SecWebSocketVersion)).
+
+parse_sec_websocket_version_resp_test_() ->
+	Tests = [
+		{<<"13, 8, 7">>, [13, 8, 7]}
+	],
+	[{V, fun() -> R = parse_sec_websocket_version_resp(V) end} || {V, R} <- Tests].
+
+parse_sec_websocket_version_resp_error_test_() ->
+	Tests = [
+		<<>>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_sec_websocket_version_resp(V)) end}
+		|| V <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_sec_websocket_version_resp() ->
+	horse:repeat(200000,
+		parse_sec_websocket_version_resp(<<"13, 8, 7">>)
 	).
 -endif.
 

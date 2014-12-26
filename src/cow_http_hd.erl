@@ -1853,7 +1853,8 @@ parse_max_forwards_error_test_() ->
 		<<"123, 123">>,
 		<<"4.17">>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_content_length(V)) end} || V <- Tests].
+	[{V, fun() -> {'EXIT', _} = (catch parse_max_forwards(V)) end} || V <- Tests].
+-endif.
 
 %% @doc Parse the Retry-After header.
 

@@ -19,6 +19,7 @@
 -export([parse_accept_encoding/1]).
 -export([parse_accept_language/1]).
 -export([parse_age/1]).
+-export([parse_allow/1]).
 -export([parse_cache_control/1]).
 -export([parse_connection/1]).
 -export([parse_content_encoding/1]).
@@ -721,6 +722,43 @@ parse_age_error_test_() ->
 		<<"4.17">>
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_age(V)) end} || V <- Tests].
+-endif.
+
+%% @doc Parse the Allow header.
+
+-spec parse_allow(binary()) -> [binary()].
+parse_allow(Allow) ->
+	token_list(Allow, []).
+
+-ifdef(TEST).
+allow() ->
+	?LET(L,
+		list({ows(), ows(), token()}),
+		case L of
+			[] -> {[], <<>>};
+			_ ->
+				<< _, Allow/binary >> = iolist_to_binary([[OWS1, $,, OWS2, M] || {OWS1, OWS2, M} <- L]),
+				{[M || {_, _, M} <- L], Allow}
+		end).
+
+prop_parse_allow() ->
+	?FORALL({L, Allow},
+		allow(),
+		L =:= parse_allow(Allow)).
+
+parse_allow_test_() ->
+	Tests = [
+		{<<>>, []},
+		{<<"GET, HEAD, PUT">>, [<<"GET">>, <<"HEAD">>, <<"PUT">>]}
+	],
+	[{V, fun() -> R = parse_allow(V) end} || {V, R} <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_allow() ->
+	horse:repeat(200000,
+		parse_allow(<<"GET, HEAD, PUT">>)
+	).
 -endif.
 
 %% @doc Parse the Cache-Control header.
@@ -2430,6 +2468,24 @@ parse_vary_error_test_() ->
 
 %% Only return if the list is not empty.
 nonempty(L) when L =/= [] -> L.
+
+%% Parse a list of case sensitive tokens.
+token_list(<<>>, Acc) -> lists:reverse(Acc);
+token_list(<< $\s, R/bits >>, Acc) -> token_list(R, Acc);
+token_list(<< $\t, R/bits >>, Acc) -> token_list(R, Acc);
+token_list(<< $,, R/bits >>, Acc) -> token_list(R, Acc);
+token_list(<< C, R/bits >>, Acc) when ?IS_TOKEN(C) -> token(R, Acc, << C >>).
+
+token(<<>>, Acc, T) -> lists:reverse([T|Acc]);
+token(<< $\s, R/bits >>, Acc, T) -> token_list_sep(R, [T|Acc]);
+token(<< $\t, R/bits >>, Acc, T) -> token_list_sep(R, [T|Acc]);
+token(<< $,, R/bits >>, Acc, T) -> token_list(R, [T|Acc]);
+token(<< C, R/bits >>, Acc, T) when ?IS_TOKEN(C) -> token(R, Acc, << T/binary, C >>).
+
+token_list_sep(<<>>, Acc) -> lists:reverse(Acc);
+token_list_sep(<< $\s, R/bits >>, Acc) -> token_list_sep(R, Acc);
+token_list_sep(<< $\t, R/bits >>, Acc) -> token_list_sep(R, Acc);
+token_list_sep(<< $,, R/bits >>, Acc) -> token_list(R, Acc).
 
 %% Parse a list of case insensitive tokens.
 token_ci_list(<<>>, Acc) -> lists:reverse(Acc);

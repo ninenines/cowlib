@@ -40,6 +40,7 @@
 -export([parse_sec_websocket_protocol_req/1]).
 -export([parse_sec_websocket_protocol_resp/1]).
 -export([parse_sec_websocket_version_req/1]).
+-export([parse_sec_websocket_version_resp/1]).
 -export([parse_te/1]).
 -export([parse_trailer/1]).
 -export([parse_transfer_encoding/1]).

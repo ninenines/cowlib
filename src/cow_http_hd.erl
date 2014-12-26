@@ -36,6 +36,7 @@
 -export([parse_if_unmodified_since/1]).
 -export([parse_last_modified/1]).
 -export([parse_max_forwards/1]).
+-export([parse_retry_after/1]).
 -export([parse_sec_websocket_accept/1]).
 -export([parse_sec_websocket_extensions/1]).
 -export([parse_sec_websocket_key/1]).
@@ -1853,6 +1854,42 @@ parse_max_forwards_error_test_() ->
 		<<"4.17">>
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_content_length(V)) end} || V <- Tests].
+
+%% @doc Parse the Retry-After header.
+
+-spec parse_retry_after(binary()) -> non_neg_integer() | calendar:datetime().
+parse_retry_after(RetryAfter = << D, _/bits >>) when ?IS_DIGIT(D) ->
+	I = binary_to_integer(RetryAfter),
+	true = I >= 0,
+	I;
+parse_retry_after(RetryAfter) ->
+	cow_date:parse_date(RetryAfter).
+
+-ifdef(TEST).
+parse_retry_after_test_() ->
+	Tests = [
+		{<<"Fri, 31 Dec 1999 23:59:59 GMT">>, {{1999, 12, 31}, {23, 59, 59}}},
+		{<<"120">>, 120}
+	],
+	[{V, fun() -> R = parse_retry_after(V) end} || {V, R} <- Tests].
+
+parse_retry_after_error_test_() ->
+	Tests = [
+		<<>>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_retry_after(V)) end} || V <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_retry_after_date() ->
+	horse:repeat(200000,
+		parse_retry_after(<<"Fri, 31 Dec 1999 23:59:59 GMT">>)
+	).
+
+horse_parse_retry_after_delay_seconds() ->
+	horse:repeat(200000,
+		parse_retry_after(<<"120">>)
+	).
 -endif.
 
 %% @doc Dummy parsing function for the Sec-WebSocket-Accept header.

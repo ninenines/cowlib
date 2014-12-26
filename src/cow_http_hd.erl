@@ -2361,7 +2361,7 @@ parse_upgrade_test_() ->
 			[<<"http/2.0">>, <<"shttp/1.3">>, <<"irc/6.9">>, <<"rta/x11">>]},
 		{<<"HTTP/2.0">>, [<<"http/2.0">>]}
 	],
-	[{V, fun() -> R = parse_transfer_encoding(V) end} || {V, R} <- Tests].
+	[{V, fun() -> R = parse_upgrade(V) end} || {V, R} <- Tests].
 
 parse_upgrade_error_test_() ->
 	Tests = [

@@ -18,6 +18,7 @@
 -export([parse_accept_charset/1]).
 -export([parse_accept_encoding/1]).
 -export([parse_accept_language/1]).
+-export([parse_accept_ranges/1]).
 -export([parse_age/1]).
 -export([parse_allow/1]).
 -export([parse_cache_control/1]).
@@ -693,6 +694,47 @@ parse_accept_language_error_test_() ->
 horse_parse_accept_language() ->
 	horse:repeat(20000,
 		parse_accept_language(<<"da, en-gb;q=0.8, en;q=0.7">>)
+	).
+-endif.
+
+%% @doc Parse the Accept-Ranges header.
+
+-spec parse_accept_ranges(binary()) -> [binary()].
+parse_accept_ranges(<<"none">>) -> [];
+parse_accept_ranges(<<"bytes">>) -> [<<"bytes">>];
+parse_accept_ranges(AcceptRanges) ->
+	nonempty(token_ci_list(AcceptRanges, [])).
+
+-ifdef(TEST).
+parse_accept_ranges_test_() ->
+	Tests = [
+		{<<"bytes">>, [<<"bytes">>]},
+		{<<"none">>, []},
+		{<<"bytes, pages, kilos">>, [<<"bytes">>, <<"pages">>, <<"kilos">>]}
+	],
+	[{V, fun() -> R = parse_accept_ranges(V) end} || {V, R} <- Tests].
+
+parse_accept_ranges_error_test_() ->
+	Tests = [
+		<<>>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_accept_ranges(V)) end} || V <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_accept_ranges_none() ->
+	horse:repeat(200000,
+		parse_accept_ranges(<<"none">>)
+	).
+
+horse_parse_accept_ranges_bytes() ->
+	horse:repeat(200000,
+		parse_accept_ranges(<<"bytes">>)
+	).
+
+horse_parse_accept_ranges_other() ->
+	horse:repeat(200000,
+		parse_accept_ranges(<<"bytes, pages, kilos">>)
 	).
 -endif.
 

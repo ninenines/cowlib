@@ -34,6 +34,7 @@
 -export([parse_if_match/1]).
 -export([parse_if_modified_since/1]).
 -export([parse_if_none_match/1]).
+-export([parse_if_range/1]).
 -export([parse_if_unmodified_since/1]).
 -export([parse_last_modified/1]).
 -export([parse_max_forwards/1]).
@@ -1832,6 +1833,44 @@ parse_if_none_match_error_test_() ->
 horse_parse_if_none_match() ->
 	horse:repeat(200000,
 		parse_if_none_match(<<"W/\"xyzzy\", W/\"r2d2xxxx\", W/\"c3piozzzz\"">>)
+	).
+-endif.
+
+%% @doc Parse the If-Range header.
+
+-spec parse_if_range(binary()) -> etag() | calendar:datetime().
+parse_if_range(<< $W, $/, $", R/bits >>) ->
+	etag(R, weak, <<>>);
+parse_if_range(<< $", R/bits >>) ->
+	etag(R, strong, <<>>);
+parse_if_range(IfRange) ->
+	cow_date:parse_date(IfRange).
+
+-ifdef(TEST).
+parse_if_range_test_() ->
+	Tests = [
+		{<<"W/\"xyzzy\"">>, {weak, <<"xyzzy">>}},
+		{<<"\"xyzzy\"">>, {strong, <<"xyzzy">>}},
+		{<<"Sat, 29 Oct 1994 19:43:31 GMT">>, {{1994, 10, 29}, {19, 43, 31}}}
+	],
+	[{V, fun() -> R = parse_if_range(V) end} || {V, R} <- Tests].
+
+parse_if_range_error_test_() ->
+	Tests = [
+		<<>>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_if_range(V)) end} || V <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_if_range_etag() ->
+	horse:repeat(200000,
+		parse_if_range(<<"\"xyzzy\"">>)
+	).
+
+horse_parse_if_range_date() ->
+	horse:repeat(200000,
+		parse_if_range(<<"Sat, 29 Oct 1994 19:43:31 GMT">>)
 	).
 -endif.
 

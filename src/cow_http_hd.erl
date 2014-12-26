@@ -18,6 +18,7 @@
 -export([parse_accept_charset/1]).
 -export([parse_accept_encoding/1]).
 -export([parse_accept_language/1]).
+-export([parse_age/1]).
 -export([parse_cache_control/1]).
 -export([parse_connection/1]).
 -export([parse_content_encoding/1]).
@@ -691,6 +692,35 @@ horse_parse_accept_language() ->
 	horse:repeat(20000,
 		parse_accept_language(<<"da, en-gb;q=0.8, en;q=0.7">>)
 	).
+-endif.
+
+%% @doc Parse the Age header.
+
+-spec parse_age(binary()) -> non_neg_integer().
+parse_age(Age) ->
+	I = binary_to_integer(Age),
+	true = I >= 0,
+	I.
+
+-ifdef(TEST).
+parse_age_test_() ->
+	Tests = [
+		{<<"0">>, 0},
+		{<<"42">>, 42},
+		{<<"69">>, 69},
+		{<<"1337">>, 1337},
+		{<<"3495">>, 3495},
+		{<<"1234567890">>, 1234567890}
+	],
+	[{V, fun() -> R = parse_age(V) end} || {V, R} <- Tests].
+
+parse_age_error_test_() ->
+	Tests = [
+		<<>>,
+		<<"123, 123">>,
+		<<"4.17">>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_age(V)) end} || V <- Tests].
 -endif.
 
 %% @doc Parse the Cache-Control header.

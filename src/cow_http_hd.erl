@@ -2492,21 +2492,21 @@ token_ci_list(<<>>, Acc) -> lists:reverse(Acc);
 token_ci_list(<< $\s, R/bits >>, Acc) -> token_ci_list(R, Acc);
 token_ci_list(<< $\t, R/bits >>, Acc) -> token_ci_list(R, Acc);
 token_ci_list(<< $,, R/bits >>, Acc) -> token_ci_list(R, Acc);
-token_ci_list(<< C, R/bits >>, Acc) ->
+token_ci_list(<< C, R/bits >>, Acc) when ?IS_TOKEN(C) ->
 	case C of
-		?INLINE_LOWERCASE(token_ci_list, R, Acc, <<>>)
+		?INLINE_LOWERCASE(token_ci, R, Acc, <<>>)
 	end.
 
-token_ci_list(<<>>, Acc, T) -> lists:reverse([T|Acc]);
-token_ci_list(<< $\s, R/bits >>, Acc, T) -> token_ci_list_sep(R, Acc, T);
-token_ci_list(<< $\t, R/bits >>, Acc, T) -> token_ci_list_sep(R, Acc, T);
-token_ci_list(<< $,, R/bits >>, Acc, T) -> token_ci_list(R, [T|Acc]);
-token_ci_list(<< C, R/bits >>, Acc, T) ->
+token_ci(<<>>, Acc, T) -> lists:reverse([T|Acc]);
+token_ci(<< $\s, R/bits >>, Acc, T) -> token_ci_list_sep(R, [T|Acc]);
+token_ci(<< $\t, R/bits >>, Acc, T) -> token_ci_list_sep(R, [T|Acc]);
+token_ci(<< $,, R/bits >>, Acc, T) -> token_ci_list(R, [T|Acc]);
+token_ci(<< C, R/bits >>, Acc, T) when ?IS_TOKEN(C) ->
 	case C of
-		?INLINE_LOWERCASE(token_ci_list, R, Acc, T)
+		?INLINE_LOWERCASE(token_ci, R, Acc, T)
 	end.
 
-token_ci_list_sep(<<>>, Acc, T) -> lists:reverse([T|Acc]);
-token_ci_list_sep(<< $\s, R/bits >>, Acc, T) -> token_ci_list_sep(R, Acc, T);
-token_ci_list_sep(<< $\t, R/bits >>, Acc, T) -> token_ci_list_sep(R, Acc, T);
-token_ci_list_sep(<< $,, R/bits >>, Acc, T) -> token_ci_list(R, [T|Acc]).
+token_ci_list_sep(<<>>, Acc) -> lists:reverse(Acc);
+token_ci_list_sep(<< $\s, R/bits >>, Acc) -> token_ci_list_sep(R, Acc);
+token_ci_list_sep(<< $\t, R/bits >>, Acc) -> token_ci_list_sep(R, Acc);
+token_ci_list_sep(<< $,, R/bits >>, Acc) -> token_ci_list(R, Acc).

@@ -26,6 +26,7 @@
 -define(DIGITS(A, B), ((A - $0) * 10 + (B - $0))).
 -define(DIGITS(A, B, C, D), ((A - $0) * 1000 + (B - $0) * 100 + (C - $0) * 10 + (D - $0))).
 
+-spec parse_date(binary()) -> calendar:datetime().
 parse_date(DateBin) ->
 	Date = {{_, _, D}, {H, M, S}} = http_date(DateBin),
 	true = D >= 0 andalso D =< 31,

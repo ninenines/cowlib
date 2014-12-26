@@ -45,6 +45,7 @@
 -export([parse_trailer/1]).
 -export([parse_transfer_encoding/1]).
 -export([parse_upgrade/1]).
+-export([parse_vary/1]).
 
 -type etag() :: {weak | strong, binary()}.
 -export_type([etag/0]).
@@ -2369,6 +2370,30 @@ parse_upgrade_error_test_() ->
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_upgrade(V)) end}
 		|| V <- Tests].
+-endif.
+
+%% @doc Parse the Vary header.
+
+-spec parse_vary(binary()) -> '*' | [binary()].
+parse_vary(<<"*">>) ->
+	'*';
+parse_vary(Vary) ->
+	nonempty(token_ci_list(Vary, [])).
+
+-ifdef(TEST).
+parse_vary_test_() ->
+	Tests = [
+		{<<"*">>, '*'},
+		{<<"Accept-Encoding">>, [<<"accept-encoding">>]},
+		{<<"accept-encoding, accept-language">>, [<<"accept-encoding">>, <<"accept-language">>]}
+	],
+	[{V, fun() -> R = parse_vary(V) end} || {V, R} <- Tests].
+
+parse_vary_error_test_() ->
+	Tests = [
+		<<>>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_vary(V)) end} || V <- Tests].
 -endif.
 
 %% Internal.

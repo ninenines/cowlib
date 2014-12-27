@@ -38,6 +38,7 @@
 -export([parse_if_unmodified_since/1]).
 -export([parse_last_modified/1]).
 -export([parse_max_forwards/1]).
+-export([parse_range/1]).
 -export([parse_retry_after/1]).
 -export([parse_sec_websocket_accept/1]).
 -export([parse_sec_websocket_extensions/1]).
@@ -93,8 +94,11 @@ token() ->
 		non_empty(list(tchar())),
 		list_to_binary(T)).
 
+vchar() ->
+	int(33, 126).
+
 obs_text() ->
-	choose(128, 255).
+	int(128, 255).
 
 qdtext() ->
 	frequency([
@@ -197,8 +201,8 @@ media_range_param(<< C, R/bits >>, Acc, T, S, P, K) when ?IS_TOKEN(C) ->
 	end.
 
 media_range_quoted(<< $", R/bits >>, Acc, T, S, P, K, V) -> media_range_before_semicolon(R, Acc, T, S, [{K, V}|P]);
-media_range_quoted(<< $\\, C, R/bits >>, Acc, T, S, P, K, V) when ?IS_VCHAR(C) -> media_range_quoted(R, Acc, T, S, P, K, << V/binary, C >>);
-media_range_quoted(<< C, R/bits >>, Acc, T, S, P, K, V) when ?IS_VCHAR(C) -> media_range_quoted(R, Acc, T, S, P, K, << V/binary, C >>).
+media_range_quoted(<< $\\, C, R/bits >>, Acc, T, S, P, K, V) when ?IS_VCHAR_OBS(C) -> media_range_quoted(R, Acc, T, S, P, K, << V/binary, C >>);
+media_range_quoted(<< C, R/bits >>, Acc, T, S, P, K, V) when ?IS_VCHAR_OBS(C) -> media_range_quoted(R, Acc, T, S, P, K, << V/binary, C >>).
 
 media_range_value(<<>>, Acc, T, S, P, K, V) -> lists:reverse([{{T, S, lists:reverse([{K, V}|P])}, 1000, []}|Acc]);
 media_range_value(<< $,, R/bits >>, Acc, T, S, P, K, V) -> media_range_list(R, [{{T, S, lists:reverse([{K, V}|P])}, 1000, []}|Acc]);
@@ -261,8 +265,8 @@ accept_ext(<< C, R/bits >>, Acc, T, S, P, Q, E, K) when ?IS_TOKEN(C) ->
 	end.
 
 accept_quoted(<< $", R/bits >>, Acc, T, S, P, Q, E, K, V) -> accept_before_semicolon(R, Acc, T, S, P, Q, [{K, V}|E]);
-accept_quoted(<< $\\, C, R/bits >>, Acc, T, S, P, Q, E, K, V) when ?IS_VCHAR(C) -> accept_quoted(R, Acc, T, S, P, Q, E, K, << V/binary, C >>);
-accept_quoted(<< C, R/bits >>, Acc, T, S, P, Q, E, K, V) when ?IS_VCHAR(C) -> accept_quoted(R, Acc, T, S, P, Q, E, K, << V/binary, C >>).
+accept_quoted(<< $\\, C, R/bits >>, Acc, T, S, P, Q, E, K, V) when ?IS_VCHAR_OBS(C) -> accept_quoted(R, Acc, T, S, P, Q, E, K, << V/binary, C >>);
+accept_quoted(<< C, R/bits >>, Acc, T, S, P, Q, E, K, V) when ?IS_VCHAR_OBS(C) -> accept_quoted(R, Acc, T, S, P, Q, E, K, << V/binary, C >>).
 
 accept_value(<<>>, Acc, T, S, P, Q, E, K, V) -> lists:reverse([{{T, S, lists:reverse(P)}, Q, lists:reverse([{K, V}|E])}|Acc]);
 accept_value(<< $,, R/bits >>, Acc, T, S, P, Q, E, K, V) -> media_range_list(R, [{{T, S, lists:reverse(P)}, Q, lists:reverse([{K, V}|E])}|Acc]);
@@ -880,9 +884,9 @@ cache_directive_token(<< $,, R/bits >>, Acc, K, V) -> cache_directive_list(R, [{
 cache_directive_token(<< C, R/bits >>, Acc, K, V) when ?IS_TOKEN(C) -> cache_directive_token(R, Acc, K, << V/binary, C >>).
 
 cache_directive_quoted_string(<< $", R/bits >>, Acc, K, V) -> cache_directive_list_sep(R, [{K, V}|Acc]);
-cache_directive_quoted_string(<< $\\, C, R/bits >>, Acc, K, V) when ?IS_VCHAR(C) ->
+cache_directive_quoted_string(<< $\\, C, R/bits >>, Acc, K, V) when ?IS_VCHAR_OBS(C) ->
 	cache_directive_quoted_string(R, Acc, K, << V/binary, C >>);
-cache_directive_quoted_string(<< C, R/bits >>, Acc, K, V) when ?IS_VCHAR(C) ->
+cache_directive_quoted_string(<< C, R/bits >>, Acc, K, V) when ?IS_VCHAR_OBS(C) ->
 	cache_directive_quoted_string(R, Acc, K, << V/binary, C >>).
 
 cache_directive_list_sep(<<>>, Acc) -> lists:reverse(Acc);
@@ -1472,11 +1476,11 @@ media_before_param(<< C, R/bits >>, T, S, P) when ?IS_TOKEN(C) ->
 
 media_charset_quoted(<< $", R/bits >>, T, S, P, V) ->
 	media_before_semicolon(R, T, S, [{<<"charset">>, V}|P]);
-media_charset_quoted(<< $\\, C, R/bits >>, T, S, P, V) when ?IS_VCHAR(C) ->
+media_charset_quoted(<< $\\, C, R/bits >>, T, S, P, V) when ?IS_VCHAR_OBS(C) ->
 	case C of
 		?INLINE_LOWERCASE(media_charset_quoted, R, T, S, P, V)
 	end;
-media_charset_quoted(<< C, R/bits >>, T, S, P, V) when ?IS_VCHAR(C) ->
+media_charset_quoted(<< C, R/bits >>, T, S, P, V) when ?IS_VCHAR_OBS(C) ->
 	case C of
 		?INLINE_LOWERCASE(media_charset_quoted, R, T, S, P, V)
 	end.
@@ -1499,8 +1503,8 @@ media_param(<< C, R/bits >>, T, S, P, K) when ?IS_TOKEN(C) ->
 	end.
 
 media_quoted(<< $", R/bits >>, T, S, P, K, V) -> media_before_semicolon(R, T, S, [{K, V}|P]);
-media_quoted(<< $\\, C, R/bits >>, T, S, P, K, V) when ?IS_VCHAR(C) -> media_quoted(R, T, S, P, K, << V/binary, C >>);
-media_quoted(<< C, R/bits >>, T, S, P, K, V) when ?IS_VCHAR(C) -> media_quoted(R, T, S, P, K, << V/binary, C >>).
+media_quoted(<< $\\, C, R/bits >>, T, S, P, K, V) when ?IS_VCHAR_OBS(C) -> media_quoted(R, T, S, P, K, << V/binary, C >>);
+media_quoted(<< C, R/bits >>, T, S, P, K, V) when ?IS_VCHAR_OBS(C) -> media_quoted(R, T, S, P, K, << V/binary, C >>).
 
 media_value(<<>>, T, S, P, K, V) -> {T, S, lists:reverse([{K, V}|P])};
 media_value(<< $;, R/bits >>, T, S, P, K, V) -> media_before_param(R, T, S, [{K, V}|P]);
@@ -1935,6 +1939,139 @@ parse_max_forwards_error_test_() ->
 		<<"4.17">>
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_max_forwards(V)) end} || V <- Tests].
+-endif.
+
+%% @doc Parse the Range header.
+
+-spec parse_range(binary())
+	-> {bytes, [{non_neg_integer(), non_neg_integer() | infinity} | neg_integer()]}
+	| {binary(), binary()}.
+parse_range(<<"bytes=", R/bits >>) ->
+	bytes_range_set(R, []);
+parse_range(<< C, R/bits >>) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(other_range_unit, R, <<>>)
+	end.
+
+bytes_range_set(<<>>, Acc) -> {bytes, lists:reverse(Acc)};
+bytes_range_set(<< $\s, R/bits >>, Acc) -> bytes_range_set(R, Acc);
+bytes_range_set(<< $\t, R/bits >>, Acc) -> bytes_range_set(R, Acc);
+bytes_range_set(<< $,, R/bits >>, Acc) -> bytes_range_set(R, Acc);
+bytes_range_set(<< $-, C, R/bits >>, Acc) when ?IS_DIGIT(C) -> bytes_range_suffix_spec(R, Acc, C - $0);
+bytes_range_set(<< C, R/bits >>, Acc) when ?IS_DIGIT(C) -> bytes_range_spec(R, Acc, C - $0).
+
+bytes_range_spec(<< $-, C, R/bits >>, Acc, First) when ?IS_DIGIT(C) -> bytes_range_spec_last(R, Acc, First, C - $0);
+bytes_range_spec(<< $-, R/bits >>, Acc, First) -> bytes_range_set_sep(R, [{First, infinity}|Acc]);
+bytes_range_spec(<< C, R/bits >>, Acc, First) when ?IS_DIGIT(C) -> bytes_range_spec(R, Acc, First * 10 + C - $0).
+
+bytes_range_spec_last(<< C, R/bits >>, Acc, First, Last) when ?IS_DIGIT(C) -> bytes_range_spec_last(R, Acc, First, Last * 10 + C - $0);
+bytes_range_spec_last(R, Acc, First, Last) -> bytes_range_set_sep(R, [{First, Last}|Acc]).
+
+bytes_range_suffix_spec(<< C, R/bits >>, Acc, Suffix) when ?IS_DIGIT(C) -> bytes_range_suffix_spec(R, Acc, Suffix * 10 + C - $0);
+bytes_range_suffix_spec(R, Acc, Suffix) -> bytes_range_set_sep(R, [-Suffix|Acc]).
+
+bytes_range_set_sep(<<>>, Acc) -> {bytes, lists:reverse(Acc)};
+bytes_range_set_sep(<< $\s, R/bits >>, Acc) -> bytes_range_set_sep(R, Acc);
+bytes_range_set_sep(<< $\t, R/bits >>, Acc) -> bytes_range_set_sep(R, Acc);
+bytes_range_set_sep(<< $,, R/bits >>, Acc) -> bytes_range_set(R, Acc).
+
+other_range_unit(<< $=, C, R/bits >>, U) when ?IS_VCHAR(C) ->
+	other_range_set(R, U, << C >>);
+other_range_unit(<< C, R/bits >>, U) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(other_range_unit, R, U)
+	end.
+
+other_range_set(<<>>, U, S) ->
+	{U, S};
+other_range_set(<< C, R/bits >>, U, S) when ?IS_VCHAR(C) ->
+	other_range_set(R, U, << S/binary, C >>).
+
+-ifdef(TEST).
+bytes_range() ->
+	?LET(BytesSet,
+		non_empty(list(oneof([
+			?SUCHTHAT({First, Last}, {pos_integer(), pos_integer()}, First =< Last),
+			{pos_integer(), infinity},
+			?LET(I, pos_integer(), -I)
+		]))),
+		{{bytes, BytesSet}, begin
+			<< _, Set/bits >> = iolist_to_binary([
+				case Spec of
+					{First, infinity} -> [$,, integer_to_binary(First), $-];
+					{First, Last} -> [$,, integer_to_binary(First), $-, integer_to_binary(Last)];
+					Suffix -> [$,, integer_to_binary(Suffix)]
+				end || Spec <- BytesSet]),
+			<<"bytes=", Set/binary >>
+		end}).
+
+other_range() ->
+	?LET(Range = {Unit, Set},
+		{token(), ?LET(L, non_empty(list(vchar())), list_to_binary(L))},
+		{Range, << Unit/binary, $=, Set/binary >>}).
+
+range() ->
+	oneof([
+		bytes_range(),
+		other_range()
+	]).
+
+prop_parse_range() ->
+	?FORALL({Range, RangeBin},
+		range(),
+		begin
+			Range2 = case Range of
+				{bytes, _} -> Range;
+				{Unit, Set} -> {?INLINE_LOWERCASE_BC(Unit), Set}
+			end,
+			Range2 =:= parse_range(RangeBin)
+		end).
+
+parse_range_test_() ->
+	Tests = [
+		{<<"bytes=0-499">>, {bytes, [{0, 499}]}},
+		{<<"bytes=500-999">>, {bytes, [{500, 999}]}},
+		{<<"bytes=-500">>, {bytes, [-500]}},
+		{<<"bytes=9500-">>, {bytes, [{9500, infinity}]}},
+		{<<"bytes=0-0,-1">>, {bytes, [{0, 0}, -1]}},
+		{<<"bytes=500-600,601-999">>, {bytes, [{500, 600}, {601, 999}]}},
+		{<<"bytes=500-700,601-999">>, {bytes, [{500, 700}, {601, 999}]}},
+		{<<"books=I-III,V-IX">>, {<<"books">>, <<"I-III,V-IX">>}}
+	],
+	[{V, fun() -> R = parse_range(V) end} || {V, R} <- Tests].
+
+parse_range_error_test_() ->
+	Tests = [
+		<<>>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_range(V)) end} || V <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_range_first_last() ->
+	horse:repeat(200000,
+		parse_range(<<"bytes=500-999">>)
+	).
+
+horse_parse_range_infinity() ->
+	horse:repeat(200000,
+		parse_range(<<"bytes=9500-">>)
+	).
+
+horse_parse_range_suffix() ->
+	horse:repeat(200000,
+		parse_range(<<"bytes=-500">>)
+	).
+
+horse_parse_range_two() ->
+	horse:repeat(200000,
+		parse_range(<<"bytes=500-700,601-999">>)
+	).
+
+horse_parse_range_other() ->
+	horse:repeat(200000,
+		parse_range(<<"books=I-III,V-IX">>)
+	).
 -endif.
 
 %% @doc Parse the Retry-After header.

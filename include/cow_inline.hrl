@@ -58,7 +58,11 @@
 
 %% IS_VCHAR(Character)
 
--define(IS_VCHAR(C), C =:= $\t; C > 31, C =/= 127).
+-define(IS_VCHAR(C), C =:= $\t; C > 31, C < 127).
+
+%% IS_VCHAR_OBS(Character)
+
+-define(IS_VCHAR_OBS(C), C =:= $\t; C > 31, C =/= 127).
 
 %% LC(Character)
 

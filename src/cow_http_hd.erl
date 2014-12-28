@@ -1420,6 +1420,7 @@ parse_content_length_test_() ->
 parse_content_length_error_test_() ->
 	Tests = [
 		<<>>,
+		<<"-1">>,
 		<<"123, 123">>,
 		<<"4.17">>
 	],

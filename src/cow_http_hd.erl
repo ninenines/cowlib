@@ -39,6 +39,7 @@
 -export([parse_if_unmodified_since/1]).
 -export([parse_last_modified/1]).
 -export([parse_max_forwards/1]).
+-export([parse_pragma/1]).
 -export([parse_range/1]).
 -export([parse_retry_after/1]).
 -export([parse_sec_websocket_accept/1]).
@@ -2051,6 +2052,19 @@ parse_max_forwards_error_test_() ->
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_max_forwards(V)) end} || V <- Tests].
 -endif.
+
+%% @doc Parse the Pragma header.
+%%
+%% Legacy header kept for backward compatibility with HTTP/1.0 caches.
+%% Only the "no-cache" directive was ever specified, and only for
+%% request messages.
+%%
+%% We take a large shortcut in the parsing of this header, expecting
+%% an exact match of "no-cache".
+
+-spec parse_pragma(binary()) -> cache | no_cache.
+parse_pragma(<<"no-cache">>) -> no_cache;
+parse_pragma(_) -> cache.
 
 %% @doc Parse the Range header.
 

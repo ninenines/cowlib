@@ -32,6 +32,10 @@
 	C =:= $Z
 ).
 
+%% IS_CHAR(Character)
+
+-define(IS_CHAR(C), C > 0, C < 128).
+
 %% IS_DIGIT(Character)
 
 -define(IS_DIGIT(C),

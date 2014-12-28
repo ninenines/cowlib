@@ -26,6 +26,7 @@
 -export([parse_content_encoding/1]).
 -export([parse_content_language/1]).
 -export([parse_content_length/1]).
+-export([parse_content_range/1]).
 -export([parse_content_type/1]).
 -export([parse_date/1]).
 -export([parse_etag/1]).
@@ -93,6 +94,9 @@ token() ->
 	?LET(T,
 		non_empty(list(tchar())),
 		list_to_binary(T)).
+
+abnf_char() ->
+	int(1, 127).
 
 vchar() ->
 	int(33, 126).
@@ -1431,6 +1435,112 @@ horse_parse_content_length_zero() ->
 horse_parse_content_length_giga() ->
 	horse:repeat(100000,
 		parse_content_length(<<"1234567890">>)
+	).
+-endif.
+
+%% @doc Parse the Content-Range header.
+
+-spec parse_content_range(binary())
+	-> {bytes, non_neg_integer(), non_neg_integer(), non_neg_integer() | '*'}
+	| {bytes, '*', non_neg_integer()} | {binary(), binary()}.
+parse_content_range(<<"bytes */", C, R/bits >>) when ?IS_DIGIT(C) -> unsatisfied_range(R, C - $0);
+parse_content_range(<<"bytes ", C, R/bits >>) when ?IS_DIGIT(C) -> byte_range_first(R, C - $0);
+parse_content_range(<< C, R/bits >>) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(other_content_range_unit, R, <<>>)
+	end.
+
+byte_range_first(<< $-, C, R/bits >>, First) when ?IS_DIGIT(C) -> byte_range_last(R, First, C - $0);
+byte_range_first(<< C, R/bits >>, First) when ?IS_DIGIT(C) -> byte_range_first(R, First * 10 + C - $0).
+
+byte_range_last(<<"/*">>, First, Last) -> {bytes, First, Last, '*'};
+byte_range_last(<< $/, C, R/bits >>, First, Last) when ?IS_DIGIT(C) -> byte_range_complete(R, First, Last, C - $0);
+byte_range_last(<< C, R/bits >>, First, Last) when ?IS_DIGIT(C) -> byte_range_last(R, First, Last * 10 + C - $0).
+
+byte_range_complete(<<>>, First, Last, Complete) -> {bytes, First, Last, Complete};
+byte_range_complete(<< C, R/bits >>, First, Last, Complete) when ?IS_DIGIT(C) ->
+	byte_range_complete(R, First, Last, Complete * 10 + C - $0).
+
+unsatisfied_range(<<>>, Complete) -> {bytes, '*', Complete};
+unsatisfied_range(<< C, R/bits >>, Complete) when ?IS_DIGIT(C) -> unsatisfied_range(R, Complete * 10 + C - $0).
+
+other_content_range_unit(<< $\s, R/bits >>, Unit) -> other_content_range_resp(R, Unit, <<>>);
+other_content_range_unit(<< C, R/bits >>, Unit) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(other_content_range_unit, R, Unit)
+	end.
+
+other_content_range_resp(<<>>, Unit, Resp) -> {Unit, Resp};
+other_content_range_resp(<< C, R/bits >>, Unit, Resp) when ?IS_CHAR(C) -> other_content_range_resp(R, Unit, << Resp/binary, C >>).
+
+-ifdef(TEST).
+content_range() ->
+	?LET(ContentRange,
+		oneof([
+			?SUCHTHAT({bytes, First, Last, Complete},
+				{bytes, non_neg_integer(), non_neg_integer(), non_neg_integer()},
+				First =< Last andalso Last < Complete),
+			?SUCHTHAT({bytes, First, Last, '*'},
+				{bytes, non_neg_integer(), non_neg_integer(), '*'},
+				First =< Last),
+			{bytes, '*', non_neg_integer()},
+			{token(), ?LET(L, list(abnf_char()), list_to_binary(L))}
+		]),
+		{case ContentRange of
+			{Unit, Resp} when is_binary(Unit) -> {?INLINE_LOWERCASE_BC(Unit), Resp};
+			_ -> ContentRange
+		end, case ContentRange of
+			{bytes, First, Last, '*'} ->
+				<< "bytes ", (integer_to_binary(First))/binary, "-",
+					(integer_to_binary(Last))/binary, "/*">>;
+			{bytes, First, Last, Complete} ->
+				<< "bytes ", (integer_to_binary(First))/binary, "-",
+					(integer_to_binary(Last))/binary, "/", (integer_to_binary(Complete))/binary >>;
+			{bytes, '*', Complete} ->
+				<< "bytes */", (integer_to_binary(Complete))/binary >>;
+			{Unit, Resp} ->
+				<< Unit/binary, $\s, Resp/binary >>
+		end}).
+
+prop_parse_content_range() ->
+	?FORALL({Res, ContentRange},
+		content_range(),
+		Res =:= parse_content_range(ContentRange)).
+
+parse_content_range_test_() ->
+	Tests = [
+		{<<"bytes 21010-47021/47022">>, {bytes, 21010, 47021, 47022}},
+		{<<"bytes 500-999/8000">>, {bytes, 500, 999, 8000}},
+		{<<"bytes 7000-7999/8000">>, {bytes, 7000, 7999, 8000}},
+		{<<"bytes 42-1233/1234">>, {bytes, 42, 1233, 1234}},
+		{<<"bytes 42-1233/*">>, {bytes, 42, 1233, '*'}},
+		{<<"bytes */1234">>, {bytes, '*', 1234}},
+		{<<"bytes 0-499/1234">>, {bytes, 0, 499, 1234}},
+		{<<"bytes 500-999/1234">>, {bytes, 500, 999, 1234}},
+		{<<"bytes 500-1233/1234">>, {bytes, 500, 1233, 1234}},
+		{<<"bytes 734-1233/1234">>, {bytes, 734, 1233, 1234}},
+		{<<"bytes */47022">>, {bytes, '*', 47022}},
+		{<<"exampleunit 1.2-4.3/25">>, {<<"exampleunit">>, <<"1.2-4.3/25">>}},
+		{<<"exampleunit 11.2-14.3/25">>, {<<"exampleunit">>, <<"11.2-14.3/25">>}}
+	],
+	[{V, fun() -> R = parse_content_range(V) end} || {V, R} <- Tests].
+
+parse_content_range_error_test_() ->
+	Tests = [
+		<<>>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_content_range(V)) end} || V <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_content_range_bytes() ->
+	horse:repeat(200000,
+		parse_content_range(<<"bytes 21010-47021/47022">>)
+	).
+
+horse_parse_content_range_other() ->
+	horse:repeat(200000,
+		parse_content_range(<<"exampleunit 11.2-14.3/25">>)
 	).
 -endif.
 

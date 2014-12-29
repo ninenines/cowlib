@@ -55,6 +55,7 @@
 -export([parse_transfer_encoding/1]).
 -export([parse_upgrade/1]).
 -export([parse_vary/1]).
+-export([parse_x_forwarded_for/1]).
 
 -type etag() :: {weak | strong, binary()}.
 -export_type([etag/0]).
@@ -2934,6 +2935,32 @@ parse_vary_error_test_() ->
 		<<>>
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_vary(V)) end} || V <- Tests].
+-endif.
+
+%% @doc Parse the X-Forwarded-For header.
+%%
+%% This header has no specification but *looks like* it is
+%% a list of tokens.
+%%
+%% This header is deprecated in favor of the Forwarded header.
+
+-spec parse_x_forwarded_for(binary()) -> [binary()].
+parse_x_forwarded_for(XForwardedFor) ->
+	nonempty(token_list(XForwardedFor, [])).
+
+-ifdef(TEST).
+parse_x_forwarded_for_test_() ->
+	Tests = [
+		{<<"client, proxy1, proxy2">>, [<<"client">>, <<"proxy1">>, <<"proxy2">>]},
+		{<<"128.138.243.150, unknown, 192.52.106.30">>, [<<"128.138.243.150">>, <<"unknown">>, <<"192.52.106.30">>]}
+	],
+	[{V, fun() -> R = parse_x_forwarded_for(V) end} || {V, R} <- Tests].
+
+parse_x_forwarded_for_error_test_() ->
+	Tests = [
+		<<>>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_x_forwarded_for(V)) end} || V <- Tests].
 -endif.
 
 %% Internal.

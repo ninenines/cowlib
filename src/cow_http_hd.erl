@@ -32,6 +32,7 @@
 -export([parse_etag/1]).
 -export([parse_expect/1]).
 -export([parse_expires/1]).
+-export([parse_host/1]).
 -export([parse_if_match/1]).
 -export([parse_if_modified_since/1]).
 -export([parse_if_none_match/1]).
@@ -1843,6 +1844,96 @@ horse_parse_expires_0() ->
 horse_parse_expires_invalid() ->
 	horse:repeat(200000,
 		parse_expires(<<"Thu, 01 Dec 1994 nope invalid">>)
+	).
+-endif.
+
+%% @doc Parse the Host header.
+%%
+%% We only seek to have legal characters and separate the
+%% host and port values. The number of segments in the host
+%% or the size of each segment is not checked.
+%%
+%% There is no way to distinguish IPv4 addresses from regular
+%% names until the last segment is reached therefore we do not
+%% differentiate them.
+%%
+%% The following valid hosts are currently rejected: IPv6
+%% addresses with a zone identifier; IPvFuture addresses;
+%% and percent-encoded addresses.
+
+-spec parse_host(binary()) -> {binary(), 0..65535 | undefined}.
+parse_host(<< $[, R/bits >>) ->
+	ipv6_address(R, << $[ >>);
+parse_host(Host) ->
+	reg_name(Host, <<>>).
+
+ipv6_address(<< $] >>, IP) -> {<< IP/binary, $] >>, undefined};
+ipv6_address(<< $], $:, Port/bits >>, IP) -> {<< IP/binary, $] >>, binary_to_integer(Port)};
+ipv6_address(<< C, R/bits >>, IP) when ?IS_HEX(C) orelse C =:= $: orelse C =:= $. ->
+	case C of
+		?INLINE_LOWERCASE(ipv6_address, R, IP)
+	end.
+
+reg_name(<<>>, Name) -> {Name, undefined};
+reg_name(<< $:, Port/bits >>, Name) -> {Name, binary_to_integer(Port)};
+reg_name(<< C, R/bits >>, Name) when ?IS_URI_UNRESERVED(C) orelse ?IS_URI_SUB_DELIMS(C) ->
+	case C of
+		?INLINE_LOWERCASE(reg_name, R, Name)
+	end.
+
+-ifdef(TEST).
+host_chars() -> "!$&'()*+,-.0123456789;=ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz~".
+host() -> vector(1, 255, elements(host_chars())).
+
+host_port() ->
+	?LET({Host, Port},
+		{host(), oneof([undefined, int(1, 65535)])},
+		begin
+			HostBin = list_to_binary(Host),
+			{{?INLINE_LOWERCASE_BC(HostBin), Port},
+				case Port of
+					undefined -> HostBin;
+					_ -> << HostBin/binary, $:, (integer_to_binary(Port))/binary >>
+				end}
+		end).
+
+prop_parse_host() ->
+	?FORALL({Res, Host}, host_port(), Res =:= parse_host(Host)).
+
+parse_host_test_() ->
+	Tests = [
+		{<<>>, {<<>>, undefined}},
+		{<<"www.example.org:8080">>, {<<"www.example.org">>, 8080}},
+		{<<"www.example.org">>, {<<"www.example.org">>, undefined}},
+		{<<"192.0.2.1:8080">>, {<<"192.0.2.1">>, 8080}},
+		{<<"192.0.2.1">>, {<<"192.0.2.1">>, undefined}},
+		{<<"[2001:db8::1]:8080">>, {<<"[2001:db8::1]">>, 8080}},
+		{<<"[2001:db8::1]">>, {<<"[2001:db8::1]">>, undefined}},
+		{<<"[::ffff:192.0.2.1]:8080">>, {<<"[::ffff:192.0.2.1]">>, 8080}},
+		{<<"[::ffff:192.0.2.1]">>, {<<"[::ffff:192.0.2.1]">>, undefined}}
+	],
+	[{V, fun() -> R = parse_host(V) end} || {V, R} <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_host_blue_example_org() ->
+	horse:repeat(200000,
+		parse_host(<<"blue.example.org:8080">>)
+	).
+
+horse_parse_host_ipv4() ->
+	horse:repeat(200000,
+		parse_host(<<"192.0.2.1:8080">>)
+	).
+
+horse_parse_host_ipv6() ->
+	horse:repeat(200000,
+		parse_host(<<"[2001:db8::1]:8080">>)
+	).
+
+horse_parse_host_ipv6_v4() ->
+	horse:repeat(200000,
+		parse_host(<<"[::ffff:192.0.2.1]:8080">>)
 	).
 -endif.
 

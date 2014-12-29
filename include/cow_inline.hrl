@@ -32,6 +32,10 @@
 	C =:= $Z
 ).
 
+%% IS_ALPHANUM(Character)
+
+-define(IS_ALPHANUM(C), ?IS_ALPHA(C) orelse ?IS_DIGIT(C)).
+
 %% IS_CHAR(Character)
 
 -define(IS_CHAR(C), C > 0, C < 128).
@@ -43,13 +47,18 @@
 	C =:= $5 orelse C =:= $6 orelse C =:= $7 orelse C =:= $8 orelse C =:= $9
 ).
 
-%% IS_ALPHANUM(Character)
-
--define(IS_ALPHANUM(C), ?IS_ALPHA(C) orelse ?IS_DIGIT(C)).
-
 %% IS_ETAGC(Character)
 
 -define(IS_ETAGC(C), C =:= 16#21; C >= 16#23, C =/= 16#7f).
+
+%% IS_HEX(Character)
+
+-define(IS_HEX(C),
+	?IS_DIGIT(C) orelse
+	C =:= $a orelse C =:= $b orelse C =:= $c orelse
+	C =:= $d orelse C =:= $e orelse C =:= $f orelse
+	C =:= $A orelse C =:= $B orelse C =:= $C orelse
+	C =:= $D orelse C =:= $E orelse C =:= $F).
 
 %% IS_TOKEN(Character)
 
@@ -59,6 +68,19 @@
 	orelse C =:= $' orelse C =:= $* orelse C =:= $+ orelse C =:= $- orelse C =:= $.
 	orelse C =:= $^ orelse C =:= $_ orelse C =:= $` orelse C =:= $| orelse C =:= $~
 ).
+
+%% IS_URI_UNRESERVED(Character)
+
+-define(IS_URI_UNRESERVED(C),
+	?IS_ALPHA(C) orelse ?IS_DIGIT(C) orelse
+	C =:= $- orelse C =:= $. orelse C =:= $_ orelse C =:= $~).
+
+%% IS_URI_SUB_DELIMS(Character)
+
+-define(IS_URI_SUB_DELIMS(C),
+	C =:= $! orelse C =:= $$ orelse C =:= $& orelse C =:= $' orelse
+	C =:= $( orelse C =:= $) orelse C =:= $* orelse C =:= $+ orelse
+	C =:= $, orelse C =:= $; orelse C =:= $=).
 
 %% IS_VCHAR(Character)
 

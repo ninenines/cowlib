@@ -1600,7 +1600,6 @@ media_charset_quoted(<< C, R/bits >>, T, S, P, V) when ?IS_VCHAR_OBS(C) ->
 	end.
 
 media_charset(<<>>, T, S, P, V) -> {T, S, lists:reverse([{<<"charset">>, V}|P])};
-
 media_charset(<< $;, R/bits >>, T, S, P, V) -> media_before_param(R, T, S, [{<<"charset">>, V}|P]);
 media_charset(<< $\s, R/bits >>, T, S, P, V) -> media_before_semicolon(R, T, S, [{<<"charset">>, V}|P]);
 media_charset(<< $\t, R/bits >>, T, S, P, V) -> media_before_semicolon(R, T, S, [{<<"charset">>, V}|P]);

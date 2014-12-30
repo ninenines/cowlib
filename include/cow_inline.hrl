@@ -60,6 +60,13 @@
 	C =:= $A orelse C =:= $B orelse C =:= $C orelse
 	C =:= $D orelse C =:= $E orelse C =:= $F).
 
+%% IS_LHEX(Character)
+
+-define(IS_LHEX(C),
+	?IS_DIGIT(C) orelse
+	C =:= $a orelse C =:= $b orelse C =:= $c orelse
+	C =:= $d orelse C =:= $e orelse C =:= $f).
+
 %% IS_TOKEN(Character)
 
 -define(IS_TOKEN(C),
@@ -68,6 +75,13 @@
 	orelse C =:= $' orelse C =:= $* orelse C =:= $+ orelse C =:= $- orelse C =:= $.
 	orelse C =:= $^ orelse C =:= $_ orelse C =:= $` orelse C =:= $| orelse C =:= $~
 ).
+
+%% IS_TOKEN68(Character)
+
+-define(IS_TOKEN68(C),
+	?IS_ALPHA(C) orelse ?IS_DIGIT(C) orelse
+		C =:= $- orelse C =:= $. orelse C =:= $_ orelse
+		C =:= $~ orelse C =:= $+ orelse C =:= $/).
 
 %% IS_URI_UNRESERVED(Character)
 

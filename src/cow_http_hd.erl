@@ -21,6 +21,7 @@
 -export([parse_accept_ranges/1]).
 -export([parse_age/1]).
 -export([parse_allow/1]).
+-export([parse_authorization/1]).
 -export([parse_cache_control/1]).
 -export([parse_connection/1]).
 -export([parse_content_encoding/1]).
@@ -813,6 +814,134 @@ parse_allow_test_() ->
 horse_parse_allow() ->
 	horse:repeat(200000,
 		parse_allow(<<"GET, HEAD, PUT">>)
+	).
+-endif.
+
+%% @doc Parse the Authorization header.
+%%
+%% We support Basic, Digest and Bearer schemes only.
+%%
+%% In the Digest case we do not validate that the mandatory
+%% fields are present. When parsing auth-params, we do not
+%% accept BWS characters around the "=".
+
+-spec parse_authorization(binary())
+	-> {basic, binary(), binary()}
+	| {bearer, binary()}
+	| {digest, [{binary(), binary()}]}.
+parse_authorization(<<"Basic ", R/bits >>) ->
+	auth_basic(base64:decode(R), <<>>);
+parse_authorization(<<"Bearer ", R/bits >>) when R =/= <<>> ->
+	validate_auth_bearer(R),
+	{bearer, R};
+parse_authorization(<<"Digest ", R/bits >>) ->
+	{digest, nonempty(auth_digest_list(R, []))}.
+
+auth_basic(<< $:, Password/bits >>, UserID) -> {basic, UserID, Password};
+auth_basic(<< C, R/bits >>, UserID) -> auth_basic(R, << UserID/binary, C >>).
+
+validate_auth_bearer(<< C, R/bits >>) when ?IS_TOKEN68(C) -> validate_auth_bearer(R);
+validate_auth_bearer(<< $=, R/bits >>) -> validate_auth_bearer_eq(R);
+validate_auth_bearer(<<>>) -> ok.
+
+validate_auth_bearer_eq(<< $=, R/bits >>) -> validate_auth_bearer_eq(R);
+validate_auth_bearer_eq(<<>>) -> ok.
+
+auth_digest_list(<<>>, Acc) -> lists:reverse(Acc);
+auth_digest_list(<< $\s, R/bits >>, Acc) -> auth_digest_list(R, Acc);
+auth_digest_list(<< $\t, R/bits >>, Acc) -> auth_digest_list(R, Acc);
+auth_digest_list(<< $,, R/bits >>, Acc) -> auth_digest_list(R, Acc);
+auth_digest_list(<< "algorithm=", C, R/bits >>, Acc) when ?IS_TOKEN(C) -> auth_digest_token(R, Acc, <<"algorithm">>, << C >>);
+auth_digest_list(<< "cnonce=\"", R/bits >>, Acc) -> auth_digest_quoted(R, Acc, <<"cnonce">>, <<>>);
+auth_digest_list(<< "qop=", C, R/bits >>, Acc) when ?IS_TOKEN(C) -> auth_digest_token(R, Acc, <<"qop">>, << C >>);
+auth_digest_list(<< "nc=", A, B, C, D, E, F, G, H, R/bits >>, Acc)
+		when ?IS_LHEX(A), ?IS_LHEX(B), ?IS_LHEX(C), ?IS_LHEX(D),
+			?IS_LHEX(E), ?IS_LHEX(F), ?IS_LHEX(G), ?IS_LHEX(H) ->
+	auth_digest_list_sep(R, [{<<"nc">>, << A, B, C, D, E, F, G, H >>}|Acc]);
+auth_digest_list(<< "nonce=\"", R/bits >>, Acc) -> auth_digest_quoted(R, Acc, <<"nonce">>, <<>>);
+auth_digest_list(<< "opaque=\"", R/bits >>, Acc) -> auth_digest_quoted(R, Acc, <<"opaque">>, <<>>);
+auth_digest_list(<< "realm=\"", R/bits >>, Acc) -> auth_digest_quoted(R, Acc, <<"realm">>, <<>>);
+auth_digest_list(<< "response=\"", R/bits >>, Acc) -> auth_digest_quoted(R, Acc, <<"response">>, <<>>);
+auth_digest_list(<< "uri=\"", R/bits >>, Acc) -> auth_digest_quoted(R, Acc, <<"uri">>, <<>>);
+auth_digest_list(<< "username=\"", R/bits >>, Acc) -> auth_digest_quoted(R, Acc, <<"username">>, <<>>);
+auth_digest_list(<< C, R/bits >>, Acc) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(auth_digest_param, R, Acc, <<>>)
+	end.
+
+auth_digest_param(<< $=, $", R/bits >>, Acc, K) -> auth_digest_quoted(R, Acc, K, <<>>);
+auth_digest_param(<< $=, C, R/bits >>, Acc, K) when ?IS_TOKEN(C) -> auth_digest_token(R, Acc, K, << C >>);
+auth_digest_param(<< C, R/bits >>, Acc, K) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(auth_digest_param, R, Acc, K)
+	end.
+
+auth_digest_token(<<>>, Acc, K, V) -> lists:reverse([{K, V}|Acc]);
+auth_digest_token(<< $,, R/bits >>, Acc, K, V) -> auth_digest_list(R, [{K, V}|Acc]);
+auth_digest_token(<< $\s, R/bits >>, Acc, K, V) -> auth_digest_list_sep(R, [{K, V}|Acc]);
+auth_digest_token(<< $\t, R/bits >>, Acc, K, V) -> auth_digest_list_sep(R, [{K, V}|Acc]);
+auth_digest_token(<< C, R/bits >>, Acc, K, V) when ?IS_TOKEN(C) -> auth_digest_token(R, Acc, K, << V/binary, C >>).
+
+auth_digest_quoted(<< $", R/bits >>, Acc, K, V) -> auth_digest_list_sep(R, [{K, V}|Acc]);
+auth_digest_quoted(<< $\\, C, R/bits >>, Acc, K, V) when ?IS_VCHAR_OBS(C) -> auth_digest_quoted(R, Acc, K, << V/binary, C >>);
+auth_digest_quoted(<< C, R/bits >>, Acc, K, V) when ?IS_VCHAR_OBS(C) -> auth_digest_quoted(R, Acc, K, << V/binary, C >>).
+
+auth_digest_list_sep(<<>>, Acc) -> lists:reverse(Acc);
+auth_digest_list_sep(<< $,, R/bits >>, Acc) -> auth_digest_list(R, Acc);
+auth_digest_list_sep(<< $\s, R/bits >>, Acc) -> auth_digest_list_sep(R, Acc);
+auth_digest_list_sep(<< $\t, R/bits >>, Acc) -> auth_digest_list_sep(R, Acc).
+
+-ifdef(TEST).
+parse_authorization_test_() ->
+	Tests = [
+		{<<"Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==">>, {basic, <<"Aladdin">>, <<"open sesame">>}},
+		{<<"Bearer mF_9.B5f-4.1JqM">>, {bearer, <<"mF_9.B5f-4.1JqM">>}},
+		{<<"Digest username=\"Mufasa\","
+				"realm=\"testrealm@host.com\","
+				"nonce=\"dcd98b7102dd2f0e8b11d0f600bfb0c093\","
+				"uri=\"/dir/index.html\","
+				"qop=auth,"
+				"nc=00000001,"
+				"cnonce=\"0a4f113b\","
+				"response=\"6629fae49393a05397450978507c4ef1\","
+				"opaque=\"5ccc069c403ebaf9f0171e9517f40e41\"">>,
+			{digest, [
+				{<<"username">>, <<"Mufasa">>},
+				{<<"realm">>, <<"testrealm@host.com">>},
+				{<<"nonce">>, <<"dcd98b7102dd2f0e8b11d0f600bfb0c093">>},
+				{<<"uri">>, <<"/dir/index.html">>},
+				{<<"qop">>, <<"auth">>},
+				{<<"nc">>, <<"00000001">>},
+				{<<"cnonce">>, <<"0a4f113b">>},
+				{<<"response">>, <<"6629fae49393a05397450978507c4ef1">>},
+				{<<"opaque">>, <<"5ccc069c403ebaf9f0171e9517f40e41">>}]}}
+	],
+	[{V, fun() -> R = parse_authorization(V) end} || {V, R} <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_authorization_basic() ->
+	horse:repeat(20000,
+		parse_authorization(<<"Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==">>)
+	).
+
+horse_parse_authorization_bearer() ->
+	horse:repeat(20000,
+		parse_authorization(<<"Bearer mF_9.B5f-4.1JqM">>)
+	).
+
+horse_parse_authorization_digest() ->
+	horse:repeat(20000,
+		parse_authorization(
+			<<"Digest username=\"Mufasa\","
+				"realm=\"testrealm@host.com\","
+				"nonce=\"dcd98b7102dd2f0e8b11d0f600bfb0c093\","
+				"uri=\"/dir/index.html\","
+				"qop=auth,"
+				"nc=00000001,"
+				"cnonce=\"0a4f113b\","
+				"response=\"6629fae49393a05397450978507c4ef1\","
+				"opaque=\"5ccc069c403ebaf9f0171e9517f40e41\"">>)
 	).
 -endif.
 

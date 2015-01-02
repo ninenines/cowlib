@@ -42,6 +42,7 @@
 -export([parse_last_modified/1]).
 -export([parse_max_forwards/1]).
 -export([parse_pragma/1]).
+-export([parse_proxy_authenticate/1]).
 -export([parse_proxy_authorization/1]).
 -export([parse_range/1]).
 -export([parse_retry_after/1]).
@@ -2287,6 +2288,15 @@ parse_max_forwards_error_test_() ->
 -spec parse_pragma(binary()) -> cache | no_cache.
 parse_pragma(<<"no-cache">>) -> no_cache;
 parse_pragma(_) -> cache.
+
+%% @doc Parse the Proxy-Authenticate header.
+%%
+%% Alias of parse_www_authenticate/1 due to identical syntax.
+
+-spec parse_proxy_authenticate(binary()) -> [{basic, binary()}
+	| {bearer | digest | binary(), [{binary(), binary()}]}].
+parse_proxy_authenticate(ProxyAuthenticate) ->
+	parse_www_authenticate(ProxyAuthenticate).
 
 %% @doc Parse the Proxy-Authorization header.
 %%

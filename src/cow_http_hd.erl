@@ -205,7 +205,7 @@ media_range_before_param(<< C, R/bits >>, Acc, T, S, P) when ?IS_TOKEN(C) ->
 	end.
 
 media_range_param(<< $=, $", R/bits >>, Acc, T, S, P, K) -> media_range_quoted(R, Acc, T, S, P, K, <<>>);
-media_range_param(<< $=, R/bits >>, Acc, T, S, P, K) -> media_range_value(R, Acc, T, S, P, K, <<>>);
+media_range_param(<< $=, C, R/bits >>, Acc, T, S, P, K) when ?IS_TOKEN(C) -> media_range_value(R, Acc, T, S, P, K, << C >>);
 media_range_param(<< C, R/bits >>, Acc, T, S, P, K) when ?IS_TOKEN(C) ->
 	case C of
 		?INLINE_LOWERCASE(media_range_param, R, Acc, T, S, P, K)
@@ -269,7 +269,7 @@ accept_ext(<< $;, R/bits >>, Acc, T, S, P, Q, E, K) -> accept_before_ext(R, Acc,
 accept_ext(<< $\s, R/bits >>, Acc, T, S, P, Q, E, K) -> accept_before_semicolon(R, Acc, T, S, P, Q, [K|E]);
 accept_ext(<< $\t, R/bits >>, Acc, T, S, P, Q, E, K) -> accept_before_semicolon(R, Acc, T, S, P, Q, [K|E]);
 accept_ext(<< $=, $", R/bits >>, Acc, T, S, P, Q, E, K) -> accept_quoted(R, Acc, T, S, P, Q, E, K, <<>>);
-accept_ext(<< $=, R/bits >>, Acc, T, S, P, Q, E, K) -> accept_value(R, Acc, T, S, P, Q, E, K, <<>>);
+accept_ext(<< $=, C, R/bits >>, Acc, T, S, P, Q, E, K) when ?IS_TOKEN(C) -> accept_value(R, Acc, T, S, P, Q, E, K, << C >>);
 accept_ext(<< C, R/bits >>, Acc, T, S, P, Q, E, K) when ?IS_TOKEN(C) ->
 	case C of
 		?INLINE_LOWERCASE(accept_ext, R, Acc, T, S, P, Q, E, K)
@@ -1741,7 +1741,7 @@ media_charset(<< C, R/bits >>, T, S, P, V) when ?IS_TOKEN(C) ->
 	end.
 
 media_param(<< $=, $", R/bits >>, T, S, P, K) -> media_quoted(R, T, S, P, K, <<>>);
-media_param(<< $=, R/bits >>, T, S, P, K) -> media_value(R, T, S, P, K, <<>>);
+media_param(<< $=, C, R/bits >>, T, S, P, K) when ?IS_TOKEN(C) -> media_value(R, T, S, P, K, << C >>);
 media_param(<< C, R/bits >>, T, S, P, K) when ?IS_TOKEN(C) ->
 	case C of
 		?INLINE_LOWERCASE(media_param, R, T, S, P, K)

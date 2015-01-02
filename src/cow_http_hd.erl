@@ -57,6 +57,7 @@
 -export([parse_transfer_encoding/1]).
 -export([parse_upgrade/1]).
 -export([parse_vary/1]).
+-export([parse_www_authenticate/1]).
 -export([parse_x_forwarded_for/1]).
 
 -type etag() :: {weak | strong, binary()}.
@@ -3075,6 +3076,174 @@ parse_vary_error_test_() ->
 		<<>>
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_vary(V)) end} || V <- Tests].
+-endif.
+
+%% @doc Parse the WWW-Authenticate header.
+%%
+%% Unknown schemes are represented as the lowercase binary
+%% instead of an atom. Unlike with parse_authorization/1,
+%% we do not crash on unknown schemes.
+%%
+%% When parsing auth-params, we do not accept BWS characters around the "=".
+
+-spec parse_www_authenticate(binary()) -> [{basic, binary()}
+	| {bearer | digest | binary(), [{binary(), binary()}]}].
+parse_www_authenticate(Authenticate) ->
+	nonempty(www_auth_list(Authenticate, [])).
+
+-define(IS_WS(C), C =:= $\s orelse C =:= $\t).
+-define(IS_WS_COMMA(C), ?IS_WS(C) orelse C =:= $,).
+
+www_auth_list(<<>>, Acc) -> lists:reverse(Acc);
+www_auth_list(<< C, R/bits >>, Acc) when ?IS_WS_COMMA(C) -> www_auth_list(R, Acc);
+www_auth_list(<< C, R/bits >>, Acc) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(www_auth_scheme, R, Acc, <<>>)
+	end.
+
+www_auth_basic_before_realm(<< C, R/bits >>, Acc) when ?IS_WS(C) -> www_auth_basic_before_realm(R, Acc);
+www_auth_basic_before_realm(<< "realm=\"", R/bits >>, Acc) -> www_auth_basic(R, Acc, <<>>).
+
+www_auth_basic(<< $", R/bits >>, Acc, Realm) -> www_auth_list_sep(R, [{basic, Realm}|Acc]);
+www_auth_basic(<< $\\, C, R/bits >>, Acc, Realm) when ?IS_VCHAR_OBS(C) -> www_auth_basic(R, Acc, << Realm/binary, C >>);
+www_auth_basic(<< C, R/bits >>, Acc, Realm) when ?IS_VCHAR_OBS(C) -> www_auth_basic(R, Acc, << Realm/binary, C >>).
+
+www_auth_scheme(<< C, R/bits >>, Acc, Scheme) when ?IS_WS(C) ->
+	case Scheme of
+		<<"basic">> -> www_auth_basic_before_realm(R, Acc);
+		<<"bearer">> -> www_auth_params_list(R, Acc, bearer, []);
+		<<"digest">> -> www_auth_params_list(R, Acc, digest, []);
+		_ -> www_auth_params_list(R, Acc, Scheme, [])
+	end;
+www_auth_scheme(<< C, R/bits >>, Acc, Scheme) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(www_auth_scheme, R, Acc, Scheme)
+	end.
+
+www_auth_list_sep(<<>>, Acc) -> lists:reverse(Acc);
+www_auth_list_sep(<< C, R/bits >>, Acc) when ?IS_WS(C) -> www_auth_list_sep(R, Acc);
+www_auth_list_sep(<< $,, R/bits >>, Acc) -> www_auth_list(R, Acc).
+
+www_auth_params_list(<<>>, Acc, Scheme, Params) ->
+	lists:reverse([{Scheme, lists:reverse(nonempty(Params))}|Acc]);
+www_auth_params_list(<< C, R/bits >>, Acc, Scheme, Params) when ?IS_WS_COMMA(C) ->
+	www_auth_params_list(R, Acc, Scheme, Params);
+www_auth_params_list(<< "algorithm=", C, R/bits >>, Acc, Scheme, Params) when ?IS_TOKEN(C) ->
+	www_auth_token(R, Acc, Scheme, Params, <<"algorithm">>, << C >>);
+www_auth_params_list(<< "domain=\"", R/bits >>, Acc, Scheme, Params) ->
+	www_auth_quoted(R, Acc, Scheme, Params, <<"domain">>, <<>>);
+www_auth_params_list(<< "error=\"", R/bits >>, Acc, Scheme, Params) ->
+	www_auth_quoted(R, Acc, Scheme, Params, <<"error">>, <<>>);
+www_auth_params_list(<< "error_description=\"", R/bits >>, Acc, Scheme, Params) ->
+	www_auth_quoted(R, Acc, Scheme, Params, <<"error_description">>, <<>>);
+www_auth_params_list(<< "error_uri=\"", R/bits >>, Acc, Scheme, Params) ->
+	www_auth_quoted(R, Acc, Scheme, Params, <<"error_uri">>, <<>>);
+www_auth_params_list(<< "nonce=\"", R/bits >>, Acc, Scheme, Params) ->
+	www_auth_quoted(R, Acc, Scheme, Params, <<"nonce">>, <<>>);
+www_auth_params_list(<< "opaque=\"", R/bits >>, Acc, Scheme, Params) ->
+	www_auth_quoted(R, Acc, Scheme, Params, <<"opaque">>, <<>>);
+www_auth_params_list(<< "qop=\"", R/bits >>, Acc, Scheme, Params) ->
+	www_auth_quoted(R, Acc, Scheme, Params, <<"qop">>, <<>>);
+www_auth_params_list(<< "realm=\"", R/bits >>, Acc, Scheme, Params) ->
+	www_auth_quoted(R, Acc, Scheme, Params, <<"realm">>, <<>>);
+www_auth_params_list(<< "scope=\"", R/bits >>, Acc, Scheme, Params) ->
+	www_auth_quoted(R, Acc, Scheme, Params, <<"scope">>, <<>>);
+www_auth_params_list(<< "stale=false", R/bits >>, Acc, Scheme, Params) ->
+	www_auth_params_list_sep(R, Acc, Scheme, [{<<"stale">>, <<"false">>}|Params]);
+www_auth_params_list(<< "stale=true", R/bits >>, Acc, Scheme, Params) ->
+	www_auth_params_list_sep(R, Acc, Scheme, [{<<"stale">>, <<"true">>}|Params]);
+www_auth_params_list(<< C, R/bits >>, Acc, Scheme, Params) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(www_auth_param, R, Acc, Scheme, Params, <<>>)
+	end.
+
+www_auth_param(<< $=, $", R/bits >>, Acc, Scheme, Params, K) ->
+	www_auth_quoted(R, Acc, Scheme, Params, K, <<>>);
+www_auth_param(<< $=, C, R/bits >>, Acc, Scheme, Params, K) when ?IS_TOKEN(C) ->
+	www_auth_token(R, Acc, Scheme, Params, K, << C >>);
+www_auth_param(<< C, R/bits >>, Acc, Scheme, Params, K) when ?IS_TOKEN(C) ->
+	case C of
+		?INLINE_LOWERCASE(www_auth_param, R, Acc, Scheme, Params, K)
+	end;
+www_auth_param(R, Acc, Scheme, Params, NewScheme) ->
+	www_auth_scheme(R, [{Scheme, lists:reverse(Params)}|Acc], NewScheme).
+
+www_auth_token(<< C, R/bits >>, Acc, Scheme, Params, K, V) when ?IS_TOKEN(C) ->
+	www_auth_token(R, Acc, Scheme, Params, K, << V/binary, C >>);
+www_auth_token(R, Acc, Scheme, Params, K, V) ->
+	www_auth_params_list_sep(R, Acc, Scheme, [{K, V}|Params]).
+
+www_auth_quoted(<< $", R/bits >>, Acc, Scheme, Params, K, V) ->
+	www_auth_params_list_sep(R, Acc, Scheme, [{K, V}|Params]);
+www_auth_quoted(<< $\\, C, R/bits >>, Acc, Scheme, Params, K, V) when ?IS_VCHAR_OBS(C) ->
+	www_auth_quoted(R, Acc, Scheme, Params, K, << V/binary, C >>);
+www_auth_quoted(<< C, R/bits >>, Acc, Scheme, Params, K, V) when ?IS_VCHAR_OBS(C) ->
+	www_auth_quoted(R, Acc, Scheme, Params, K, << V/binary, C >>).
+
+www_auth_params_list_sep(<<>>, Acc, Scheme, Params) ->
+	lists:reverse([{Scheme, lists:reverse(Params)}|Acc]);
+www_auth_params_list_sep(<< C, R/bits >>, Acc, Scheme, Params) when ?IS_WS(C) ->
+	www_auth_params_list_sep(R, Acc, Scheme, Params);
+www_auth_params_list_sep(<< $,, R/bits >>, Acc, Scheme, Params) ->
+	www_auth_params_list_after_sep(R, Acc, Scheme, Params).
+
+www_auth_params_list_after_sep(<<>>, Acc, Scheme, Params) ->
+	lists:reverse([{Scheme, lists:reverse(Params)}|Acc]);
+www_auth_params_list_after_sep(<< C, R/bits >>, Acc, Scheme, Params) when ?IS_WS_COMMA(C) ->
+	www_auth_params_list_after_sep(R, Acc, Scheme, Params);
+www_auth_params_list_after_sep(R, Acc, Scheme, Params) ->
+	www_auth_params_list(R, Acc, Scheme, Params).
+
+-ifdef(TEST).
+parse_www_authenticate_test_() ->
+	Tests = [
+		{<<"Newauth realm=\"apps\", type=1, title=\"Login to \\\"apps\\\"\", Basic realm=\"simple\"">>,
+			[{<<"newauth">>, [
+				{<<"realm">>, <<"apps">>},
+				{<<"type">>, <<"1">>},
+				{<<"title">>, <<"Login to \"apps\"">>}]},
+			{basic, <<"simple">>}]},
+		%% Same test, different order.
+		{<<"Basic realm=\"simple\", Newauth realm=\"apps\", type=1, title=\"Login to \\\"apps\\\"\"">>,
+			[{basic, <<"simple">>},
+			{<<"newauth">>, [
+				{<<"realm">>, <<"apps">>},
+				{<<"type">>, <<"1">>},
+				{<<"title">>, <<"Login to \"apps\"">>}]}]},
+		{<<"Bearer realm=\"example\"">>,
+			[{bearer, [{<<"realm">>, <<"example">>}]}]},
+		{<<"Bearer realm=\"example\", error=\"invalid_token\", error_description=\"The access token expired\"">>,
+			[{bearer, [
+				{<<"realm">>, <<"example">>},
+				{<<"error">>, <<"invalid_token">>},
+				{<<"error_description">>, <<"The access token expired">>}
+			]}]},
+		{<<"Basic realm=\"WallyWorld\"">>,
+			[{basic, <<"WallyWorld">>}]},
+		{<<"Digest realm=\"testrealm@host.com\", qop=\"auth,auth-int\", "
+				"nonce=\"dcd98b7102dd2f0e8b11d0f600bfb0c093\", "
+				"opaque=\"5ccc069c403ebaf9f0171e9517f40e41\"">>,
+			[{digest, [
+				{<<"realm">>, <<"testrealm@host.com">>},
+				{<<"qop">>, <<"auth,auth-int">>},
+				{<<"nonce">>, <<"dcd98b7102dd2f0e8b11d0f600bfb0c093">>},
+				{<<"opaque">>, <<"5ccc069c403ebaf9f0171e9517f40e41">>}
+			]}]}
+	],
+	[{V, fun() -> R = parse_www_authenticate(V) end} || {V, R} <- Tests].
+
+parse_www_authenticate_error_test_() ->
+	Tests = [
+		<<>>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_www_authenticate(V)) end} || V <- Tests].
+-endif.
+
+-ifdef(PERF).
+horse_parse_www_authenticate() ->
+	horse:repeat(200000,
+		parse_www_authenticate(<<"Newauth realm=\"apps\", type=1, title=\"Login to \\\"apps\\\"\", Basic realm=\"simple\"">>)
+	).
 -endif.
 
 %% @doc Parse the X-Forwarded-For header.

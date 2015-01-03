@@ -16,50 +16,99 @@
 
 -export([parse_accept/1]).
 -export([parse_accept_charset/1]).
+% @todo -export([parse_accept_datetime/1]). RFC7089
 -export([parse_accept_encoding/1]).
+% @todo -export([parse_accept_features/1]). RFC2295
 -export([parse_accept_language/1]).
 -export([parse_accept_ranges/1]).
+% @todo -export([parse_access_control_allow_credentials/1]). CORS
+% @todo -export([parse_access_control_allow_headers/1]). CORS
+% @todo -export([parse_access_control_allow_methods/1]). CORS
+% @todo -export([parse_access_control_allow_origin/1]). CORS
+% @todo -export([parse_access_control_expose_headers/1]). CORS
+% @todo -export([parse_access_control_max_age/1]). CORS
+% @todo -export([parse_access_control_request_headers/1]). CORS
+% @todo -export([parse_access_control_request_method/1]). CORS
 -export([parse_age/1]).
 -export([parse_allow/1]).
+% @todo -export([parse_alternates/1]). RFC2295
+% @todo -export([parse_authentication_info/1]). RFC2617
 -export([parse_authorization/1]).
 -export([parse_cache_control/1]).
 -export([parse_connection/1]).
+% @todo -export([parse_content_disposition/1]). RFC6266
 -export([parse_content_encoding/1]).
 -export([parse_content_language/1]).
 -export([parse_content_length/1]).
+% @todo -export([parse_content_location/1]). RFC7231
+% @todo -export([parse_content_md5/1]). RFC2616 (deprecated)
 -export([parse_content_range/1]).
+% @todo -export([parse_content_security_policy/1]). CSP
+% @todo -export([parse_content_security_policy_report_only/1]). CSP
 -export([parse_content_type/1]).
+% @todo -export([parse_cookie/1]). RFC6265
 -export([parse_date/1]).
+% @todo -export([parse_digest/1]). RFC3230
+% @todo -export([parse_dnt/1]). http://donottrack.us/
 -export([parse_etag/1]).
 -export([parse_expect/1]).
 -export([parse_expires/1]).
+% @todo -export([parse_forwarded/1]). RFC7239
+% @todo -export([parse_from/1]). RFC7231
 -export([parse_host/1]).
+% @todo -export([parse_http2_settings/1]). HTTP/2 (upcoming)
 -export([parse_if_match/1]).
 -export([parse_if_modified_since/1]).
 -export([parse_if_none_match/1]).
 -export([parse_if_range/1]).
 -export([parse_if_unmodified_since/1]).
+% @todo -export([parse_last_event_id/1]). eventsource
 -export([parse_last_modified/1]).
+% @todo -export([parse_link/1]). RFC5988
+% @todo -export([parse_location/1]). RFC7231
 -export([parse_max_forwards/1]).
+% @todo -export([parse_memento_datetime/1]). RFC7089
+% @todo -export([parse_negotiate/1]). RFC2295
+% @todo -export([parse_origin/1]). CORS, RFC6454
 -export([parse_pragma/1]).
+% @todo -export([parse_prefer/1]). RFC7240
 -export([parse_proxy_authenticate/1]).
+% @todo -export([parse_proxy_authentication_info/1]). RFC2617
 -export([parse_proxy_authorization/1]).
+% @todo -export([parse_proxy_support/1]). RFC4559
+% @todo -export([parse_public_key_pins/1]). Key Pinning (upcoming)
+% @todo -export([parse_public_key_pins_report_only/1]). Key Pinning (upcoming)
 -export([parse_range/1]).
+% @todo -export([parse_referer/1]). RFC7231
+% @todo -export([parse_refresh/1]). Non-standard (examples: "5", "5; url=http://example.com/")
 -export([parse_retry_after/1]).
 -export([parse_sec_websocket_accept/1]).
 -export([parse_sec_websocket_extensions/1]).
 -export([parse_sec_websocket_key/1]).
+% @todo -export([parse_sec_websocket_origin/1]). Websocket drafts 7 and 8
 -export([parse_sec_websocket_protocol_req/1]).
 -export([parse_sec_websocket_protocol_resp/1]).
 -export([parse_sec_websocket_version_req/1]).
 -export([parse_sec_websocket_version_resp/1]).
+% @todo -export([parse_server/1]). RFC7231
+% @todo -export([parse_set_cookie/1]). RFC6265
+% @todo -export([parse_strict_transport_security/1]). RFC6797
+% @todo -export([parse_tcn/1]). RFC2295
 -export([parse_te/1]).
 -export([parse_trailer/1]).
 -export([parse_transfer_encoding/1]).
 -export([parse_upgrade/1]).
+% @todo -export([parse_user_agent/1]). RFC7231
+% @todo -export([parse_variant_vary/1]). RFC2295
 -export([parse_vary/1]).
+% @todo -export([parse_via/1]). RFC7230
+% @todo -export([parse_want_digest/1]). RFC3230
+% @todo -export([parse_warning/1]). RFC7234
 -export([parse_www_authenticate/1]).
+% @todo -export([parse_x_content_duration/1]). Gecko/MDN (value: float)
+% @todo -export([parse_x_dns_prefetch_control/1]). Various (value: "on"|"off")
 -export([parse_x_forwarded_for/1]).
+% @todo -export([parse_x_frame_options/1]). RFC7034
 
 -type etag() :: {weak | strong, binary()}.
 -export_type([etag/0]).

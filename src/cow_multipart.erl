@@ -192,7 +192,7 @@ parse_hd_name(<< C, Rest/bits >>, H, SoFar) ->
 		$: -> parse_hd_before_value(Rest, H, SoFar);
 		$\s -> parse_hd_name_ws(Rest, H, SoFar);
 		$\t -> parse_hd_name_ws(Rest, H, SoFar);
-		?INLINE_LOWERCASE(parse_hd_name, Rest, H, SoFar)
+		_ -> ?LOWER(parse_hd_name, Rest, H, SoFar)
 	end.
 
 parse_hd_name_ws(<< C, Rest/bits >>, H, Name) ->
@@ -546,7 +546,7 @@ parse_cd_type(<< C, Rest/bits >>, Acc) ->
 		$; -> {Acc, parse_before_param(Rest, [])};
 		$\s -> {Acc, parse_before_param(Rest, [])};
 		$\t -> {Acc, parse_before_param(Rest, [])};
-		?INLINE_LOWERCASE(parse_cd_type, Rest, Acc)
+		_ -> ?LOWER(parse_cd_type, Rest, Acc)
 	end.
 
 -ifdef(TEST).
@@ -600,7 +600,7 @@ horse_parse_content_disposition_inline() ->
 
 -spec parse_content_transfer_encoding(binary()) -> binary().
 parse_content_transfer_encoding(Bin) ->
-	?INLINE_LOWERCASE_BC(Bin).
+	?LOWER(Bin).
 
 -ifdef(TEST).
 parse_content_transfer_encoding_test_() ->
@@ -636,7 +636,7 @@ parse_content_type(Bin) ->
 parse_ct_type(<< C, Rest/bits >>, Acc) ->
 	case C of
 		$/ -> parse_ct_subtype(Rest, Acc, <<>>);
-		?INLINE_LOWERCASE(parse_ct_type, Rest, Acc)
+		_ -> ?LOWER(parse_ct_type, Rest, Acc)
 	end.
 
 parse_ct_subtype(<<>>, Type, Subtype) when Subtype =/= <<>> ->
@@ -646,7 +646,7 @@ parse_ct_subtype(<< C, Rest/bits >>, Type, Acc) ->
 		$; -> {Type, Acc, parse_before_param(Rest, [])};
 		$\s -> {Type, Acc, parse_before_param(Rest, [])};
 		$\t -> {Type, Acc, parse_before_param(Rest, [])};
-		?INLINE_LOWERCASE(parse_ct_subtype, Rest, Type, Acc)
+		_ -> ?LOWER(parse_ct_subtype, Rest, Type, Acc)
 	end.
 
 -ifdef(TEST).
@@ -710,7 +710,7 @@ parse_before_param(<< C, Rest/bits >>, Params) ->
 		$; -> parse_before_param(Rest, Params);
 		$\s -> parse_before_param(Rest, Params);
 		$\t -> parse_before_param(Rest, Params);
-		?INLINE_LOWERCASE(parse_param_name, Rest, Params, <<>>)
+		_ -> ?LOWER(parse_param_name, Rest, Params, <<>>)
 	end.
 
 parse_param_name(<<>>, Params, Acc) ->
@@ -718,7 +718,7 @@ parse_param_name(<<>>, Params, Acc) ->
 parse_param_name(<< C, Rest/bits >>, Params, Acc) ->
 	case C of
 		$= -> parse_param_value(Rest, Params, Acc);
-		?INLINE_LOWERCASE(parse_param_name, Rest, Params, Acc)
+		_ -> ?LOWER(parse_param_name, Rest, Params, Acc)
 	end.
 
 parse_param_value(<<>>, Params, Name) ->

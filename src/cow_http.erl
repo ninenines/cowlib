@@ -122,7 +122,7 @@ parse_hd_name(<< C, Rest/bits >>, Acc, SoFar) ->
 		$: -> parse_hd_before_value(Rest, Acc, SoFar);
 		$\s -> parse_hd_name_ws(Rest, Acc, SoFar);
 		$\t -> parse_hd_name_ws(Rest, Acc, SoFar);
-		?INLINE_LOWERCASE(parse_hd_name, Rest, Acc, SoFar)
+		_ -> ?LOWER(parse_hd_name, Rest, Acc, SoFar)
 	end.
 
 parse_hd_name_ws(<< C, Rest/bits >>, Acc, Name) ->

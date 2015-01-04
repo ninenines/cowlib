@@ -123,6 +123,7 @@
 -export_type([websocket_version/0]).
 
 -include("cow_inline.hrl").
+-include("cow_parse.hrl").
 
 -ifdef(TEST).
 -include_lib("triq/include/triq.hrl").
@@ -210,130 +211,78 @@ parse_accept(<<"*/*">>) ->
 parse_accept(Accept) ->
 	media_range_list(Accept, []).
 
-media_range_list(<<>>, Acc) -> lists:reverse(Acc);
-media_range_list(<< $\s, R/bits >>, Acc) -> media_range_list(R, Acc);
-media_range_list(<< $\t, R/bits >>, Acc) -> media_range_list(R, Acc);
-media_range_list(<< $,, R/bits >>, Acc) -> media_range_list(R, Acc);
-media_range_list(<< C, R/bits >>, Acc) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(media_range_type, R, Acc, <<>>)
-	end.
+media_range_list(<< C, R/bits >>, Acc) when ?IS_TOKEN(C) -> ?LOWER(media_range_type, R, Acc, <<>>);
+media_range_list(<< C, R/bits >>, Acc) when ?IS_WS_COMMA(C) -> media_range_list(R, Acc);
+media_range_list(<<>>, Acc) -> lists:reverse(Acc).
 
-media_range_type(<< $/, R/bits >>, Acc, T) -> media_range_subtype(R, Acc, T, <<>>);
+media_range_type(<< C, R/bits >>, Acc, T) when ?IS_TOKEN(C) -> ?LOWER(media_range_type, R, Acc, T);
+media_range_type(<< $/, C, R/bits >>, Acc, T) when ?IS_TOKEN(C) -> ?LOWER(media_range_subtype, R, Acc, T, <<>>);
 %% Special clause for badly behaving user agents that send * instead of */*.
-media_range_type(<< $;, R/bits >>, Acc, <<"*">>) -> media_range_before_param(R, Acc, <<"*">>, <<"*">>, []);
-media_range_type(<< C, R/bits >>, Acc, T) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(media_range_type, R, Acc, T)
-	end.
+media_range_type(<< $;, R/bits >>, Acc, <<"*">>) -> media_range_before_param(R, Acc, <<"*">>, <<"*">>, []).
 
-media_range_subtype(<<>>, Acc, T, S) when S =/= <<>> -> lists:reverse([{{T, S, []}, 1000, []}|Acc]);
-media_range_subtype(<< $,, R/bits >>, Acc, T, S) when S =/= <<>> -> media_range_list(R, [{{T, S, []}, 1000, []}|Acc]);
-media_range_subtype(<< $;, R/bits >>, Acc, T, S) when S =/= <<>> -> media_range_before_param(R, Acc, T, S, []);
-media_range_subtype(<< $\s, R/bits >>, Acc, T, S) when S =/= <<>> -> media_range_before_semicolon(R, Acc, T, S, []);
-media_range_subtype(<< $\t, R/bits >>, Acc, T, S) when S =/= <<>> -> media_range_before_semicolon(R, Acc, T, S, []);
-media_range_subtype(<< C, R/bits >>, Acc, T, S) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(media_range_subtype, R, Acc, T, S)
-	end.
+media_range_subtype(<< C, R/bits >>, Acc, T, S) when ?IS_TOKEN(C) -> ?LOWER(media_range_subtype, R, Acc, T, S);
+media_range_subtype(R, Acc, T, S) -> media_range_param_sep(R, Acc, T, S, []).
 
-media_range_before_semicolon(<<>>, Acc, T, S, P) -> lists:reverse([{{T, S, lists:reverse(P)}, 1000, []}|Acc]);
-media_range_before_semicolon(<< $,, R/bits >>, Acc, T, S, P) -> media_range_list(R, [{{T, S, lists:reverse(P)}, 1000, []}|Acc]);
-media_range_before_semicolon(<< $;, R/bits >>, Acc, T, S, P) -> media_range_before_param(R, Acc, T, S, P);
-media_range_before_semicolon(<< $\s, R/bits >>, Acc, T, S, P) -> media_range_before_semicolon(R, Acc, T, S, P);
-media_range_before_semicolon(<< $\t, R/bits >>, Acc, T, S, P) -> media_range_before_semicolon(R, Acc, T, S, P).
+media_range_param_sep(<<>>, Acc, T, S, P) -> lists:reverse([{{T, S, lists:reverse(P)}, 1000, []}|Acc]);
+media_range_param_sep(<< $,, R/bits >>, Acc, T, S, P) -> media_range_list(R, [{{T, S, lists:reverse(P)}, 1000, []}|Acc]);
+media_range_param_sep(<< $;, R/bits >>, Acc, T, S, P) -> media_range_before_param(R, Acc, T, S, P);
+media_range_param_sep(<< C, R/bits >>, Acc, T, S, P) when ?IS_WS(C) -> media_range_param_sep(R, Acc, T, S, P).
 
-media_range_before_param(<< $\s, R/bits >>, Acc, T, S, P) -> media_range_before_param(R, Acc, T, S, P);
-media_range_before_param(<< $\t, R/bits >>, Acc, T, S, P) -> media_range_before_param(R, Acc, T, S, P);
-%% Special clause for badly behaving user agents that send .123 instead of 0.123.
-media_range_before_param(<< $q, $=, $., R/bits >>, Acc, T, S, P) -> media_range_broken_weight(R, Acc, T, S, P);
+media_range_before_param(<< C, R/bits >>, Acc, T, S, P) when ?IS_WS(C) -> media_range_before_param(R, Acc, T, S, P);
 media_range_before_param(<< $q, $=, R/bits >>, Acc, T, S, P) -> media_range_weight(R, Acc, T, S, P);
-media_range_before_param(<< C, R/bits >>, Acc, T, S, P) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(media_range_param, R, Acc, T, S, P, <<>>)
-	end.
+media_range_before_param(<< C, R/bits >>, Acc, T, S, P) when ?IS_TOKEN(C) -> ?LOWER(media_range_param, R, Acc, T, S, P, <<>>).
 
 media_range_param(<< $=, $", R/bits >>, Acc, T, S, P, K) -> media_range_quoted(R, Acc, T, S, P, K, <<>>);
 media_range_param(<< $=, C, R/bits >>, Acc, T, S, P, K) when ?IS_TOKEN(C) -> media_range_value(R, Acc, T, S, P, K, << C >>);
-media_range_param(<< C, R/bits >>, Acc, T, S, P, K) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(media_range_param, R, Acc, T, S, P, K)
-	end.
+media_range_param(<< C, R/bits >>, Acc, T, S, P, K) when ?IS_TOKEN(C) -> ?LOWER(media_range_param, R, Acc, T, S, P, K).
 
-media_range_quoted(<< $", R/bits >>, Acc, T, S, P, K, V) -> media_range_before_semicolon(R, Acc, T, S, [{K, V}|P]);
+media_range_quoted(<< $", R/bits >>, Acc, T, S, P, K, V) -> media_range_param_sep(R, Acc, T, S, [{K, V}|P]);
 media_range_quoted(<< $\\, C, R/bits >>, Acc, T, S, P, K, V) when ?IS_VCHAR_OBS(C) -> media_range_quoted(R, Acc, T, S, P, K, << V/binary, C >>);
 media_range_quoted(<< C, R/bits >>, Acc, T, S, P, K, V) when ?IS_VCHAR_OBS(C) -> media_range_quoted(R, Acc, T, S, P, K, << V/binary, C >>).
 
-media_range_value(<<>>, Acc, T, S, P, K, V) -> lists:reverse([{{T, S, lists:reverse([{K, V}|P])}, 1000, []}|Acc]);
-media_range_value(<< $,, R/bits >>, Acc, T, S, P, K, V) -> media_range_list(R, [{{T, S, lists:reverse([{K, V}|P])}, 1000, []}|Acc]);
-media_range_value(<< $;, R/bits >>, Acc, T, S, P, K, V) -> media_range_before_param(R, Acc, T, S, [{K, V}|P]);
-media_range_value(<< $\s, R/bits >>, Acc, T, S, P, K, V) -> media_range_before_semicolon(R, Acc, T, S, [{K, V}|P]);
-media_range_value(<< $\t, R/bits >>, Acc, T, S, P, K, V) -> media_range_before_semicolon(R, Acc, T, S, [{K, V}|P]);
-media_range_value(<< C, R/bits >>, Acc, T, S, P, K, V) when ?IS_TOKEN(C) -> media_range_value(R, Acc, T, S, P, K, << V/binary, C >>).
+media_range_value(<< C, R/bits >>, Acc, T, S, P, K, V) when ?IS_TOKEN(C) -> media_range_value(R, Acc, T, S, P, K, << V/binary, C >>);
+media_range_value(R, Acc, T, S, P, K, V) -> media_range_param_sep(R, Acc, T, S, [{K, V}|P]).
 
-%% Special function for badly behaving user agents that send .123 instead of 0.123.
-media_range_broken_weight(<< A, B, C, R/bits >>, Acc, T, S, P)
-	when A >= $0, A =< $9, B >= $0, B =< $9, C >= $0, C =< $9 ->
-		accept_before_semicolon(R, Acc, T, S, P, (A - $0) * 100 + (B - $0) * 10 + (C - $0), []);
-media_range_broken_weight(<< A, B, R/bits >>, Acc, T, S, P)
-	when A >= $0, A =< $9, B >= $0, B =< $9 ->
-		accept_before_semicolon(R, Acc, T, S, P, (A - $0) * 100 + (B - $0) * 10, []);
-media_range_broken_weight(<< A, R/bits >>, Acc, T, S, P)
-	when A >= $0, A =< $9 ->
-		accept_before_semicolon(R, Acc, T, S, P, (A - $0) * 100, []).
+media_range_weight(<< "1.000", R/bits >>, Acc, T, S, P) -> accept_ext_sep(R, Acc, T, S, P, 1000, []);
+media_range_weight(<< "1.00", R/bits >>, Acc, T, S, P) -> accept_ext_sep(R, Acc, T, S, P, 1000, []);
+media_range_weight(<< "1.0", R/bits >>, Acc, T, S, P) -> accept_ext_sep(R, Acc, T, S, P, 1000, []);
+media_range_weight(<< "1.", R/bits >>, Acc, T, S, P) -> accept_ext_sep(R, Acc, T, S, P, 1000, []);
+media_range_weight(<< "1", R/bits >>, Acc, T, S, P) -> accept_ext_sep(R, Acc, T, S, P, 1000, []);
+media_range_weight(<< "0.", A, B, C, R/bits >>, Acc, T, S, P) when ?IS_DIGIT(A), ?IS_DIGIT(B), ?IS_DIGIT(C) ->
+	accept_ext_sep(R, Acc, T, S, P, (A - $0) * 100 + (B - $0) * 10 + (C - $0), []);
+media_range_weight(<< "0.", A, B, R/bits >>, Acc, T, S, P) when ?IS_DIGIT(A), ?IS_DIGIT(B) ->
+	accept_ext_sep(R, Acc, T, S, P, (A - $0) * 100 + (B - $0) * 10, []);
+media_range_weight(<< "0.", A, R/bits >>, Acc, T, S, P) when ?IS_DIGIT(A) ->
+	accept_ext_sep(R, Acc, T, S, P, (A - $0) * 100, []);
+media_range_weight(<< "0.", R/bits >>, Acc, T, S, P) -> accept_ext_sep(R, Acc, T, S, P, 0, []);
+media_range_weight(<< "0", R/bits >>, Acc, T, S, P) -> accept_ext_sep(R, Acc, T, S, P, 0, []);
+%% Special clauses for badly behaving user agents that send .123 instead of 0.123.
+media_range_weight(<< ".", A, B, C, R/bits >>, Acc, T, S, P) when ?IS_DIGIT(A), ?IS_DIGIT(B), ?IS_DIGIT(C) ->
+	accept_ext_sep(R, Acc, T, S, P, (A - $0) * 100 + (B - $0) * 10 + (C - $0), []);
+media_range_weight(<< ".", A, B, R/bits >>, Acc, T, S, P) when ?IS_DIGIT(A), ?IS_DIGIT(B) ->
+	accept_ext_sep(R, Acc, T, S, P, (A - $0) * 100 + (B - $0) * 10, []);
+media_range_weight(<< ".", A, R/bits >>, Acc, T, S, P) when ?IS_DIGIT(A) ->
+	accept_ext_sep(R, Acc, T, S, P, (A - $0) * 100, []).
 
-media_range_weight(<< "1.000", R/bits >>, Acc, T, S, P) -> accept_before_semicolon(R, Acc, T, S, P, 1000, []);
-media_range_weight(<< "1.00", R/bits >>, Acc, T, S, P) -> accept_before_semicolon(R, Acc, T, S, P, 1000, []);
-media_range_weight(<< "1.0", R/bits >>, Acc, T, S, P) -> accept_before_semicolon(R, Acc, T, S, P, 1000, []);
-media_range_weight(<< "1.", R/bits >>, Acc, T, S, P) -> accept_before_semicolon(R, Acc, T, S, P, 1000, []);
-media_range_weight(<< "1", R/bits >>, Acc, T, S, P) -> accept_before_semicolon(R, Acc, T, S, P, 1000, []);
-media_range_weight(<< "0.", A, B, C, R/bits >>, Acc, T, S, P)
-	when A >= $0, A =< $9, B >= $0, B =< $9, C >= $0, C =< $9 ->
-		accept_before_semicolon(R, Acc, T, S, P, (A - $0) * 100 + (B - $0) * 10 + (C - $0), []);
-media_range_weight(<< "0.", A, B, R/bits >>, Acc, T, S, P)
-	when A >= $0, A =< $9, B >= $0, B =< $9 ->
-		accept_before_semicolon(R, Acc, T, S, P, (A - $0) * 100 + (B - $0) * 10, []);
-media_range_weight(<< "0.", A, R/bits >>, Acc, T, S, P)
-	when A >= $0, A =< $9 ->
-		accept_before_semicolon(R, Acc, T, S, P, (A - $0) * 100, []);
-media_range_weight(<< "0.", R/bits >>, Acc, T, S, P) -> accept_before_semicolon(R, Acc, T, S, P, 0, []);
-media_range_weight(<< "0", R/bits >>, Acc, T, S, P) -> accept_before_semicolon(R, Acc, T, S, P, 0, []).
+accept_ext_sep(<<>>, Acc, T, S, P, Q, E) -> lists:reverse([{{T, S, lists:reverse(P)}, Q, lists:reverse(E)}|Acc]);
+accept_ext_sep(<< $,, R/bits >>, Acc, T, S, P, Q, E) -> media_range_list(R, [{{T, S, lists:reverse(P)}, Q, lists:reverse(E)}|Acc]);
+accept_ext_sep(<< $;, R/bits >>, Acc, T, S, P, Q, E) -> accept_before_ext(R, Acc, T, S, P, Q, E);
+accept_ext_sep(<< C, R/bits >>, Acc, T, S, P, Q, E) when ?IS_WS(C) -> accept_ext_sep(R, Acc, T, S, P, Q, E).
 
-accept_before_semicolon(<<>>, Acc, T, S, P, Q, E) -> lists:reverse([{{T, S, lists:reverse(P)}, Q, lists:reverse(E)}|Acc]);
-accept_before_semicolon(<< $,, R/bits >>, Acc, T, S, P, Q, E) -> media_range_list(R, [{{T, S, lists:reverse(P)}, Q, lists:reverse(E)}|Acc]);
-accept_before_semicolon(<< $;, R/bits >>, Acc, T, S, P, Q, E) -> accept_before_ext(R, Acc, T, S, P, Q, E);
-accept_before_semicolon(<< $\s, R/bits >>, Acc, T, S, P, Q, E) -> accept_before_semicolon(R, Acc, T, S, P, Q, E);
-accept_before_semicolon(<< $\t, R/bits >>, Acc, T, S, P, Q, E) -> accept_before_semicolon(R, Acc, T, S, P, Q, E).
+accept_before_ext(<< C, R/bits >>, Acc, T, S, P, Q, E) when ?IS_WS(C) -> accept_before_ext(R, Acc, T, S, P, Q, E);
+accept_before_ext(<< C, R/bits >>, Acc, T, S, P, Q, E) when ?IS_TOKEN(C) -> ?LOWER(accept_ext, R, Acc, T, S, P, Q, E, <<>>).
 
-accept_before_ext(<< $\s, R/bits >>, Acc, T, S, P, Q, E) -> accept_before_ext(R, Acc, T, S, P, Q, E);
-accept_before_ext(<< $\t, R/bits >>, Acc, T, S, P, Q, E) -> accept_before_ext(R, Acc, T, S, P, Q, E);
-accept_before_ext(<< C, R/bits >>, Acc, T, S, P, Q, E) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(accept_ext, R, Acc, T, S, P, Q, E, <<>>)
-	end.
-
-accept_ext(<<>>, Acc, T, S, P, Q, E, K) -> lists:reverse([{{T, S, lists:reverse(P)}, Q, lists:reverse([K|E])}|Acc]);
-accept_ext(<< $,, R/bits >>, Acc, T, S, P, Q, E, K) -> media_range_list(R, [{{T, S, lists:reverse(P)}, Q, lists:reverse([K|E])}|Acc]);
-accept_ext(<< $;, R/bits >>, Acc, T, S, P, Q, E, K) -> accept_before_ext(R, Acc, T, S, P, Q, [K|E]);
-accept_ext(<< $\s, R/bits >>, Acc, T, S, P, Q, E, K) -> accept_before_semicolon(R, Acc, T, S, P, Q, [K|E]);
-accept_ext(<< $\t, R/bits >>, Acc, T, S, P, Q, E, K) -> accept_before_semicolon(R, Acc, T, S, P, Q, [K|E]);
 accept_ext(<< $=, $", R/bits >>, Acc, T, S, P, Q, E, K) -> accept_quoted(R, Acc, T, S, P, Q, E, K, <<>>);
 accept_ext(<< $=, C, R/bits >>, Acc, T, S, P, Q, E, K) when ?IS_TOKEN(C) -> accept_value(R, Acc, T, S, P, Q, E, K, << C >>);
-accept_ext(<< C, R/bits >>, Acc, T, S, P, Q, E, K) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(accept_ext, R, Acc, T, S, P, Q, E, K)
-	end.
+accept_ext(<< C, R/bits >>, Acc, T, S, P, Q, E, K) when ?IS_TOKEN(C) -> ?LOWER(accept_ext, R, Acc, T, S, P, Q, E, K);
+accept_ext(R, Acc, T, S, P, Q, E, K) -> accept_ext_sep(R, Acc, T, S, P, Q, [K|E]).
 
-accept_quoted(<< $", R/bits >>, Acc, T, S, P, Q, E, K, V) -> accept_before_semicolon(R, Acc, T, S, P, Q, [{K, V}|E]);
+accept_quoted(<< $", R/bits >>, Acc, T, S, P, Q, E, K, V) -> accept_ext_sep(R, Acc, T, S, P, Q, [{K, V}|E]);
 accept_quoted(<< $\\, C, R/bits >>, Acc, T, S, P, Q, E, K, V) when ?IS_VCHAR_OBS(C) -> accept_quoted(R, Acc, T, S, P, Q, E, K, << V/binary, C >>);
 accept_quoted(<< C, R/bits >>, Acc, T, S, P, Q, E, K, V) when ?IS_VCHAR_OBS(C) -> accept_quoted(R, Acc, T, S, P, Q, E, K, << V/binary, C >>).
 
-accept_value(<<>>, Acc, T, S, P, Q, E, K, V) -> lists:reverse([{{T, S, lists:reverse(P)}, Q, lists:reverse([{K, V}|E])}|Acc]);
-accept_value(<< $,, R/bits >>, Acc, T, S, P, Q, E, K, V) -> media_range_list(R, [{{T, S, lists:reverse(P)}, Q, lists:reverse([{K, V}|E])}|Acc]);
-accept_value(<< $;, R/bits >>, Acc, T, S, P, Q, E, K, V) -> accept_before_ext(R, Acc, T, S, P, Q, [{K, V}|E]);
-accept_value(<< $\s, R/bits >>, Acc, T, S, P, Q, E, K, V) -> accept_before_semicolon(R, Acc, T, S, P, Q, [{K, V}|E]);
-accept_value(<< $\t, R/bits >>, Acc, T, S, P, Q, E, K, V) -> accept_before_semicolon(R, Acc, T, S, P, Q, [{K, V}|E]);
-accept_value(<< C, R/bits >>, Acc, T, S, P, Q, E, K, V) when ?IS_TOKEN(C) -> accept_value(R, Acc, T, S, P, Q, E, K, << V/binary, C >>).
+accept_value(<< C, R/bits >>, Acc, T, S, P, Q, E, K, V) when ?IS_TOKEN(C) -> accept_value(R, Acc, T, S, P, Q, E, K, << V/binary, C >>);
+accept_value(R, Acc, T, S, P, Q, E, K, V) -> accept_ext_sep(R, Acc, T, S, P, Q, [{K, V}|E]).
 
 -ifdef(TEST).
 accept_ext() ->
@@ -368,13 +317,13 @@ prop_parse_accept() ->
 			<< _, Accept/binary >> = iolist_to_binary([[$,, A] || {_, _, _, _, _, A} <- L]),
 			ResL = parse_accept(Accept),
 			CheckedL = [begin
-				ExpectedP = [{?INLINE_LOWERCASE_BC(K), unquote(V)} || {K, V, _, _} <- P],
+				ExpectedP = [{?LOWER(K), unquote(V)} || {K, V, _, _} <- P],
 				ExpectedE = [case Ext of
-					{K, V, _, _} -> {?INLINE_LOWERCASE_BC(K), unquote(V)};
-					K -> ?INLINE_LOWERCASE_BC(K)
+					{K, V, _, _} -> {?LOWER(K), unquote(V)};
+					K -> ?LOWER(K)
 				end || Ext <- E],
-				ResT =:= ?INLINE_LOWERCASE_BC(T)
-					andalso ResS =:= ?INLINE_LOWERCASE_BC(S)
+				ResT =:= ?LOWER(T)
+					andalso ResS =:= ?LOWER(S)
 					andalso ResP =:= ExpectedP
 					andalso (ResW =:= W orelse (W =:= undefined andalso ResW =:= 1000))
 					andalso ((W =:= undefined andalso ResE =:= []) orelse (W =/= undefined andalso ResE =:= ExpectedE))
@@ -454,59 +403,38 @@ parse_accept_charset(Charset) ->
 	nonempty(conneg_list(Charset, [])).
 
 conneg_list(<<>>, Acc) -> lists:reverse(Acc);
-conneg_list(<< $\s, R/bits >>, Acc) -> conneg_list(R, Acc);
-conneg_list(<< $\t, R/bits >>, Acc) -> conneg_list(R, Acc);
-conneg_list(<< $\,, R/bits >>, Acc) -> conneg_list(R, Acc);
-conneg_list(<< C, R/bits >>, Acc) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(conneg, R, Acc, <<>>)
-	end.
+conneg_list(<< C, R/bits >>, Acc) when ?IS_WS_COMMA(C) -> conneg_list(R, Acc);
+conneg_list(<< C, R/bits >>, Acc) when ?IS_TOKEN(C) -> ?LOWER(conneg, R, Acc, <<>>).
 
-conneg(<<>>, Acc, T) -> lists:reverse([{T, 1000}|Acc]);
-conneg(<< $,, R/bits >>, Acc, T) -> conneg_list(R, [{T, 1000}|Acc]);
-conneg(<< $;, R/bits >>, Acc, T) -> conneg_before_weight(R, Acc, T);
-conneg(<< $\s, R/bits >>, Acc, T) -> conneg_before_semicolon(R, Acc, T);
-conneg(<< $\t, R/bits >>, Acc, T) -> conneg_before_semicolon(R, Acc, T);
-conneg(<< C, R/bits >>, Acc, T) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(conneg, R, Acc, T)
-	end.
+conneg(<< C, R/bits >>, Acc, T) when ?IS_TOKEN(C) -> ?LOWER(conneg, R, Acc, T);
+conneg(R, Acc, T) -> conneg_param_sep(R, Acc, T).
 
-conneg_before_semicolon(<<>>, Acc, T) -> lists:reverse([{T, 1000}|Acc]);
-conneg_before_semicolon(<< $,, R/bits >>, Acc, T) -> conneg_list(R, [{T, 1000}|Acc]);
-conneg_before_semicolon(<< $;, R/bits >>, Acc, T) -> conneg_before_weight(R, Acc, T);
-conneg_before_semicolon(<< $\s, R/bits >>, Acc, T) -> conneg_before_semicolon(R, Acc, T);
-conneg_before_semicolon(<< $\t, R/bits >>, Acc, T) -> conneg_before_semicolon(R, Acc, T).
+conneg_param_sep(<<>>, Acc, T) -> lists:reverse([{T, 1000}|Acc]);
+conneg_param_sep(<< $,, R/bits >>, Acc, T) -> conneg_list(R, [{T, 1000}|Acc]);
+conneg_param_sep(<< $;, R/bits >>, Acc, T) -> conneg_before_weight(R, Acc, T);
+conneg_param_sep(<< C, R/bits >>, Acc, T) when ?IS_WS(C) -> conneg_param_sep(R, Acc, T).
 
-conneg_before_weight(<< $\s, R/bits >>, Acc, T) -> conneg_before_weight(R, Acc, T);
-conneg_before_weight(<< $\t, R/bits >>, Acc, T) -> conneg_before_weight(R, Acc, T);
+conneg_before_weight(<< C, R/bits >>, Acc, T) when ?IS_WS(C) -> conneg_before_weight(R, Acc, T);
 conneg_before_weight(<< $q, $=, R/bits >>, Acc, T) -> conneg_weight(R, Acc, T);
 %% Special clause for broken user agents that confuse ; and , separators.
-conneg_before_weight(<< C, R/bits >>, Acc, T) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(conneg, R, [{T, 1000}|Acc], <<>>)
-	end.
+conneg_before_weight(<< C, R/bits >>, Acc, T) when ?IS_TOKEN(C) -> ?LOWER(conneg, R, [{T, 1000}|Acc], <<>>).
 
 conneg_weight(<< "1.000", R/bits >>, Acc, T) -> conneg_list_sep(R, [{T, 1000}|Acc]);
 conneg_weight(<< "1.00", R/bits >>, Acc, T) -> conneg_list_sep(R, [{T, 1000}|Acc]);
 conneg_weight(<< "1.0", R/bits >>, Acc, T) -> conneg_list_sep(R, [{T, 1000}|Acc]);
 conneg_weight(<< "1.", R/bits >>, Acc, T) -> conneg_list_sep(R, [{T, 1000}|Acc]);
 conneg_weight(<< "1", R/bits >>, Acc, T) -> conneg_list_sep(R, [{T, 1000}|Acc]);
-conneg_weight(<< "0.", A, B, C, R/bits >>, Acc, T)
-	when A >= $0, A =< $9, B >= $0, B =< $9, C >= $0, C =< $9 ->
-		conneg_list_sep(R, [{T, (A - $0) * 100 + (B - $0) * 10 + (C - $0)}|Acc]);
-conneg_weight(<< "0.", A, B, R/bits >>, Acc, T)
-	when A >= $0, A =< $9, B >= $0, B =< $9 ->
-		conneg_list_sep(R, [{T, (A - $0) * 100 + (B - $0) * 10}|Acc]);
-conneg_weight(<< "0.", A, R/bits >>, Acc, T)
-	when A >= $0, A =< $9 ->
-		conneg_list_sep(R, [{T, (A - $0) * 100}|Acc]);
+conneg_weight(<< "0.", A, B, C, R/bits >>, Acc, T) when ?IS_DIGIT(A), ?IS_DIGIT(B), ?IS_DIGIT(C) ->
+	conneg_list_sep(R, [{T, (A - $0) * 100 + (B - $0) * 10 + (C - $0)}|Acc]);
+conneg_weight(<< "0.", A, B, R/bits >>, Acc, T) when ?IS_DIGIT(A), ?IS_DIGIT(B) ->
+	conneg_list_sep(R, [{T, (A - $0) * 100 + (B - $0) * 10}|Acc]);
+conneg_weight(<< "0.", A, R/bits >>, Acc, T) when ?IS_DIGIT(A) ->
+	conneg_list_sep(R, [{T, (A - $0) * 100}|Acc]);
 conneg_weight(<< "0.", R/bits >>, Acc, T) -> conneg_list_sep(R, [{T, 0}|Acc]);
 conneg_weight(<< "0", R/bits >>, Acc, T) -> conneg_list_sep(R, [{T, 0}|Acc]).
 
 conneg_list_sep(<<>>, Acc) -> lists:reverse(Acc);
-conneg_list_sep(<< $\s, R/bits >>, Acc) -> conneg_list_sep(R, Acc);
-conneg_list_sep(<< $\t, R/bits >>, Acc) -> conneg_list_sep(R, Acc);
+conneg_list_sep(<< C, R/bits >>, Acc) when ?IS_WS(C) -> conneg_list_sep(R, Acc);
 conneg_list_sep(<< $,, R/bits >>, Acc) -> conneg_list(R, Acc).
 
 -ifdef(TEST).
@@ -526,7 +454,7 @@ prop_parse_accept_charset() ->
 			<< _, AcceptCharset/binary >> = iolist_to_binary([[$,, A] || {_, _, A} <- L]),
 			ResL = parse_accept_charset(AcceptCharset),
 			CheckedL = [begin
-				ResC =:= ?INLINE_LOWERCASE_BC(Ch)
+				ResC =:= ?LOWER(Ch)
 					andalso (ResW =:= W orelse (W =:= undefined andalso ResW =:= 1000))
 			end || {{Ch, W, _}, {ResC, ResW}} <- lists:zip(L, ResL)],
 			[true] =:= lists:usort(CheckedL)
@@ -577,6 +505,7 @@ accept_encoding() ->
 		end])}
 	).
 
+%% @todo This property seems useless, see prop_accept_charset.
 prop_parse_accept_encoding() ->
 	?FORALL(L,
 		non_empty(list(accept_encoding())),
@@ -584,7 +513,7 @@ prop_parse_accept_encoding() ->
 			<< _, AcceptEncoding/binary >> = iolist_to_binary([[$,, A] || {_, _, A} <- L]),
 			ResL = parse_accept_encoding(AcceptEncoding),
 			CheckedL = [begin
-				ResE =:= ?INLINE_LOWERCASE_BC(E)
+				ResE =:= ?LOWER(E)
 					andalso (ResW =:= W orelse (W =:= undefined andalso ResW =:= 1000))
 			end || {{E, W, _}, {ResE, ResW}} <- lists:zip(L, ResL)],
 			[true] =:= lists:usort(CheckedL)
@@ -625,74 +554,49 @@ parse_accept_language(LanguageRange) ->
 	nonempty(language_range_list(LanguageRange, [])).
 
 language_range_list(<<>>, Acc) -> lists:reverse(Acc);
-language_range_list(<< $\s, R/bits >>, Acc) -> language_range_list(R, Acc);
-language_range_list(<< $\t, R/bits >>, Acc) -> language_range_list(R, Acc);
-language_range_list(<< $\,, R/bits >>, Acc) -> language_range_list(R, Acc);
-language_range_list(<< $*, R/bits >>, Acc) -> language_range_before_semicolon(R, Acc, <<"*">>);
+language_range_list(<< C, R/bits >>, Acc) when ?IS_WS_COMMA(C) -> language_range_list(R, Acc);
+language_range_list(<< $*, R/bits >>, Acc) -> language_range_param_sep(R, Acc, <<"*">>);
 language_range_list(<< C, R/bits >>, Acc) when ?IS_ALPHA(C) ->
-	case C of
-		?INLINE_LOWERCASE(language_range, R, Acc, 1, <<>>)
-	end.
+	?LOWER(language_range, R, Acc, 1, <<>>).
 
-language_range(<<>>, Acc, _, T) -> lists:reverse([{T, 1000}|Acc]);
-language_range(<< $,, R/bits >>, Acc, _, T) -> language_range_list(R, [{T, 1000}|Acc]);
-language_range(<< $;, R/bits >>, Acc, _, T) -> language_range_before_weight(R, Acc, T);
-language_range(<< $\s, R/bits >>, Acc, _, T) -> language_range_before_semicolon(R, Acc, T);
-language_range(<< $\t, R/bits >>, Acc, _, T) -> language_range_before_semicolon(R, Acc, T);
-language_range(<< $-, R/bits >>, Acc, _, T) -> language_range_sub(R, Acc, 0, << T/binary, $- >>);
-language_range(<< _, _/bits >>, _, 8, _) -> error(badarg);
-language_range(<< C, R/bits >>, Acc, N, T) when ?IS_ALPHA(C) ->
-	case C of
-		?INLINE_LOWERCASE(language_range, R, Acc, N + 1, T)
-	end.
+language_range(<< $-, C, R/bits >>, Acc, _, T) when ?IS_ALPHANUM(C) ->
+	?LOWER(language_range_sub, R, Acc, 1, << T/binary, $- >>);
+language_range(<< C, R/bits >>, Acc, N, T) when ?IS_ALPHA(C), N < 8 ->
+	?LOWER(language_range, R, Acc, N + 1, T);
+language_range(R, Acc, _, T) -> language_range_param_sep(R, Acc, T).
 
-language_range_sub(<<>>, Acc, N, T) when N > 0 -> lists:reverse([{T, 1000}|Acc]);
-language_range_sub(<< $,, R/bits >>, Acc, N, T) when N > 0 -> language_range_list(R, [{T, 1000}|Acc]);
-language_range_sub(<< $;, R/bits >>, Acc, N, T) when N > 0 -> language_range_before_weight(R, Acc, T);
-language_range_sub(<< $\s, R/bits >>, Acc, N, T) when N > 0 -> language_range_before_semicolon(R, Acc, T);
-language_range_sub(<< $\t, R/bits >>, Acc, N, T) when N > 0 -> language_range_before_semicolon(R, Acc, T);
-language_range_sub(<< $-, R/bits >>, Acc, N, T) when N > 0 -> language_range_sub(R, Acc, 0, << T/binary, $- >>);
-language_range_sub(<< _, _/bits >>, _, 8, _) -> error(badarg);
-language_range_sub(<< C, R/bits >>, Acc, N, T) when ?IS_ALPHA(C); ?IS_DIGIT(C) ->
-	case C of
-		?INLINE_LOWERCASE(language_range_sub, R, Acc, N + 1, T)
-	end.
+language_range_sub(<< $-, R/bits >>, Acc, _, T) -> language_range_sub(R, Acc, 0, << T/binary, $- >>);
+language_range_sub(<< C, R/bits >>, Acc, N, T) when ?IS_ALPHANUM(C), N < 8 ->
+	?LOWER(language_range_sub, R, Acc, N + 1, T);
+language_range_sub(R, Acc, _, T) -> language_range_param_sep(R, Acc, T).
 
-language_range_before_semicolon(<<>>, Acc, T) -> lists:reverse([{T, 1000}|Acc]);
-language_range_before_semicolon(<< $,, R/bits >>, Acc, T) -> language_range_list(R, [{T, 1000}|Acc]);
-language_range_before_semicolon(<< $;, R/bits >>, Acc, T) -> language_range_before_weight(R, Acc, T);
-language_range_before_semicolon(<< $\s, R/bits >>, Acc, T) -> language_range_before_semicolon(R, Acc, T);
-language_range_before_semicolon(<< $\t, R/bits >>, Acc, T) -> language_range_before_semicolon(R, Acc, T).
+language_range_param_sep(<<>>, Acc, T) -> lists:reverse([{T, 1000}|Acc]);
+language_range_param_sep(<< $,, R/bits >>, Acc, T) -> language_range_list(R, [{T, 1000}|Acc]);
+language_range_param_sep(<< $;, R/bits >>, Acc, T) -> language_range_before_weight(R, Acc, T);
+language_range_param_sep(<< C, R/bits >>, Acc, T) when ?IS_WS(C) -> language_range_param_sep(R, Acc, T).
 
-language_range_before_weight(<< $\s, R/bits >>, Acc, T) -> language_range_before_weight(R, Acc, T);
-language_range_before_weight(<< $\t, R/bits >>, Acc, T) -> language_range_before_weight(R, Acc, T);
+language_range_before_weight(<< C, R/bits >>, Acc, T) when ?IS_WS(C) -> language_range_before_weight(R, Acc, T);
 language_range_before_weight(<< $q, $=, R/bits >>, Acc, T) -> language_range_weight(R, Acc, T);
 %% Special clause for broken user agents that confuse ; and , separators.
 language_range_before_weight(<< C, R/bits >>, Acc, T) when ?IS_ALPHA(C) ->
-	case C of
-		?INLINE_LOWERCASE(language_range, R, [{T, 1000}|Acc], 1, <<>>)
-	end.
+	?LOWER(language_range, R, [{T, 1000}|Acc], 1, <<>>).
 
 language_range_weight(<< "1.000", R/bits >>, Acc, T) -> language_range_list_sep(R, [{T, 1000}|Acc]);
 language_range_weight(<< "1.00", R/bits >>, Acc, T) -> language_range_list_sep(R, [{T, 1000}|Acc]);
 language_range_weight(<< "1.0", R/bits >>, Acc, T) -> language_range_list_sep(R, [{T, 1000}|Acc]);
 language_range_weight(<< "1.", R/bits >>, Acc, T) -> language_range_list_sep(R, [{T, 1000}|Acc]);
 language_range_weight(<< "1", R/bits >>, Acc, T) -> language_range_list_sep(R, [{T, 1000}|Acc]);
-language_range_weight(<< "0.", A, B, C, R/bits >>, Acc, T)
-	when A >= $0, A =< $9, B >= $0, B =< $9, C >= $0, C =< $9 ->
-		language_range_list_sep(R, [{T, (A - $0) * 100 + (B - $0) * 10 + (C - $0)}|Acc]);
-language_range_weight(<< "0.", A, B, R/bits >>, Acc, T)
-	when A >= $0, A =< $9, B >= $0, B =< $9 ->
-		language_range_list_sep(R, [{T, (A - $0) * 100 + (B - $0) * 10}|Acc]);
-language_range_weight(<< "0.", A, R/bits >>, Acc, T)
-	when A >= $0, A =< $9 ->
-		language_range_list_sep(R, [{T, (A - $0) * 100}|Acc]);
+language_range_weight(<< "0.", A, B, C, R/bits >>, Acc, T) when ?IS_DIGIT(A), ?IS_DIGIT(B), ?IS_DIGIT(C) ->
+	language_range_list_sep(R, [{T, (A - $0) * 100 + (B - $0) * 10 + (C - $0)}|Acc]);
+language_range_weight(<< "0.", A, B, R/bits >>, Acc, T) when ?IS_DIGIT(A), ?IS_DIGIT(B) ->
+	language_range_list_sep(R, [{T, (A - $0) * 100 + (B - $0) * 10}|Acc]);
+language_range_weight(<< "0.", A, R/bits >>, Acc, T) when ?IS_DIGIT(A) ->
+	language_range_list_sep(R, [{T, (A - $0) * 100}|Acc]);
 language_range_weight(<< "0.", R/bits >>, Acc, T) -> language_range_list_sep(R, [{T, 0}|Acc]);
 language_range_weight(<< "0", R/bits >>, Acc, T) -> language_range_list_sep(R, [{T, 0}|Acc]).
 
 language_range_list_sep(<<>>, Acc) -> lists:reverse(Acc);
-language_range_list_sep(<< $\s, R/bits >>, Acc) -> language_range_list_sep(R, Acc);
-language_range_list_sep(<< $\t, R/bits >>, Acc) -> language_range_list_sep(R, Acc);
+language_range_list_sep(<< C, R/bits >>, Acc) when ?IS_WS(C) -> language_range_list_sep(R, Acc);
 language_range_list_sep(<< $,, R/bits >>, Acc) -> language_range_list(R, Acc).
 
 -ifdef(TEST).
@@ -721,7 +625,7 @@ prop_parse_accept_language() ->
 			<< _, AcceptLanguage/binary >> = iolist_to_binary([[$,, A] || {_, _, A} <- L]),
 			ResL = parse_accept_language(AcceptLanguage),
 			CheckedL = [begin
-				ResR =:= ?INLINE_LOWERCASE_BC(R)
+				ResR =:= ?LOWER(R)
 					andalso (ResW =:= W orelse (W =:= undefined andalso ResW =:= 1000))
 			end || {{R, W, _}, {ResR, ResW}} <- lists:zip(L, ResL)],
 			[true] =:= lists:usort(CheckedL)
@@ -900,39 +804,30 @@ validate_auth_bearer_eq(<< $=, R/bits >>) -> validate_auth_bearer_eq(R);
 validate_auth_bearer_eq(<<>>) -> ok.
 
 auth_digest_list(<<>>, Acc) -> lists:reverse(Acc);
-auth_digest_list(<< $\s, R/bits >>, Acc) -> auth_digest_list(R, Acc);
-auth_digest_list(<< $\t, R/bits >>, Acc) -> auth_digest_list(R, Acc);
-auth_digest_list(<< $,, R/bits >>, Acc) -> auth_digest_list(R, Acc);
+auth_digest_list(<< C, R/bits >>, Acc) when ?IS_WS_COMMA(C) -> auth_digest_list(R, Acc);
 auth_digest_list(<< "algorithm=", C, R/bits >>, Acc) when ?IS_TOKEN(C) -> auth_digest_token(R, Acc, <<"algorithm">>, << C >>);
 auth_digest_list(<< "cnonce=\"", R/bits >>, Acc) -> auth_digest_quoted(R, Acc, <<"cnonce">>, <<>>);
-auth_digest_list(<< "qop=", C, R/bits >>, Acc) when ?IS_TOKEN(C) -> auth_digest_token(R, Acc, <<"qop">>, << C >>);
 auth_digest_list(<< "nc=", A, B, C, D, E, F, G, H, R/bits >>, Acc)
 		when ?IS_LHEX(A), ?IS_LHEX(B), ?IS_LHEX(C), ?IS_LHEX(D),
 			?IS_LHEX(E), ?IS_LHEX(F), ?IS_LHEX(G), ?IS_LHEX(H) ->
 	auth_digest_list_sep(R, [{<<"nc">>, << A, B, C, D, E, F, G, H >>}|Acc]);
 auth_digest_list(<< "nonce=\"", R/bits >>, Acc) -> auth_digest_quoted(R, Acc, <<"nonce">>, <<>>);
 auth_digest_list(<< "opaque=\"", R/bits >>, Acc) -> auth_digest_quoted(R, Acc, <<"opaque">>, <<>>);
+auth_digest_list(<< "qop=", C, R/bits >>, Acc) when ?IS_TOKEN(C) -> auth_digest_token(R, Acc, <<"qop">>, << C >>);
 auth_digest_list(<< "realm=\"", R/bits >>, Acc) -> auth_digest_quoted(R, Acc, <<"realm">>, <<>>);
 auth_digest_list(<< "response=\"", R/bits >>, Acc) -> auth_digest_quoted(R, Acc, <<"response">>, <<>>);
 auth_digest_list(<< "uri=\"", R/bits >>, Acc) -> auth_digest_quoted(R, Acc, <<"uri">>, <<>>);
 auth_digest_list(<< "username=\"", R/bits >>, Acc) -> auth_digest_quoted(R, Acc, <<"username">>, <<>>);
 auth_digest_list(<< C, R/bits >>, Acc) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(auth_digest_param, R, Acc, <<>>)
-	end.
+	?LOWER(auth_digest_param, R, Acc, <<>>).
 
 auth_digest_param(<< $=, $", R/bits >>, Acc, K) -> auth_digest_quoted(R, Acc, K, <<>>);
 auth_digest_param(<< $=, C, R/bits >>, Acc, K) when ?IS_TOKEN(C) -> auth_digest_token(R, Acc, K, << C >>);
 auth_digest_param(<< C, R/bits >>, Acc, K) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(auth_digest_param, R, Acc, K)
-	end.
+	?LOWER(auth_digest_param, R, Acc, K).
 
-auth_digest_token(<<>>, Acc, K, V) -> lists:reverse([{K, V}|Acc]);
-auth_digest_token(<< $,, R/bits >>, Acc, K, V) -> auth_digest_list(R, [{K, V}|Acc]);
-auth_digest_token(<< $\s, R/bits >>, Acc, K, V) -> auth_digest_list_sep(R, [{K, V}|Acc]);
-auth_digest_token(<< $\t, R/bits >>, Acc, K, V) -> auth_digest_list_sep(R, [{K, V}|Acc]);
-auth_digest_token(<< C, R/bits >>, Acc, K, V) when ?IS_TOKEN(C) -> auth_digest_token(R, Acc, K, << V/binary, C >>).
+auth_digest_token(<< C, R/bits >>, Acc, K, V) when ?IS_TOKEN(C) -> auth_digest_token(R, Acc, K, << V/binary, C >>);
+auth_digest_token(R, Acc, K, V) -> auth_digest_list_sep(R, [{K, V}|Acc]).
 
 auth_digest_quoted(<< $", R/bits >>, Acc, K, V) -> auth_digest_list_sep(R, [{K, V}|Acc]);
 auth_digest_quoted(<< $\\, C, R/bits >>, Acc, K, V) when ?IS_VCHAR_OBS(C) -> auth_digest_quoted(R, Acc, K, << V/binary, C >>);
@@ -940,8 +835,7 @@ auth_digest_quoted(<< C, R/bits >>, Acc, K, V) when ?IS_VCHAR_OBS(C) -> auth_dig
 
 auth_digest_list_sep(<<>>, Acc) -> lists:reverse(Acc);
 auth_digest_list_sep(<< $,, R/bits >>, Acc) -> auth_digest_list(R, Acc);
-auth_digest_list_sep(<< $\s, R/bits >>, Acc) -> auth_digest_list_sep(R, Acc);
-auth_digest_list_sep(<< $\t, R/bits >>, Acc) -> auth_digest_list_sep(R, Acc).
+auth_digest_list_sep(<< C, R/bits >>, Acc) when ?IS_WS(C) -> auth_digest_list_sep(R, Acc).
 
 -ifdef(TEST).
 parse_authorization_test_() ->
@@ -1011,65 +905,41 @@ parse_cache_control(CacheControl) ->
 	nonempty(cache_directive_list(CacheControl, [])).
 
 cache_directive_list(<<>>, Acc) -> lists:reverse(Acc);
-cache_directive_list(<< $\s, R/bits >>, Acc) -> cache_directive_list(R, Acc);
-cache_directive_list(<< $\t, R/bits >>, Acc) -> cache_directive_list(R, Acc);
-cache_directive_list(<< $,, R/bits >>, Acc) -> cache_directive_list(R, Acc);
+cache_directive_list(<< C, R/bits >>, Acc) when ?IS_WS_COMMA(C)-> cache_directive_list(R, Acc);
 cache_directive_list(<< C, R/bits >>, Acc) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(cache_directive, R, Acc, <<>>)
-	end.
+	?LOWER(cache_directive, R, Acc, <<>>).
 
-cache_directive(<<>>, Acc, T) -> lists:reverse([T|Acc]);
-cache_directive(<< $\s, R/bits >>, Acc, T) -> cache_directive_list_sep(R, [T|Acc]);
-cache_directive(<< $\t, R/bits >>, Acc, T) -> cache_directive_list_sep(R, [T|Acc]);
-cache_directive(<< $,, R/bits >>, Acc, T) -> cache_directive_list(R, [T|Acc]);
-cache_directive(<< $=, $", R/bits >>, Acc, T = <<"no-cache">>) -> cache_directive_fields_list(R, Acc, T, []);
-cache_directive(<< $=, $", R/bits >>, Acc, T = <<"private">>) -> cache_directive_fields_list(R, Acc, T, []);
+cache_directive(<< $=, $", R/bits >>, Acc, T)
+		when T =:= <<"no-cache">> orelse T =:= <<"private">> ->
+	cache_directive_fields_list(R, Acc, T, []);
+cache_directive(<< $=, C, R/bits >>, Acc, T)
+		when ?IS_DIGIT(C), T =:= <<"max-age">> orelse T =:= <<"max-stale">>
+			orelse T =:= <<"min-fresh">> orelse T =:= <<"s-maxage">> ->
+	cache_directive_delta(R, Acc, T, (C - $0));
 cache_directive(<< $=, $", R/bits >>, Acc, T) -> cache_directive_quoted_string(R, Acc, T, <<>>);
-cache_directive(<< $=, C, R/bits >>, Acc, T = <<"max-age">>) when ?IS_DIGIT(C) -> cache_directive_delta(R, Acc, T, (C - $0));
-cache_directive(<< $=, C, R/bits >>, Acc, T = <<"max-stale">>) when ?IS_DIGIT(C) -> cache_directive_delta(R, Acc, T, (C - $0));
-cache_directive(<< $=, C, R/bits >>, Acc, T = <<"min-fresh">>) when ?IS_DIGIT(C) -> cache_directive_delta(R, Acc, T, (C - $0));
-cache_directive(<< $=, C, R/bits >>, Acc, T = <<"s-maxage">>) when ?IS_DIGIT(C) -> cache_directive_delta(R, Acc, T, (C - $0));
 cache_directive(<< $=, C, R/bits >>, Acc, T) when ?IS_TOKEN(C) -> cache_directive_token(R, Acc, T, << C >>);
 cache_directive(<< C, R/bits >>, Acc, T) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(cache_directive, R, Acc, T)
-	end.
+	?LOWER(cache_directive, R, Acc, T);
+cache_directive(R, Acc, T) -> cache_directive_list_sep(R, [T|Acc]).
 
-cache_directive_delta(<<>>, Acc, K, V) -> lists:reverse([{K, V}|Acc]);
-cache_directive_delta(<< $\s, R/bits >>, Acc, K, V) -> cache_directive_list_sep(R, [{K, V}|Acc]);
-cache_directive_delta(<< $\t, R/bits >>, Acc, K, V) -> cache_directive_list_sep(R, [{K, V}|Acc]);
-cache_directive_delta(<< $,, R/bits >>, Acc, K, V) -> cache_directive_list(R, [{K, V}|Acc]);
-cache_directive_delta(<< C, R/bits >>, Acc, K, V) when ?IS_DIGIT(C) -> cache_directive_delta(R, Acc, K, V * 10 + (C - $0)).
+cache_directive_delta(<< C, R/bits >>, Acc, K, V) when ?IS_DIGIT(C) -> cache_directive_delta(R, Acc, K, V * 10 + (C - $0));
+cache_directive_delta(R, Acc, K, V) -> cache_directive_list_sep(R, [{K, V}|Acc]).
 
-cache_directive_fields_list(<< $\s, R/bits >>, Acc, K, L) -> cache_directive_fields_list(R, Acc, K, L);
-cache_directive_fields_list(<< $\t, R/bits >>, Acc, K, L) -> cache_directive_fields_list(R, Acc, K, L);
-cache_directive_fields_list(<< $,, R/bits >>, Acc, K, L) -> cache_directive_fields_list(R, Acc, K, L);
+cache_directive_fields_list(<< C, R/bits >>, Acc, K, L) when ?IS_WS_COMMA(C) -> cache_directive_fields_list(R, Acc, K, L);
 cache_directive_fields_list(<< $", R/bits >>, Acc, K, L) -> cache_directive_list_sep(R, [{K, lists:reverse(L)}|Acc]);
 cache_directive_fields_list(<< C, R/bits >>, Acc, K, L) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(cache_directive_field, R, Acc, K, L, <<>>)
-	end.
+	?LOWER(cache_directive_field, R, Acc, K, L, <<>>).
 
-cache_directive_field(<< $\s, R/bits >>, Acc, K, L, F) -> cache_directive_fields_list_sep(R, Acc, K, [F|L]);
-cache_directive_field(<< $\t, R/bits >>, Acc, K, L, F) -> cache_directive_fields_list_sep(R, Acc, K, [F|L]);
-cache_directive_field(<< $,, R/bits >>, Acc, K, L, F) -> cache_directive_fields_list(R, Acc, K, [F|L]);
-cache_directive_field(<< $", R/bits >>, Acc, K, L, F) -> cache_directive_list_sep(R, [{K, lists:reverse([F|L])}|Acc]);
 cache_directive_field(<< C, R/bits >>, Acc, K, L, F) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(cache_directive_field, R, Acc, K, L, F)
-	end.
+	?LOWER(cache_directive_field, R, Acc, K, L, F);
+cache_directive_field(R, Acc, K, L, F) -> cache_directive_fields_list_sep(R, Acc, K, [F|L]).
 
-cache_directive_fields_list_sep(<< $\s, R/bits >>, Acc, K, L) -> cache_directive_fields_list_sep(R, Acc, K, L);
-cache_directive_fields_list_sep(<< $\t, R/bits >>, Acc, K, L) -> cache_directive_fields_list_sep(R, Acc, K, L);
+cache_directive_fields_list_sep(<< C, R/bits >>, Acc, K, L) when ?IS_WS(C) -> cache_directive_fields_list_sep(R, Acc, K, L);
 cache_directive_fields_list_sep(<< $,, R/bits >>, Acc, K, L) -> cache_directive_fields_list(R, Acc, K, L);
 cache_directive_fields_list_sep(<< $", R/bits >>, Acc, K, L) -> cache_directive_list_sep(R, [{K, lists:reverse(L)}|Acc]).
 
-cache_directive_token(<<>>, Acc, K, V) -> lists:reverse([{K, V}|Acc]);
-cache_directive_token(<< $\s, R/bits >>, Acc, K, V) -> cache_directive_list_sep(R, [{K, V}|Acc]);
-cache_directive_token(<< $\t, R/bits >>, Acc, K, V) -> cache_directive_list_sep(R, [{K, V}|Acc]);
-cache_directive_token(<< $,, R/bits >>, Acc, K, V) -> cache_directive_list(R, [{K, V}|Acc]);
-cache_directive_token(<< C, R/bits >>, Acc, K, V) when ?IS_TOKEN(C) -> cache_directive_token(R, Acc, K, << V/binary, C >>).
+cache_directive_token(<< C, R/bits >>, Acc, K, V) when ?IS_TOKEN(C) -> cache_directive_token(R, Acc, K, << V/binary, C >>);
+cache_directive_token(R, Acc, K, V) -> cache_directive_list_sep(R, [{K, V}|Acc]).
 
 cache_directive_quoted_string(<< $", R/bits >>, Acc, K, V) -> cache_directive_list_sep(R, [{K, V}|Acc]);
 cache_directive_quoted_string(<< $\\, C, R/bits >>, Acc, K, V) when ?IS_VCHAR_OBS(C) ->
@@ -1078,8 +948,7 @@ cache_directive_quoted_string(<< C, R/bits >>, Acc, K, V) when ?IS_VCHAR_OBS(C) 
 	cache_directive_quoted_string(R, Acc, K, << V/binary, C >>).
 
 cache_directive_list_sep(<<>>, Acc) -> lists:reverse(Acc);
-cache_directive_list_sep(<< $\s, R/bits >>, Acc) -> cache_directive_list_sep(R, Acc);
-cache_directive_list_sep(<< $\t, R/bits >>, Acc) -> cache_directive_list_sep(R, Acc);
+cache_directive_list_sep(<< C, R/bits >>, Acc) when ?IS_WS(C) -> cache_directive_list_sep(R, Acc);
 cache_directive_list_sep(<< $,, R/bits >>, Acc) -> cache_directive_list(R, Acc).
 
 -ifdef(TEST).
@@ -1119,9 +988,9 @@ prop_parse_cache_control() ->
 			ResL = parse_cache_control(CacheControl),
 			CheckedL = [begin
 				ExpectedCc = case Cc of
-					{fields, K, V} -> {?INLINE_LOWERCASE_BC(K), [?INLINE_LOWERCASE_BC(F) || F <- V]};
-					{K, V} -> {?INLINE_LOWERCASE_BC(K), unquote(V)};
-					K -> ?INLINE_LOWERCASE_BC(K)
+					{fields, K, V} -> {?LOWER(K), [?LOWER(F) || F <- V]};
+					{K, V} -> {?LOWER(K), unquote(V)};
+					K -> ?LOWER(K)
 				end,
 				ExpectedCc =:= ResCc
 			end || {Cc, ResCc} <- lists:zip(L, ResL)],
@@ -1191,7 +1060,7 @@ prop_parse_connection() ->
 		begin
 			<< _, Connection/binary >> = iolist_to_binary([[$,, C] || C <- L]),
 			ResL = parse_connection(Connection),
-			CheckedL = [?INLINE_LOWERCASE_BC(Co) =:= ResC || {Co, ResC} <- lists:zip(L, ResL)],
+			CheckedL = [?LOWER(Co) =:= ResC || {Co, ResC} <- lists:zip(L, ResL)],
 			[true] =:= lists:usort(CheckedL)
 		end).
 
@@ -1264,19 +1133,13 @@ parse_content_language(ContentLanguage) ->
 	nonempty(langtag_list(ContentLanguage, [])).
 
 langtag_list(<<>>, Acc) -> lists:reverse(Acc);
-langtag_list(<< $\s, R/bits >>, Acc) -> langtag_list(R, Acc);
-langtag_list(<< $\t, R/bits >>, Acc) -> langtag_list(R, Acc);
-langtag_list(<< $,, R/bits >>, Acc) -> langtag_list(R, Acc);
+langtag_list(<< C, R/bits >>, Acc) when ?IS_WS_COMMA(C) -> langtag_list(R, Acc);
 langtag_list(<< A, B, C, R/bits >>, Acc) when ?IS_ALPHA(A), ?IS_ALPHA(B), ?IS_ALPHA(C) ->
 	langtag_extlang(R, Acc, << ?LC(A), ?LC(B), ?LC(C) >>, 0);
 langtag_list(<< A, B, R/bits >>, Acc) when ?IS_ALPHA(A), ?IS_ALPHA(B) ->
 	langtag_extlang(R, Acc, << ?LC(A), ?LC(B) >>, 0);
 langtag_list(<< X, R/bits >>, Acc) when X =:= $x; X =:= $X -> langtag_privateuse_sub(R, Acc, << $x >>, 0).
 
-langtag_extlang(<<>>, Acc, T, _) -> lists:reverse([T|Acc]);
-langtag_extlang(<< $,, R/bits >>, Acc, T, _) -> langtag_list(R, [T|Acc]);
-langtag_extlang(<< $\s, R/bits >>, Acc, T, _) -> langtag_list_sep(R, [T|Acc]);
-langtag_extlang(<< $\t, R/bits >>, Acc, T, _) -> langtag_list_sep(R, [T|Acc]);
 langtag_extlang(<< $-, A, B, C, D, E, F, G, H, R/bits >>, Acc, T, _)
 		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D),
 			?IS_ALPHANUM(E), ?IS_ALPHANUM(F), ?IS_ALPHANUM(G), ?IS_ALPHANUM(H) ->
@@ -1303,10 +1166,6 @@ langtag_extlang(<< $-, A, B, C, R/bits >>, Acc, T, N)
 	end;
 langtag_extlang(R, Acc, T, _) -> langtag_region(R, Acc, T).
 
-langtag_script(<<>>, Acc, T) -> lists:reverse([T|Acc]);
-langtag_script(<< $,, R/bits >>, Acc, T) -> langtag_list(R, [T|Acc]);
-langtag_script(<< $\s, R/bits >>, Acc, T) -> langtag_list_sep(R, [T|Acc]);
-langtag_script(<< $\t, R/bits >>, Acc, T) -> langtag_list_sep(R, [T|Acc]);
 langtag_script(<< $-, A, B, C, D, E, F, G, H, R/bits >>, Acc, T)
 		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D),
 			?IS_ALPHANUM(E), ?IS_ALPHANUM(F), ?IS_ALPHANUM(G), ?IS_ALPHANUM(H) ->
@@ -1328,10 +1187,6 @@ langtag_script(<< $-, A, B, C, D, R/bits >>, Acc, T)
 langtag_script(R, Acc, T) ->
 	langtag_region(R, Acc, T).
 
-langtag_region(<<>>, Acc, T) -> lists:reverse([T|Acc]);
-langtag_region(<< $,, R/bits >>, Acc, T) -> langtag_list(R, [T|Acc]);
-langtag_region(<< $\s, R/bits >>, Acc, T) -> langtag_list_sep(R, [T|Acc]);
-langtag_region(<< $\t, R/bits >>, Acc, T) -> langtag_list_sep(R, [T|Acc]);
 langtag_region(<< $-, A, B, C, D, E, F, G, H, R/bits >>, Acc, T)
 		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D),
 			?IS_ALPHANUM(E), ?IS_ALPHANUM(F), ?IS_ALPHANUM(G), ?IS_ALPHANUM(H) ->
@@ -1357,10 +1212,6 @@ langtag_region(<< $-, A, B, C, R/bits >>, Acc, T) when ?IS_DIGIT(A), ?IS_DIGIT(B
 langtag_region(R, Acc, T) ->
 	langtag_variant(R, Acc, T).
 
-langtag_variant(<<>>, Acc, T) -> lists:reverse([T|Acc]);
-langtag_variant(<< $,, R/bits >>, Acc, T) -> langtag_list(R, [T|Acc]);
-langtag_variant(<< $\s, R/bits >>, Acc, T) -> langtag_list_sep(R, [T|Acc]);
-langtag_variant(<< $\t, R/bits >>, Acc, T) -> langtag_list_sep(R, [T|Acc]);
 langtag_variant(<< $-, A, B, C, D, E, F, G, H, R/bits >>, Acc, T)
 		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D),
 			?IS_ALPHANUM(E), ?IS_ALPHANUM(F), ?IS_ALPHANUM(G), ?IS_ALPHANUM(H) ->
@@ -1382,17 +1233,10 @@ langtag_variant(<< $-, A, B, C, D, R/bits >>, Acc, T)
 langtag_variant(R, Acc, T) ->
 	langtag_extension(R, Acc, T).
 
-langtag_extension(<<>>, Acc, T) -> lists:reverse([T|Acc]);
-langtag_extension(<< $,, R/bits >>, Acc, T) -> langtag_list(R, [T|Acc]);
-langtag_extension(<< $\s, R/bits >>, Acc, T) -> langtag_list_sep(R, [T|Acc]);
-langtag_extension(<< $\t, R/bits >>, Acc, T) -> langtag_list_sep(R, [T|Acc]);
 langtag_extension(<< $-, X, R/bits >>, Acc, T) when X =:= $x; X =:= $X -> langtag_privateuse_sub(R, Acc, << T/binary, $-, $x >>, 0);
-langtag_extension(<< $-, S, R/bits >>, Acc, T) when ?IS_ALPHANUM(S) -> langtag_extension_sub(R, Acc, << T/binary, $-, ?LC(S) >>, 0).
+langtag_extension(<< $-, S, R/bits >>, Acc, T) when ?IS_ALPHANUM(S) -> langtag_extension_sub(R, Acc, << T/binary, $-, ?LC(S) >>, 0);
+langtag_extension(R, Acc, T) -> langtag_list_sep(R, [T|Acc]).
 
-langtag_extension_sub(<<>>, Acc, T, N) when N > 0 -> lists:reverse([T|Acc]);
-langtag_extension_sub(<< $,, R/bits >>, Acc, T, N) when N > 0 -> langtag_list(R, [T|Acc]);
-langtag_extension_sub(<< $\s, R/bits >>, Acc, T, N) when N > 0 -> langtag_list_sep(R, [T|Acc]);
-langtag_extension_sub(<< $\t, R/bits >>, Acc, T, N) when N > 0 -> langtag_list_sep(R, [T|Acc]);
 langtag_extension_sub(<< $-, A, B, C, D, E, F, G, H, R/bits >>, Acc, T, N)
 		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D),
 			?IS_ALPHANUM(E), ?IS_ALPHANUM(F), ?IS_ALPHANUM(G), ?IS_ALPHANUM(H) ->
@@ -1420,10 +1264,6 @@ langtag_extension_sub(<< $-, A, B, R/bits >>, Acc, T, N)
 langtag_extension_sub(R, Acc, T, N) when N > 0 ->
 	langtag_extension(R, Acc, T).
 
-langtag_privateuse_sub(<<>>, Acc, T, N) when N > 0 -> lists:reverse([T|Acc]);
-langtag_privateuse_sub(<< $,, R/bits >>, Acc, T, N) when N > 0 -> langtag_list(R, [T|Acc]);
-langtag_privateuse_sub(<< $\s, R/bits >>, Acc, T, N) when N > 0 -> langtag_list_sep(R, [T|Acc]);
-langtag_privateuse_sub(<< $\t, R/bits >>, Acc, T, N) when N > 0 -> langtag_list_sep(R, [T|Acc]);
 langtag_privateuse_sub(<< $-, A, B, C, D, E, F, G, H, R/bits >>, Acc, T, N)
 		when ?IS_ALPHANUM(A), ?IS_ALPHANUM(B), ?IS_ALPHANUM(C), ?IS_ALPHANUM(D),
 			?IS_ALPHANUM(E), ?IS_ALPHANUM(F), ?IS_ALPHANUM(G), ?IS_ALPHANUM(H) ->
@@ -1450,12 +1290,12 @@ langtag_privateuse_sub(<< $-, A, B, R/bits >>, Acc, T, N)
 	langtag_privateuse_sub(R, Acc, << T/binary, $-, ?LC(A), ?LC(B) >>, N + 1);
 langtag_privateuse_sub(<< $-, A, R/bits >>, Acc, T, N)
 		when ?IS_ALPHANUM(A) ->
-	langtag_privateuse_sub(R, Acc, << T/binary, $-, ?LC(A) >>, N + 1).
+	langtag_privateuse_sub(R, Acc, << T/binary, $-, ?LC(A) >>, N + 1);
+langtag_privateuse_sub(R, Acc, T, N) when N > 0 -> langtag_list_sep(R, [T|Acc]).
 
 langtag_list_sep(<<>>, Acc) -> lists:reverse(Acc);
 langtag_list_sep(<< $,, R/bits >>, Acc) -> langtag_list(R, Acc);
-langtag_list_sep(<< $\s, R/bits >>, Acc) -> langtag_list_sep(R, Acc);
-langtag_list_sep(<< $\t, R/bits >>, Acc) -> langtag_list_sep(R, Acc).
+langtag_list_sep(<< C, R/bits >>, Acc) when ?IS_WS(C) -> langtag_list_sep(R, Acc).
 
 -ifdef(TEST).
 langtag_language() -> vector(2, 3, alpha()).
@@ -1500,7 +1340,7 @@ prop_parse_content_language() ->
 		content_language(),
 		begin
 			ResL = parse_content_language(ContentLanguage),
-			CheckedL = [?INLINE_LOWERCASE_BC(T) =:= ResT || {T, ResT} <- lists:zip(L, ResL)],
+			CheckedL = [?LOWER(T) =:= ResT || {T, ResT} <- lists:zip(L, ResL)],
 			[true] =:= lists:usort(CheckedL)
 		end).
 
@@ -1631,9 +1471,7 @@ horse_parse_content_length_giga() ->
 parse_content_range(<<"bytes */", C, R/bits >>) when ?IS_DIGIT(C) -> unsatisfied_range(R, C - $0);
 parse_content_range(<<"bytes ", C, R/bits >>) when ?IS_DIGIT(C) -> byte_range_first(R, C - $0);
 parse_content_range(<< C, R/bits >>) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(other_content_range_unit, R, <<>>)
-	end.
+	?LOWER(other_content_range_unit, R, <<>>).
 
 byte_range_first(<< $-, C, R/bits >>, First) when ?IS_DIGIT(C) -> byte_range_last(R, First, C - $0);
 byte_range_first(<< C, R/bits >>, First) when ?IS_DIGIT(C) -> byte_range_first(R, First * 10 + C - $0).
@@ -1651,9 +1489,7 @@ unsatisfied_range(<< C, R/bits >>, Complete) when ?IS_DIGIT(C) -> unsatisfied_ra
 
 other_content_range_unit(<< $\s, R/bits >>, Unit) -> other_content_range_resp(R, Unit, <<>>);
 other_content_range_unit(<< C, R/bits >>, Unit) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(other_content_range_unit, R, Unit)
-	end.
+	?LOWER(other_content_range_unit, R, Unit).
 
 other_content_range_resp(<<>>, Unit, Resp) -> {Unit, Resp};
 other_content_range_resp(<< C, R/bits >>, Unit, Resp) when ?IS_CHAR(C) -> other_content_range_resp(R, Unit, << Resp/binary, C >>).
@@ -1672,7 +1508,7 @@ content_range() ->
 			{token(), ?LET(L, list(abnf_char()), list_to_binary(L))}
 		]),
 		{case ContentRange of
-			{Unit, Resp} when is_binary(Unit) -> {?INLINE_LOWERCASE_BC(Unit), Resp};
+			{Unit, Resp} when is_binary(Unit) -> {?LOWER(Unit), Resp};
 			_ -> ContentRange
 		end, case ContentRange of
 			{bytes, First, Last, '*'} ->
@@ -1733,78 +1569,49 @@ horse_parse_content_range_other() ->
 
 -spec parse_content_type(binary()) -> media_type().
 parse_content_type(<< C, R/bits >>) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(media_type, R, <<>>)
-	end.
+	?LOWER(media_type, R, <<>>).
 
 media_type(<< $/, C, R/bits >>, T) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(media_subtype, R, T, <<>>)
-	end;
+	?LOWER(media_subtype, R, T, <<>>);
 media_type(<< C, R/bits >>, T) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(media_type, R, T)
-	end.
+	?LOWER(media_type, R, T).
 
-media_subtype(<<>>, T, S) -> {T, S, []};
-media_subtype(<< $;, R/bits >>, T, S) -> media_before_param(R, T, S, []);
-media_subtype(<< $\s, R/bits >>, T, S) -> media_before_semicolon(R, T, S, []);
-media_subtype(<< $\t, R/bits >>, T, S) -> media_before_semicolon(R, T, S, []);
 media_subtype(<< C, R/bits >>, T, S) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(media_subtype, R, T, S)
-	end.
+	?LOWER(media_subtype, R, T, S);
+media_subtype(R, T, S) -> media_param_sep(R, T, S, []).
 
-media_before_semicolon(<<>>, T, S, P) -> {T, S, lists:reverse(P)};
-media_before_semicolon(<< $;, R/bits >>, T, S, P) -> media_before_param(R, T, S, P);
-media_before_semicolon(<< $\s, R/bits >>, T, S, P) -> media_before_semicolon(R, T, S, P);
-media_before_semicolon(<< $\t, R/bits >>, T, S, P) -> media_before_semicolon(R, T, S, P).
+media_param_sep(<<>>, T, S, P) -> {T, S, lists:reverse(P)};
+media_param_sep(<< $;, R/bits >>, T, S, P) -> media_before_param(R, T, S, P);
+media_param_sep(<< C, R/bits >>, T, S, P) when ?IS_WS(C) -> media_param_sep(R, T, S, P).
 
-media_before_param(<< $\s, R/bits >>, T, S, P) -> media_before_param(R, T, S, P);
-media_before_param(<< $\t, R/bits >>, T, S, P) -> media_before_param(R, T, S, P);
+media_before_param(<< C, R/bits >>, T, S, P) when ?IS_WS(C)-> media_before_param(R, T, S, P);
 media_before_param(<< "charset=", $", R/bits >>, T, S, P) -> media_charset_quoted(R, T, S, P, <<>>);
 media_before_param(<< "charset=", R/bits >>, T, S, P) -> media_charset(R, T, S, P, <<>>);
 media_before_param(<< C, R/bits >>, T, S, P) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(media_param, R, T, S, P, <<>>)
-	end.
+	?LOWER(media_param, R, T, S, P, <<>>).
 
 media_charset_quoted(<< $", R/bits >>, T, S, P, V) ->
-	media_before_semicolon(R, T, S, [{<<"charset">>, V}|P]);
+	media_param_sep(R, T, S, [{<<"charset">>, V}|P]);
 media_charset_quoted(<< $\\, C, R/bits >>, T, S, P, V) when ?IS_VCHAR_OBS(C) ->
-	case C of
-		?INLINE_LOWERCASE(media_charset_quoted, R, T, S, P, V)
-	end;
+	?LOWER(media_charset_quoted, R, T, S, P, V);
 media_charset_quoted(<< C, R/bits >>, T, S, P, V) when ?IS_VCHAR_OBS(C) ->
-	case C of
-		?INLINE_LOWERCASE(media_charset_quoted, R, T, S, P, V)
-	end.
+	?LOWER(media_charset_quoted, R, T, S, P, V).
 
-media_charset(<<>>, T, S, P, V) -> {T, S, lists:reverse([{<<"charset">>, V}|P])};
-media_charset(<< $;, R/bits >>, T, S, P, V) -> media_before_param(R, T, S, [{<<"charset">>, V}|P]);
-media_charset(<< $\s, R/bits >>, T, S, P, V) -> media_before_semicolon(R, T, S, [{<<"charset">>, V}|P]);
-media_charset(<< $\t, R/bits >>, T, S, P, V) -> media_before_semicolon(R, T, S, [{<<"charset">>, V}|P]);
 media_charset(<< C, R/bits >>, T, S, P, V) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(media_charset, R, T, S, P, V)
-	end.
+	?LOWER(media_charset, R, T, S, P, V);
+media_charset(R, T, S, P, V) -> media_param_sep(R, T, S, [{<<"charset">>, V}|P]).
 
 media_param(<< $=, $", R/bits >>, T, S, P, K) -> media_quoted(R, T, S, P, K, <<>>);
 media_param(<< $=, C, R/bits >>, T, S, P, K) when ?IS_TOKEN(C) -> media_value(R, T, S, P, K, << C >>);
 media_param(<< C, R/bits >>, T, S, P, K) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(media_param, R, T, S, P, K)
-	end.
+	?LOWER(media_param, R, T, S, P, K).
 
-media_quoted(<< $", R/bits >>, T, S, P, K, V) -> media_before_semicolon(R, T, S, [{K, V}|P]);
+media_quoted(<< $", R/bits >>, T, S, P, K, V) -> media_param_sep(R, T, S, [{K, V}|P]);
 media_quoted(<< $\\, C, R/bits >>, T, S, P, K, V) when ?IS_VCHAR_OBS(C) -> media_quoted(R, T, S, P, K, << V/binary, C >>);
 media_quoted(<< C, R/bits >>, T, S, P, K, V) when ?IS_VCHAR_OBS(C) -> media_quoted(R, T, S, P, K, << V/binary, C >>).
 
-media_value(<<>>, T, S, P, K, V) -> {T, S, lists:reverse([{K, V}|P])};
-media_value(<< $;, R/bits >>, T, S, P, K, V) -> media_before_param(R, T, S, [{K, V}|P]);
-media_value(<< $\s, R/bits >>, T, S, P, K, V) -> media_before_semicolon(R, T, S, [{K, V}|P]);
-media_value(<< $\t, R/bits >>, T, S, P, K, V) -> media_before_semicolon(R, T, S, [{K, V}|P]);
-media_value(<< C, R/bits >>, T, S, P, K, V) when ?IS_TOKEN(C) -> media_value(R, T, S, P, K, << V/binary, C >>).
+media_value(<< C, R/bits >>, T, S, P, K, V) when ?IS_TOKEN(C) -> media_value(R, T, S, P, K, << V/binary, C >>);
+media_value(R, T, S, P, K, V) -> media_param_sep(R, T, S, [{K, V}|P]).
 
 -ifdef(TEST).
 media_type_parameter() ->
@@ -1824,12 +1631,12 @@ prop_parse_content_type() ->
 		media_type(),
 		begin
 			{ResT, ResS, ResP} = parse_content_type(MediaType),
-			ExpectedP = [case ?INLINE_LOWERCASE_BC(K) of
-				<<"charset">> -> {<<"charset">>, ?INLINE_LOWERCASE_BC(unquote(V))};
+			ExpectedP = [case ?LOWER(K) of
+				<<"charset">> -> {<<"charset">>, ?LOWER(unquote(V))};
 				LowK -> {LowK, unquote(V)}
 			end || {K, V, _, _} <- P],
-			ResT =:= ?INLINE_LOWERCASE_BC(T)
-				andalso ResS =:= ?INLINE_LOWERCASE_BC(S)
+			ResT =:= ?LOWER(T)
+				andalso ResS =:= ?LOWER(S)
 				andalso ResP =:= ExpectedP
 		end
 	).
@@ -2051,16 +1858,12 @@ parse_host(Host) ->
 ipv6_address(<< $] >>, IP) -> {<< IP/binary, $] >>, undefined};
 ipv6_address(<< $], $:, Port/bits >>, IP) -> {<< IP/binary, $] >>, binary_to_integer(Port)};
 ipv6_address(<< C, R/bits >>, IP) when ?IS_HEX(C) orelse C =:= $: orelse C =:= $. ->
-	case C of
-		?INLINE_LOWERCASE(ipv6_address, R, IP)
-	end.
+	?LOWER(ipv6_address, R, IP).
 
 reg_name(<<>>, Name) -> {Name, undefined};
 reg_name(<< $:, Port/bits >>, Name) -> {Name, binary_to_integer(Port)};
 reg_name(<< C, R/bits >>, Name) when ?IS_URI_UNRESERVED(C) orelse ?IS_URI_SUB_DELIMS(C) ->
-	case C of
-		?INLINE_LOWERCASE(reg_name, R, Name)
-	end.
+	?LOWER(reg_name, R, Name).
 
 -ifdef(TEST).
 host_chars() -> "!$&'()*+,-.0123456789;=ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz~".
@@ -2071,7 +1874,7 @@ host_port() ->
 		{host(), oneof([undefined, int(1, 65535)])},
 		begin
 			HostBin = list_to_binary(Host),
-			{{?INLINE_LOWERCASE_BC(HostBin), Port},
+			{{?LOWER(HostBin), Port},
 				case Port of
 					undefined -> HostBin;
 					_ -> << HostBin/binary, $:, (integer_to_binary(Port))/binary >>
@@ -2127,9 +1930,7 @@ parse_if_match(IfMatch) ->
 	nonempty(etag_list(IfMatch, [])).
 
 etag_list(<<>>, Acc) -> lists:reverse(Acc);
-etag_list(<< $\s, R/bits >>, Acc) -> etag_list(R, Acc);
-etag_list(<< $\t, R/bits >>, Acc) -> etag_list(R, Acc);
-etag_list(<< $,, R/bits >>, Acc) -> etag_list(R, Acc);
+etag_list(<< C, R/bits >>, Acc) when ?IS_WS_COMMA(C) -> etag_list(R, Acc);
 etag_list(<< $W, $/, $", R/bits >>, Acc) -> etag(R, Acc, weak, <<>>);
 etag_list(<< $", R/bits >>, Acc) -> etag(R, Acc, strong, <<>>).
 
@@ -2137,8 +1938,7 @@ etag(<< $", R/bits >>, Acc, Strength, Tag) -> etag_list_sep(R, [{Strength, Tag}|
 etag(<< C, R/bits >>, Acc, Strength, Tag) when ?IS_ETAGC(C) -> etag(R, Acc, Strength, << Tag/binary, C >>).
 
 etag_list_sep(<<>>, Acc) -> lists:reverse(Acc);
-etag_list_sep(<< $\s, R/bits >>, Acc) -> etag_list_sep(R, Acc);
-etag_list_sep(<< $\t, R/bits >>, Acc) -> etag_list_sep(R, Acc);
+etag_list_sep(<< C, R/bits >>, Acc) when ?IS_WS(C) -> etag_list_sep(R, Acc);
 etag_list_sep(<< $,, R/bits >>, Acc) -> etag_list(R, Acc).
 
 -ifdef(TEST).
@@ -2366,14 +2166,10 @@ parse_proxy_authorization(ProxyAuthorization) ->
 parse_range(<<"bytes=", R/bits >>) ->
 	bytes_range_set(R, []);
 parse_range(<< C, R/bits >>) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(other_range_unit, R, <<>>)
-	end.
+	?LOWER(other_range_unit, R, <<>>).
 
 bytes_range_set(<<>>, Acc) -> {bytes, lists:reverse(Acc)};
-bytes_range_set(<< $\s, R/bits >>, Acc) -> bytes_range_set(R, Acc);
-bytes_range_set(<< $\t, R/bits >>, Acc) -> bytes_range_set(R, Acc);
-bytes_range_set(<< $,, R/bits >>, Acc) -> bytes_range_set(R, Acc);
+bytes_range_set(<< C, R/bits >>, Acc) when ?IS_WS_COMMA(C) -> bytes_range_set(R, Acc);
 bytes_range_set(<< $-, C, R/bits >>, Acc) when ?IS_DIGIT(C) -> bytes_range_suffix_spec(R, Acc, C - $0);
 bytes_range_set(<< C, R/bits >>, Acc) when ?IS_DIGIT(C) -> bytes_range_spec(R, Acc, C - $0).
 
@@ -2388,16 +2184,13 @@ bytes_range_suffix_spec(<< C, R/bits >>, Acc, Suffix) when ?IS_DIGIT(C) -> bytes
 bytes_range_suffix_spec(R, Acc, Suffix) -> bytes_range_set_sep(R, [-Suffix|Acc]).
 
 bytes_range_set_sep(<<>>, Acc) -> {bytes, lists:reverse(Acc)};
-bytes_range_set_sep(<< $\s, R/bits >>, Acc) -> bytes_range_set_sep(R, Acc);
-bytes_range_set_sep(<< $\t, R/bits >>, Acc) -> bytes_range_set_sep(R, Acc);
+bytes_range_set_sep(<< C, R/bits >>, Acc) when ?IS_WS(C) -> bytes_range_set_sep(R, Acc);
 bytes_range_set_sep(<< $,, R/bits >>, Acc) -> bytes_range_set(R, Acc).
 
 other_range_unit(<< $=, C, R/bits >>, U) when ?IS_VCHAR(C) ->
 	other_range_set(R, U, << C >>);
 other_range_unit(<< C, R/bits >>, U) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(other_range_unit, R, U)
-	end.
+	?LOWER(other_range_unit, R, U).
 
 other_range_set(<<>>, U, S) ->
 	{U, S};
@@ -2439,7 +2232,7 @@ prop_parse_range() ->
 		begin
 			Range2 = case Range of
 				{bytes, _} -> Range;
-				{Unit, Set} -> {?INLINE_LOWERCASE_BC(Unit), Set}
+				{Unit, Set} -> {?LOWER(Unit), Set}
 			end,
 			Range2 =:= parse_range(RangeBin)
 		end).
@@ -2545,47 +2338,31 @@ parse_sec_websocket_extensions(SecWebSocketExtensions) ->
 	nonempty(ws_extension_list(SecWebSocketExtensions, [])).
 
 ws_extension_list(<<>>, Acc) -> lists:reverse(Acc);
-ws_extension_list(<< $\s, R/bits >>, Acc) -> ws_extension_list(R, Acc);
-ws_extension_list(<< $\t, R/bits >>, Acc) -> ws_extension_list(R, Acc);
-ws_extension_list(<< $,, R/bits >>, Acc) -> ws_extension_list(R, Acc);
+ws_extension_list(<< C, R/bits >>, Acc) when ?IS_WS_COMMA(C) -> ws_extension_list(R, Acc);
 ws_extension_list(<< C, R/bits >>, Acc) when ?IS_TOKEN(C) -> ws_extension(R, Acc, << C >>).
 
-ws_extension(<<>>, Acc, E) -> lists:reverse([{E, []}|Acc]);
-ws_extension(<< $,, R/bits >>, Acc, E) -> ws_extension_list(R, [{E, []}|Acc]);
-ws_extension(<< $;, R/bits >>, Acc, E) -> ws_extension_before_param(R, Acc, E, []);
-ws_extension(<< $\s, R/bits >>, Acc, E) -> ws_extension_before_semicolon(R, Acc, E, []);
-ws_extension(<< $\t, R/bits >>, Acc, E) -> ws_extension_before_semicolon(R, Acc, E, []);
-ws_extension(<< C, R/bits >>, Acc, E) when ?IS_TOKEN(C) -> ws_extension(R, Acc, << E/binary, C >>).
+ws_extension(<< C, R/bits >>, Acc, E) when ?IS_TOKEN(C) -> ws_extension(R, Acc, << E/binary, C >>);
+ws_extension(R, Acc, E) -> ws_extension_param_sep(R, Acc, E, []).
 
-ws_extension_before_semicolon(<<>>, Acc, E, P) -> lists:reverse([{E, lists:reverse(P)}|Acc]);
-ws_extension_before_semicolon(<< $,, R/bits >>, Acc, E, P) -> ws_extension_list(R, [{E, lists:reverse(P)}|Acc]);
-ws_extension_before_semicolon(<< $;, R/bits >>, Acc, E, P) -> ws_extension_before_param(R, Acc, E, P);
-ws_extension_before_semicolon(<< $\s, R/bits >>, Acc, E, P) -> ws_extension_before_semicolon(R, Acc, E, P);
-ws_extension_before_semicolon(<< $\t, R/bits >>, Acc, E, P) -> ws_extension_before_semicolon(R, Acc, E, P).
+ws_extension_param_sep(<<>>, Acc, E, P) -> lists:reverse([{E, lists:reverse(P)}|Acc]);
+ws_extension_param_sep(<< $,, R/bits >>, Acc, E, P) -> ws_extension_list(R, [{E, lists:reverse(P)}|Acc]);
+ws_extension_param_sep(<< $;, R/bits >>, Acc, E, P) -> ws_extension_before_param(R, Acc, E, P);
+ws_extension_param_sep(<< C, R/bits >>, Acc, E, P) when ?IS_WS(C) -> ws_extension_param_sep(R, Acc, E, P).
 
-ws_extension_before_param(<< $\s, R/bits >>, Acc, E, P) -> ws_extension_before_param(R, Acc, E, P);
-ws_extension_before_param(<< $\t, R/bits >>, Acc, E, P) -> ws_extension_before_param(R, Acc, E, P);
+ws_extension_before_param(<< C, R/bits >>, Acc, E, P) when ?IS_WS(C) -> ws_extension_before_param(R, Acc, E, P);
 ws_extension_before_param(<< C, R/bits >>, Acc, E, P) when ?IS_TOKEN(C) -> ws_extension_param(R, Acc, E, P, << C >>).
 
-ws_extension_param(<<>>, Acc, E, P, K) -> lists:reverse([{E, lists:reverse([K|P])}|Acc]);
-ws_extension_param(<< $\s, R/bits >>, Acc, E, P, K) -> ws_extension_before_semicolon(R, Acc, E, [K|P]);
-ws_extension_param(<< $\t, R/bits >>, Acc, E, P, K) -> ws_extension_before_semicolon(R, Acc, E, [K|P]);
-ws_extension_param(<< $,, R/bits >>, Acc, E, P, K) -> ws_extension_list(R, [{E, lists:reverse([K|P])}|Acc]);
-ws_extension_param(<< $;, R/bits >>, Acc, E, P, K) -> ws_extension_before_param(R, Acc, E, [K|P]);
 ws_extension_param(<< $=, $", R/bits >>, Acc, E, P, K) -> ws_extension_quoted(R, Acc, E, P, K, <<>>);
 ws_extension_param(<< $=, C, R/bits >>, Acc, E, P, K) when ?IS_TOKEN(C) -> ws_extension_value(R, Acc, E, P, K, << C >>);
-ws_extension_param(<< C, R/bits >>, Acc, E, P, K) when ?IS_TOKEN(C) -> ws_extension_param(R, Acc, E, P, << K/binary, C >>).
+ws_extension_param(<< C, R/bits >>, Acc, E, P, K) when ?IS_TOKEN(C) -> ws_extension_param(R, Acc, E, P, << K/binary, C >>);
+ws_extension_param(R, Acc, E, P, K) -> ws_extension_param_sep(R, Acc, E, [K|P]).
 
-ws_extension_quoted(<< $", R/bits >>, Acc, E, P, K, V) -> ws_extension_before_semicolon(R, Acc, E, [{K, V}|P]);
+ws_extension_quoted(<< $", R/bits >>, Acc, E, P, K, V) -> ws_extension_param_sep(R, Acc, E, [{K, V}|P]);
 ws_extension_quoted(<< $\\, C, R/bits >>, Acc, E, P, K, V) when ?IS_TOKEN(C) -> ws_extension_quoted(R, Acc, E, P, K, << V/binary, C >>);
 ws_extension_quoted(<< C, R/bits >>, Acc, E, P, K, V) when ?IS_TOKEN(C) -> ws_extension_quoted(R, Acc, E, P, K, << V/binary, C >>).
 
-ws_extension_value(<<>>, Acc, E, P, K, V) -> lists:reverse([{E, lists:reverse([{K, V}|P])}|Acc]);
-ws_extension_value(<< $\s, R/bits >>, Acc, E, P, K, V) -> ws_extension_before_semicolon(R, Acc, E, [{K, V}|P]);
-ws_extension_value(<< $\t, R/bits >>, Acc, E, P, K, V) -> ws_extension_before_semicolon(R, Acc, E, [{K, V}|P]);
-ws_extension_value(<< $,, R/bits >>, Acc, E, P, K, V) -> ws_extension_list(R, [{E, lists:reverse([{K, V}|P])}|Acc]);
-ws_extension_value(<< $;, R/bits >>, Acc, E, P, K, V) -> ws_extension_before_param(R, Acc, E, [{K, V}|P]);
-ws_extension_value(<< C, R/bits >>, Acc, E, P, K, V) when ?IS_TOKEN(C) -> ws_extension_value(R, Acc, E, P, K, << V/binary, C >>).
+ws_extension_value(<< C, R/bits >>, Acc, E, P, K, V) when ?IS_TOKEN(C) -> ws_extension_value(R, Acc, E, P, K, << V/binary, C >>);
+ws_extension_value(R, Acc, E, P, K, V) -> ws_extension_param_sep(R, Acc, E, [{K, V}|P]).
 
 -ifdef(TEST).
 quoted_token() ->
@@ -2692,21 +2469,17 @@ horse_parse_sec_websocket_protocol_req() ->
 
 -spec parse_sec_websocket_protocol_resp(binary()) -> binary().
 parse_sec_websocket_protocol_resp(<< C, R/bits >>) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(token_ci, R, <<>>)
-	end.
+	?LOWER(token_ci, R, <<>>).
 
 token_ci(<<>>, T) -> T;
 token_ci(<< C, R/bits >>, T) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(token_ci, R, T)
-	end.
+	?LOWER(token_ci, R, T).
 
 -ifdef(TEST).
 prop_parse_sec_websocket_protocol_resp() ->
 	?FORALL(T,
 		token(),
-		?INLINE_LOWERCASE_BC(T) =:= parse_sec_websocket_protocol_resp(T)).
+		?LOWER(T) =:= parse_sec_websocket_protocol_resp(T)).
 
 parse_sec_websocket_protocol_resp_test_() ->
 	Tests = [
@@ -2781,20 +2554,14 @@ parse_sec_websocket_version_resp(SecWebSocketVersion) ->
 	nonempty(ws_version_list(SecWebSocketVersion, [])).
 
 ws_version_list(<<>>, Acc) -> lists:reverse(Acc);
-ws_version_list(<< $\s, R/bits >>, Acc) -> ws_version_list(R, Acc);
-ws_version_list(<< $\t, R/bits >>, Acc) -> ws_version_list(R, Acc);
-ws_version_list(<< $,, R/bits >>, Acc) -> ws_version_list(R, Acc);
+ws_version_list(<< C, R/bits >>, Acc) when ?IS_WS_COMMA(C) -> ws_version_list(R, Acc);
 ws_version_list(<< C, R/bits >>, Acc) when ?IS_DIGIT(C) -> ws_version(R, Acc, C - $0).
 
-ws_version(<<>>, Acc, V) -> lists:reverse([V|Acc]);
-ws_version(<< $\s, R/bits >>, Acc, V) -> ws_version_list_sep(R, [V|Acc]);
-ws_version(<< $\t, R/bits >>, Acc, V) -> ws_version_list_sep(R, [V|Acc]);
-ws_version(<< $,, R/bits >>, Acc, V) -> ws_version_list(R, [V|Acc]);
-ws_version(<< C, R/bits >>, Acc, V) when ?IS_DIGIT(C) -> ws_version(R, Acc, V * 10 + C - $0).
+ws_version(<< C, R/bits >>, Acc, V) when ?IS_DIGIT(C) -> ws_version(R, Acc, V * 10 + C - $0);
+ws_version(R, Acc, V) -> ws_version_list_sep(R, [V|Acc]).
 
 ws_version_list_sep(<<>>, Acc) -> lists:reverse(Acc);
-ws_version_list_sep(<< $\s, R/bits >>, Acc) -> ws_version_list_sep(R, Acc);
-ws_version_list_sep(<< $\t, R/bits >>, Acc) -> ws_version_list_sep(R, Acc);
+ws_version_list_sep(<< C, R/bits >>, Acc) when ?IS_WS(C) -> ws_version_list_sep(R, Acc);
 ws_version_list_sep(<< $,, R/bits >>, Acc) -> ws_version_list(R, Acc).
 
 -ifdef(TEST).
@@ -2842,40 +2609,27 @@ parse_te(TE) ->
 	te_list(TE, no_trailers, []).
 
 te_list(<<>>, Trail, Acc) -> {Trail, lists:reverse(Acc)};
-te_list(<< $\s, R/bits >>, Trail, Acc) -> te_list(R, Trail, Acc);
-te_list(<< $\t, R/bits >>, Trail, Acc) -> te_list(R, Trail, Acc);
-te_list(<< $\,, R/bits >>, Trail, Acc) -> te_list(R, Trail, Acc);
+te_list(<< C, R/bits >>, Trail, Acc) when ?IS_WS_COMMA(C) -> te_list(R, Trail, Acc);
 te_list(<< "trailers", R/bits >>, Trail, Acc) -> te(R, Trail, Acc, <<"trailers">>);
 te_list(<< "compress", R/bits >>, Trail, Acc) -> te(R, Trail, Acc, <<"compress">>);
 te_list(<< "deflate", R/bits >>, Trail, Acc) -> te(R, Trail, Acc, <<"deflate">>);
 te_list(<< "gzip", R/bits >>, Trail, Acc) -> te(R, Trail, Acc, <<"gzip">>);
 te_list(<< C, R/bits >>, Trail, Acc) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(te, R, Trail, Acc, <<>>)
-	end.
+	?LOWER(te, R, Trail, Acc, <<>>).
 
-te(<<>>, _, Acc, T) when T =:= <<"trailers">> -> {trailers, lists:reverse(Acc)};
-te(<<>>, Trail, Acc, T) -> {Trail, lists:reverse([{T, 1000}|Acc])};
-te(<< $,, R/bits >>, _, Acc, T) when T =:= <<"trailers">> -> te_list(R, trailers, Acc);
-te(<< $,, R/bits >>, Trail, Acc, T) -> te_list(R, Trail, [{T, 1000}|Acc]);
+te(<<>>, _, Acc, <<"trailers">>) -> {trailers, lists:reverse(Acc)};
+te(<< $,, R/bits >>, _, Acc, <<"trailers">>) -> te_list(R, trailers, Acc);
 te(<< $;, R/bits >>, Trail, Acc, T) when T =/= <<"trailers">> -> te_before_weight(R, Trail, Acc, T);
-te(<< $\s, R/bits >>, _, Acc, T) when T =:= <<"trailers">> -> te_list_sep(R, trailers, Acc);
-te(<< $\s, R/bits >>, Trail, Acc, T) -> te_before_semicolon(R, Trail, Acc, T);
-te(<< $\t, R/bits >>, _, Acc, T) when T =:= <<"trailers">> -> te_list_sep(R, trailers, Acc);
-te(<< $\t, R/bits >>, Trail, Acc, T) -> te_before_semicolon(R, Trail, Acc, T);
+te(<< C, R/bits >>, _, Acc, <<"trailers">>) when ?IS_WS(C) -> te_list_sep(R, trailers, Acc);
 te(<< C, R/bits >>, Trail, Acc, T) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(te, R, Trail, Acc, T)
-	end.
+	?LOWER(te, R, Trail, Acc, T);
+te(R, Trail, Acc, T) -> te_param_sep(R, Trail, Acc, T).
 
-te_before_semicolon(<<>>, Trail, Acc, T) -> {Trail, lists:reverse([{T, 1000}|Acc])};
-te_before_semicolon(<< $,, R/bits >>, Trail, Acc, T) -> te_list(R, Trail, [{T, 1000}|Acc]);
-te_before_semicolon(<< $;, R/bits >>, Trail, Acc, T) -> te_before_weight(R, Trail, Acc, T);
-te_before_semicolon(<< $\s, R/bits >>, Trail, Acc, T) -> te_before_semicolon(R, Trail, Acc, T);
-te_before_semicolon(<< $\t, R/bits >>, Trail, Acc, T) -> te_before_semicolon(R, Trail, Acc, T).
+te_param_sep(<<>>, Trail, Acc, T) -> {Trail, lists:reverse([{T, 1000}|Acc])};
+te_param_sep(<< $,, R/bits >>, Trail, Acc, T) -> te_list(R, Trail, [{T, 1000}|Acc]);
+te_param_sep(<< C, R/bits >>, Trail, Acc, T) when ?IS_WS(C) -> te_param_sep(R, Trail, Acc, T).
 
-te_before_weight(<< $\s, R/bits >>, Trail, Acc, T) -> te_before_weight(R, Trail, Acc, T);
-te_before_weight(<< $\t, R/bits >>, Trail, Acc, T) -> te_before_weight(R, Trail, Acc, T);
+te_before_weight(<< C, R/bits >>, Trail, Acc, T) when ?IS_WS(C) -> te_before_weight(R, Trail, Acc, T);
 te_before_weight(<< $q, $=, R/bits >>, Trail, Acc, T) -> te_weight(R, Trail, Acc, T).
 
 te_weight(<< "1.000", R/bits >>, Trail, Acc, T) -> te_list_sep(R, Trail, [{T, 1000}|Acc]);
@@ -2883,21 +2637,17 @@ te_weight(<< "1.00", R/bits >>, Trail, Acc, T) -> te_list_sep(R, Trail, [{T, 100
 te_weight(<< "1.0", R/bits >>, Trail, Acc, T) -> te_list_sep(R, Trail, [{T, 1000}|Acc]);
 te_weight(<< "1.", R/bits >>, Trail, Acc, T) -> te_list_sep(R, Trail, [{T, 1000}|Acc]);
 te_weight(<< "1", R/bits >>, Trail, Acc, T) -> te_list_sep(R, Trail, [{T, 1000}|Acc]);
-te_weight(<< "0.", A, B, C, R/bits >>, Trail, Acc, T)
-	when A >= $0, A =< $9, B >= $0, B =< $9, C >= $0, C =< $9 ->
-		te_list_sep(R, Trail, [{T, (A - $0) * 100 + (B - $0) * 10 + (C - $0)}|Acc]);
-te_weight(<< "0.", A, B, R/bits >>, Trail, Acc, T)
-	when A >= $0, A =< $9, B >= $0, B =< $9 ->
-		te_list_sep(R, Trail, [{T, (A - $0) * 100 + (B - $0) * 10}|Acc]);
-te_weight(<< "0.", A, R/bits >>, Trail, Acc, T)
-	when A >= $0, A =< $9 ->
-		te_list_sep(R, Trail, [{T, (A - $0) * 100}|Acc]);
+te_weight(<< "0.", A, B, C, R/bits >>, Trail, Acc, T) when ?IS_DIGIT(A), ?IS_DIGIT(B), ?IS_DIGIT(C) ->
+	te_list_sep(R, Trail, [{T, (A - $0) * 100 + (B - $0) * 10 + (C - $0)}|Acc]);
+te_weight(<< "0.", A, B, R/bits >>, Trail, Acc, T) when ?IS_DIGIT(A), ?IS_DIGIT(B) ->
+	te_list_sep(R, Trail, [{T, (A - $0) * 100 + (B - $0) * 10}|Acc]);
+te_weight(<< "0.", A, R/bits >>, Trail, Acc, T) when ?IS_DIGIT(A) ->
+	te_list_sep(R, Trail, [{T, (A - $0) * 100}|Acc]);
 te_weight(<< "0.", R/bits >>, Trail, Acc, T) -> te_list_sep(R, Trail, [{T, 0}|Acc]);
 te_weight(<< "0", R/bits >>, Trail, Acc, T) -> te_list_sep(R, Trail, [{T, 0}|Acc]).
 
 te_list_sep(<<>>, Trail, Acc) -> {Trail, lists:reverse(Acc)};
-te_list_sep(<< $\s, R/bits >>, Trail, Acc) -> te_list_sep(R, Trail, Acc);
-te_list_sep(<< $\t, R/bits >>, Trail, Acc) -> te_list_sep(R, Trail, Acc);
+te_list_sep(<< C, R/bits >>, Trail, Acc) when ?IS_WS(C) -> te_list_sep(R, Trail, Acc);
 te_list_sep(<< $,, R/bits >>, Trail, Acc) -> te_list(R, Trail, Acc).
 
 -ifdef(TEST).
@@ -2928,7 +2678,7 @@ prop_parse_te() ->
 		begin
 			{ResTrail, ResL} = parse_te(TE),
 			CheckedL = [begin
-				ResT =:= ?INLINE_LOWERCASE_BC(T)
+				ResT =:= ?LOWER(T)
 					andalso (ResW =:= W orelse (W =:= undefined andalso ResW =:= 1000))
 			end || {{T, W}, {ResT, ResW}} <- lists:zip(L, ResL)],
 			ResTrail =:= Trail andalso [true] =:= lists:usort(CheckedL)
@@ -2994,7 +2744,7 @@ prop_parse_transfer_encoding() ->
 		begin
 			<< _, TransferEncoding/binary >> = iolist_to_binary([[$,, C] || C <- L]),
 			ResL = parse_transfer_encoding(TransferEncoding),
-			CheckedL = [?INLINE_LOWERCASE_BC(Co) =:= ResC || {Co, ResC} <- lists:zip(L, ResL)],
+			CheckedL = [?LOWER(Co) =:= ResC || {Co, ResC} <- lists:zip(L, ResL)],
 			[true] =:= lists:usort(CheckedL)
 		end).
 
@@ -3046,39 +2796,22 @@ parse_upgrade(Upgrade) ->
 	nonempty(protocol_list(Upgrade, [])).
 
 protocol_list(<<>>, Acc) -> lists:reverse(Acc);
-protocol_list(<< $\s, R/bits >>, Acc) -> protocol_list(R, Acc);
-protocol_list(<< $\t, R/bits >>, Acc) -> protocol_list(R, Acc);
-protocol_list(<< $,, R/bits >>, Acc) -> protocol_list(R, Acc);
+protocol_list(<< C, R/bits >>, Acc) when ?IS_WS_COMMA(C) -> protocol_list(R, Acc);
 protocol_list(<< C, R/bits >>, Acc) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(protocol_name, R, Acc, <<>>)
-	end.
+	?LOWER(protocol_name, R, Acc, <<>>).
 
-protocol_name(<<>>, Acc, P) -> lists:reverse([P|Acc]);
-protocol_name(<< $\s, R/bits >>, Acc, P) -> protocol_list_sep(R, [P|Acc]);
-protocol_name(<< $\t, R/bits >>, Acc, P) -> protocol_list_sep(R, [P|Acc]);
-protocol_name(<< $,, R/bits >>, Acc, P) -> protocol_list(R, [P|Acc]);
 protocol_name(<< $/, C, R/bits >>, Acc, P) ->
-	case C of
-		?INLINE_LOWERCASE(protocol_version, R, Acc, << P/binary, $/ >>)
-	end;
+	?LOWER(protocol_version, R, Acc, << P/binary, $/ >>);
 protocol_name(<< C, R/bits >>, Acc, P) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(protocol_name, R, Acc, P)
-	end.
+	?LOWER(protocol_name, R, Acc, P);
+protocol_name(R, Acc, P) -> protocol_list_sep(R, [P|Acc]).
 
-protocol_version(<<>>, Acc, P) -> lists:reverse([P|Acc]);
-protocol_version(<< $\s, R/bits >>, Acc, P) -> protocol_list_sep(R, [P|Acc]);
-protocol_version(<< $\t, R/bits >>, Acc, P) -> protocol_list_sep(R, [P|Acc]);
-protocol_version(<< $,, R/bits >>, Acc, P) -> protocol_list(R, [P|Acc]);
 protocol_version(<< C, R/bits >>, Acc, P) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(protocol_version, R, Acc, P)
-	end.
+	?LOWER(protocol_version, R, Acc, P);
+protocol_version(R, Acc, P) -> protocol_list_sep(R, [P|Acc]).
 
 protocol_list_sep(<<>>, Acc) -> lists:reverse(Acc);
-protocol_list_sep(<< $\s, R/bits >>, Acc) -> protocol_list_sep(R, Acc);
-protocol_list_sep(<< $\t, R/bits >>, Acc) -> protocol_list_sep(R, Acc);
+protocol_list_sep(<< C, R/bits >>, Acc) when ?IS_WS(C) -> protocol_list_sep(R, Acc);
 protocol_list_sep(<< $,, R/bits >>, Acc) -> protocol_list(R, Acc).
 
 -ifdef(TEST).
@@ -3093,7 +2826,7 @@ prop_parse_upgrade() ->
 		begin
 			<< _, Upgrade/binary >> = iolist_to_binary([[$,, P] || P <- L]),
 			ResL = parse_upgrade(Upgrade),
-			CheckedL = [?INLINE_LOWERCASE_BC(P) =:= ResP || {P, ResP} <- lists:zip(L, ResL)],
+			CheckedL = [?LOWER(P) =:= ResP || {P, ResP} <- lists:zip(L, ResL)],
 			[true] =:= lists:usort(CheckedL)
 		end).
 
@@ -3150,15 +2883,10 @@ parse_vary_error_test_() ->
 parse_www_authenticate(Authenticate) ->
 	nonempty(www_auth_list(Authenticate, [])).
 
--define(IS_WS(C), C =:= $\s orelse C =:= $\t).
--define(IS_WS_COMMA(C), ?IS_WS(C) orelse C =:= $,).
-
 www_auth_list(<<>>, Acc) -> lists:reverse(Acc);
 www_auth_list(<< C, R/bits >>, Acc) when ?IS_WS_COMMA(C) -> www_auth_list(R, Acc);
 www_auth_list(<< C, R/bits >>, Acc) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(www_auth_scheme, R, Acc, <<>>)
-	end.
+	?LOWER(www_auth_scheme, R, Acc, <<>>).
 
 www_auth_basic_before_realm(<< C, R/bits >>, Acc) when ?IS_WS(C) -> www_auth_basic_before_realm(R, Acc);
 www_auth_basic_before_realm(<< "realm=\"", R/bits >>, Acc) -> www_auth_basic(R, Acc, <<>>).
@@ -3175,9 +2903,7 @@ www_auth_scheme(<< C, R/bits >>, Acc, Scheme) when ?IS_WS(C) ->
 		_ -> www_auth_params_list(R, Acc, Scheme, [])
 	end;
 www_auth_scheme(<< C, R/bits >>, Acc, Scheme) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(www_auth_scheme, R, Acc, Scheme)
-	end.
+	?LOWER(www_auth_scheme, R, Acc, Scheme).
 
 www_auth_list_sep(<<>>, Acc) -> lists:reverse(Acc);
 www_auth_list_sep(<< C, R/bits >>, Acc) when ?IS_WS(C) -> www_auth_list_sep(R, Acc);
@@ -3212,18 +2938,14 @@ www_auth_params_list(<< "stale=false", R/bits >>, Acc, Scheme, Params) ->
 www_auth_params_list(<< "stale=true", R/bits >>, Acc, Scheme, Params) ->
 	www_auth_params_list_sep(R, Acc, Scheme, [{<<"stale">>, <<"true">>}|Params]);
 www_auth_params_list(<< C, R/bits >>, Acc, Scheme, Params) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(www_auth_param, R, Acc, Scheme, Params, <<>>)
-	end.
+	?LOWER(www_auth_param, R, Acc, Scheme, Params, <<>>).
 
 www_auth_param(<< $=, $", R/bits >>, Acc, Scheme, Params, K) ->
 	www_auth_quoted(R, Acc, Scheme, Params, K, <<>>);
 www_auth_param(<< $=, C, R/bits >>, Acc, Scheme, Params, K) when ?IS_TOKEN(C) ->
 	www_auth_token(R, Acc, Scheme, Params, K, << C >>);
 www_auth_param(<< C, R/bits >>, Acc, Scheme, Params, K) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(www_auth_param, R, Acc, Scheme, Params, K)
-	end;
+	?LOWER(www_auth_param, R, Acc, Scheme, Params, K);
 www_auth_param(R, Acc, Scheme, Params, NewScheme) ->
 	www_auth_scheme(R, [{Scheme, lists:reverse(Params)}|Acc], NewScheme).
 
@@ -3338,42 +3060,24 @@ nonempty(L) when L =/= [] -> L.
 
 %% Parse a list of case sensitive tokens.
 token_list(<<>>, Acc) -> lists:reverse(Acc);
-token_list(<< $\s, R/bits >>, Acc) -> token_list(R, Acc);
-token_list(<< $\t, R/bits >>, Acc) -> token_list(R, Acc);
-token_list(<< $,, R/bits >>, Acc) -> token_list(R, Acc);
+token_list(<< C, R/bits >>, Acc) when ?IS_WS_COMMA(C) -> token_list(R, Acc);
 token_list(<< C, R/bits >>, Acc) when ?IS_TOKEN(C) -> token(R, Acc, << C >>).
 
-token(<<>>, Acc, T) -> lists:reverse([T|Acc]);
-token(<< $\s, R/bits >>, Acc, T) -> token_list_sep(R, [T|Acc]);
-token(<< $\t, R/bits >>, Acc, T) -> token_list_sep(R, [T|Acc]);
-token(<< $,, R/bits >>, Acc, T) -> token_list(R, [T|Acc]);
-token(<< C, R/bits >>, Acc, T) when ?IS_TOKEN(C) -> token(R, Acc, << T/binary, C >>).
+token(<< C, R/bits >>, Acc, T) when ?IS_TOKEN(C) -> token(R, Acc, << T/binary, C >>);
+token(R, Acc, T) -> token_list_sep(R, [T|Acc]).
 
 token_list_sep(<<>>, Acc) -> lists:reverse(Acc);
-token_list_sep(<< $\s, R/bits >>, Acc) -> token_list_sep(R, Acc);
-token_list_sep(<< $\t, R/bits >>, Acc) -> token_list_sep(R, Acc);
+token_list_sep(<< C, R/bits >>, Acc) when ?IS_WS(C) -> token_list_sep(R, Acc);
 token_list_sep(<< $,, R/bits >>, Acc) -> token_list(R, Acc).
 
 %% Parse a list of case insensitive tokens.
 token_ci_list(<<>>, Acc) -> lists:reverse(Acc);
-token_ci_list(<< $\s, R/bits >>, Acc) -> token_ci_list(R, Acc);
-token_ci_list(<< $\t, R/bits >>, Acc) -> token_ci_list(R, Acc);
-token_ci_list(<< $,, R/bits >>, Acc) -> token_ci_list(R, Acc);
-token_ci_list(<< C, R/bits >>, Acc) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(token_ci, R, Acc, <<>>)
-	end.
+token_ci_list(<< C, R/bits >>, Acc) when ?IS_WS_COMMA(C) -> token_ci_list(R, Acc);
+token_ci_list(<< C, R/bits >>, Acc) when ?IS_TOKEN(C) -> ?LOWER(token_ci, R, Acc, <<>>).
 
-token_ci(<<>>, Acc, T) -> lists:reverse([T|Acc]);
-token_ci(<< $\s, R/bits >>, Acc, T) -> token_ci_list_sep(R, [T|Acc]);
-token_ci(<< $\t, R/bits >>, Acc, T) -> token_ci_list_sep(R, [T|Acc]);
-token_ci(<< $,, R/bits >>, Acc, T) -> token_ci_list(R, [T|Acc]);
-token_ci(<< C, R/bits >>, Acc, T) when ?IS_TOKEN(C) ->
-	case C of
-		?INLINE_LOWERCASE(token_ci, R, Acc, T)
-	end.
+token_ci(<< C, R/bits >>, Acc, T) when ?IS_TOKEN(C) -> ?LOWER(token_ci, R, Acc, T);
+token_ci(R, Acc, T) -> token_ci_list_sep(R, [T|Acc]).
 
 token_ci_list_sep(<<>>, Acc) -> lists:reverse(Acc);
-token_ci_list_sep(<< $\s, R/bits >>, Acc) -> token_ci_list_sep(R, Acc);
-token_ci_list_sep(<< $\t, R/bits >>, Acc) -> token_ci_list_sep(R, Acc);
+token_ci_list_sep(<< C, R/bits >>, Acc) when ?IS_WS(C) -> token_ci_list_sep(R, Acc);
 token_ci_list_sep(<< $,, R/bits >>, Acc) -> token_ci_list(R, Acc).

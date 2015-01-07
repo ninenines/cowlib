@@ -910,11 +910,11 @@ cache_directive_list(<< C, R/bits >>, Acc) when ?IS_TOKEN(C) ->
 	?LOWER(cache_directive, R, Acc, <<>>).
 
 cache_directive(<< $=, $", R/bits >>, Acc, T)
-		when T =:= <<"no-cache">> orelse T =:= <<"private">> ->
+		when (T =:= <<"no-cache">>) or (T =:= <<"private">>) ->
 	cache_directive_fields_list(R, Acc, T, []);
 cache_directive(<< $=, C, R/bits >>, Acc, T)
-		when ?IS_DIGIT(C), T =:= <<"max-age">> orelse T =:= <<"max-stale">>
-			orelse T =:= <<"min-fresh">> orelse T =:= <<"s-maxage">> ->
+		when ?IS_DIGIT(C), (T =:= <<"max-age">>) or (T =:= <<"max-stale">>)
+			or (T =:= <<"min-fresh">>) or (T =:= <<"s-maxage">>) ->
 	cache_directive_delta(R, Acc, T, (C - $0));
 cache_directive(<< $=, $", R/bits >>, Acc, T) -> cache_directive_quoted_string(R, Acc, T, <<>>);
 cache_directive(<< $=, C, R/bits >>, Acc, T) when ?IS_TOKEN(C) -> cache_directive_token(R, Acc, T, << C >>);
@@ -1754,10 +1754,10 @@ horse_parse_etag() ->
 parse_expect(<<"100-continue">>) ->
 	continue;
 parse_expect(<<"100-", C, O, N, T, I, M, U, E >>)
-	when C =:= $C orelse C =:= $c, O =:= $O orelse O =:= $o,
-		N =:= $N orelse N =:= $n, T =:= $T orelse T =:= $t,
-		I =:= $I orelse I =:= $i, M =:= $N orelse M =:= $n,
-		U =:= $U orelse U =:= $u, E =:= $E orelse E =:= $e ->
+	when (C =:= $C) or (C =:= $c), (O =:= $O) or (O =:= $o),
+		(N =:= $N) or (N =:= $n), (T =:= $T) or (T =:= $t),
+		(I =:= $I) or (I =:= $i), (M =:= $N) or (M =:= $n),
+		(U =:= $U) or (U =:= $u), (E =:= $E) or (E =:= $e) ->
 	continue.
 
 -ifdef(TEST).
@@ -1857,12 +1857,12 @@ parse_host(Host) ->
 
 ipv6_address(<< $] >>, IP) -> {<< IP/binary, $] >>, undefined};
 ipv6_address(<< $], $:, Port/bits >>, IP) -> {<< IP/binary, $] >>, binary_to_integer(Port)};
-ipv6_address(<< C, R/bits >>, IP) when ?IS_HEX(C) orelse C =:= $: orelse C =:= $. ->
+ipv6_address(<< C, R/bits >>, IP) when ?IS_HEX(C) or (C =:= $:) or (C =:= $.) ->
 	?LOWER(ipv6_address, R, IP).
 
 reg_name(<<>>, Name) -> {Name, undefined};
 reg_name(<< $:, Port/bits >>, Name) -> {Name, binary_to_integer(Port)};
-reg_name(<< C, R/bits >>, Name) when ?IS_URI_UNRESERVED(C) orelse ?IS_URI_SUB_DELIMS(C) ->
+reg_name(<< C, R/bits >>, Name) when ?IS_URI_UNRESERVED(C) or ?IS_URI_SUB_DELIMS(C) ->
 	?LOWER(reg_name, R, Name).
 
 -ifdef(TEST).

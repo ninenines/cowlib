@@ -155,7 +155,7 @@ parse_cookie_test_() ->
 		{<<"foo=\\\";;bar=good ">>,
 			[{<<"foo">>, <<"\\\"">>}, {<<"bar">>, <<"good">>}]},
 		{<<"foo=\"\\\";bar">>, {error, badarg}},
-		{<<>>, []},
+		{<<>>, []}, %% Flash player.
 		{<<"foo=bar , baz=wibble ">>, [{<<"foo">>, <<"bar , baz=wibble">>}]}
 	],
 	[{V, fun() -> R = parse_cookie(V) end} || {V, R} <- Tests].

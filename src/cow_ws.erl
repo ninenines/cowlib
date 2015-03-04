@@ -14,20 +14,24 @@
 
 -module(cow_ws).
 
+-export([negotiate_permessage_deflate/3]).
+-export([negotiate_x_webkit_deflate_frame/3]).
+
 -export([parse_header/3]).
--export([parse_close_code/2]).
 -export([parse_payload/9]).
+-export([make_frame/4]).
 -export([frame/2]).
 
 -type close_code() :: 1000..1003 | 1006..1011 | 3000..4999.
 -export_type([close_code/0]).
 
--type frag_state() :: undefined | {fin | nofin, text | binary}.
+-type frag_state() :: undefined | {fin | nofin, text | binary, rsv()}.
 -export_type([frag_state/0]).
 
 -type frame() :: close | ping | pong
 	| {text | binary | close | ping | pong, iodata()}
-	| {close, close_code(), iodata()}.
+	| {close, close_code(), iodata()}
+	| {fragment, fin | nofin, text | binary, iodata()}.
 -export_type([frame/0]).
 
 -type extensions() :: map().
@@ -35,6 +39,108 @@
 -type mask_key() :: undefined | 0..16#ffffffff.
 -type rsv() :: <<_:3>>.
 -type utf8_state() :: <<>> | <<_:8>> | <<_:16>> | <<_:24>>.
+
+%% @doc Negotiate the permessage-deflate extension.
+
+%% Ignore if deflate already negotiated.
+negotiate_permessage_deflate(_, #{deflate := _}, _) ->
+	ignore;
+negotiate_permessage_deflate(Params, Extensions, Opts) ->
+	case lists:usort(Params) of
+		%% Ignore if multiple parameters with the same name.
+		Params2 when length(Params) =/= length(Params2) ->
+			ignore;
+		Params2 ->
+			%% @todo Might want to make these configurable defaults.
+			case parse_permessage_deflate_params(Params2, 15, takeover, 15, takeover, []) of
+				ignore ->
+					ignore;
+				{ClientWindowBits, ClientTakeOver, ServerWindowBits, ServerTakeOver, RespParams} ->
+					{Inflate, Deflate} = init_permessage_deflate(ClientWindowBits, ServerWindowBits, Opts),
+					{ok, [<<"permessage-deflate">>, RespParams],
+						Extensions#{
+							deflate => Deflate,
+							deflate_takeover => ServerTakeOver,
+							inflate => Inflate,
+							inflate_takeover => ClientTakeOver}}
+			end
+	end.
+
+parse_permessage_deflate_params([], CB, CTO, SB, STO, RespParams) ->
+	{CB, CTO, SB, STO, RespParams};
+parse_permessage_deflate_params([<<"client_max_window_bits">>|Tail], CB, CTO, SB, STO, RespParams) ->
+	parse_permessage_deflate_params(Tail, CB, CTO, SB, STO,
+		[<<"; ">>, <<"client_max_window_bits=">>, integer_to_binary(CB)|RespParams]);
+parse_permessage_deflate_params([{<<"client_max_window_bits">>, Max}|Tail], _, CTO, SB, STO, RespParams) ->
+	case parse_max_window_bits(Max) of
+		error ->
+			ignore;
+		CB ->
+			parse_permessage_deflate_params(Tail, CB, CTO, SB, STO,
+				[<<"; ">>, <<"client_max_window_bits=">>, Max|RespParams])
+	end;
+parse_permessage_deflate_params([<<"client_no_context_takeover">>|Tail], CB, _, SB, STO, RespParams) ->
+	parse_permessage_deflate_params(Tail, CB, no_takeover, SB, STO, [<<"; ">>, <<"client_no_context_takeover">>|RespParams]);
+parse_permessage_deflate_params([{<<"server_max_window_bits">>, Max}|Tail], CB, CTO, _, STO, RespParams) ->
+	case parse_max_window_bits(Max) of
+		error ->
+			ignore;
+		SB ->
+			parse_permessage_deflate_params(Tail, CB, CTO, SB, STO,
+				[<<"; ">>, <<"server_max_window_bits=">>, Max|RespParams])
+	end;
+parse_permessage_deflate_params([<<"server_no_context_takeover">>|Tail], CB, CTO, SB, _, RespParams) ->
+	parse_permessage_deflate_params(Tail, CB, CTO, SB, no_takeover, [<<"; ">>, <<"server_no_context_takeover">>|RespParams]);
+%% Ignore if unknown parameter; ignore if parameter with invalid value.
+parse_permessage_deflate_params(_, _, _, _, _, _) ->
+	ignore.
+
+parse_max_window_bits(<<"8">>) -> 8;
+parse_max_window_bits(<<"9">>) -> 9;
+parse_max_window_bits(<<"10">>) -> 10;
+parse_max_window_bits(<<"11">>) -> 11;
+parse_max_window_bits(<<"12">>) -> 12;
+parse_max_window_bits(<<"13">>) -> 13;
+parse_max_window_bits(<<"14">>) -> 14;
+parse_max_window_bits(<<"15">>) -> 15;
+parse_max_window_bits(_) -> error.
+
+% A negative WindowBits value indicates that zlib headers are not used.
+init_permessage_deflate(ClientWindowBits, ServerWindowBits, Opts) ->
+	Inflate = zlib:open(),
+	ok = zlib:inflateInit(Inflate, -ClientWindowBits),
+	Deflate = zlib:open(),
+	%% @todo Remove this case .. of for OTP 18+ if PR https://github.com/erlang/otp/pull/633 gets merged.
+	ServerWindowBits2 = case ServerWindowBits of
+		8 -> 9;
+		_ -> ServerWindowBits
+	end,
+	ok = zlib:deflateInit(Deflate,
+		maps:get(level, Opts, best_compression),
+		deflated,
+		-ServerWindowBits2,
+		maps:get(mem_level, Opts, 8),
+		maps:get(strategy, Opts, default)),
+	{Inflate, Deflate}.
+
+%% @doc Negotiate the x-webkit-deflate-frame extension.
+%%
+%% The implementation is very basic and none of the parameters
+%% are currently supported.
+
+negotiate_x_webkit_deflate_frame(_, #{deflate := _}, _) ->
+	ignore;
+negotiate_x_webkit_deflate_frame(_Params, Extensions, Opts) ->
+	% Since we are negotiating an unconstrained deflate-frame
+	% then we must be willing to accept frames using the
+	% maximum window size which is 2^15.
+	{Inflate, Deflate} = init_permessage_deflate(15, 15, Opts),
+	{ok, <<"x-webkit-deflate-frame">>,
+		Extensions#{
+			deflate => Deflate,
+			deflate_takeover => takeover,
+			inflate => Inflate,
+			inflate_takeover => takeover}}.
 
 %% @doc Parse and validate the Websocket frame header.
 %%
@@ -47,8 +153,8 @@
 %% that defines meanings for non-zero values.
 parse_header(<< _:1, Rsv:3, _/bits >>, Extensions, _) when Extensions =:= #{}, Rsv =/= 0 -> error;
 %% Last 2 RSV bits MUST be 0 if deflate-frame extension is used.
-parse_header(<< _:2, 1:1, _/bits >>, #{deflate_frame := _}, _) -> error;
-parse_header(<< _:3, 1:1, _/bits >>, #{deflate_frame := _}, _) -> error;
+parse_header(<< _:2, 1:1, _/bits >>, #{deflate := _}, _) -> error;
+parse_header(<< _:3, 1:1, _/bits >>, #{deflate := _}, _) -> error;
 %% Invalid opcode. Note that these opcodes may be used by extensions.
 parse_header(<< _:4, 3:4, _/bits >>, _, _) -> error;
 parse_header(<< _:4, 4:4, _/bits >>, _, _) -> error;
@@ -65,13 +171,13 @@ parse_header(<< 0:1, _:3, Opcode:4, _/bits >>, _, _) when Opcode >= 8 -> error;
 %% A frame MUST NOT use the zero opcode unless fragmentation was initiated.
 parse_header(<< _:4, 0:4, _/bits >>, _, undefined) -> error;
 %% Non-control opcode when expecting control message or next fragment.
-parse_header(<< _:4, 1:4, _/bits >>, _, {_, _}) -> error;
-parse_header(<< _:4, 2:4, _/bits >>, _, {_, _}) -> error;
-parse_header(<< _:4, 3:4, _/bits >>, _, {_, _}) -> error;
-parse_header(<< _:4, 4:4, _/bits >>, _, {_, _}) -> error;
-parse_header(<< _:4, 5:4, _/bits >>, _, {_, _}) -> error;
-parse_header(<< _:4, 6:4, _/bits >>, _, {_, _}) -> error;
-parse_header(<< _:4, 7:4, _/bits >>, _, {_, _}) -> error;
+parse_header(<< _:4, 1:4, _/bits >>, _, {_, _, _}) -> error;
+parse_header(<< _:4, 2:4, _/bits >>, _, {_, _, _}) -> error;
+parse_header(<< _:4, 3:4, _/bits >>, _, {_, _, _}) -> error;
+parse_header(<< _:4, 4:4, _/bits >>, _, {_, _, _}) -> error;
+parse_header(<< _:4, 5:4, _/bits >>, _, {_, _, _}) -> error;
+parse_header(<< _:4, 6:4, _/bits >>, _, {_, _, _}) -> error;
+parse_header(<< _:4, 7:4, _/bits >>, _, {_, _, _}) -> error;
 %% Close control frame length MUST be 0 or >= 2.
 parse_header(<< _:4, 8:4, _:1, 1:7, _/bits >>, _, _) -> error;
 %% Close control frame with incomplete close code. Need more data.
@@ -111,7 +217,7 @@ parse_header(Opcode, Fin, FragState, Rsv, Len, MaskKey, Rest) ->
 		0 -> fragment;
 		1 -> Type
 	end,
-	{Type2, frag_state(Type, Fin, FragState), Rsv, Len, MaskKey, Rest}.
+	{Type2, frag_state(Type, Fin, Rsv, FragState), Rsv, Len, MaskKey, Rest}.
 
 opcode_to_frame_type(0) -> fragment;
 opcode_to_frame_type(1) -> text;
@@ -120,25 +226,10 @@ opcode_to_frame_type(8) -> close;
 opcode_to_frame_type(9) -> ping;
 opcode_to_frame_type(10) -> pong.
 
-frag_state(Type, 0, undefined) -> {nofin, Type};
-frag_state(fragment, 0, FragState = {nofin, _}) -> FragState;
-frag_state(fragment, 1, {nofin, Type}) -> {fin, Type};
-frag_state(_, 1, FragState) -> FragState.
-
-%% @doc Parse and validate the close frame's close code.
-%%
-%% The close code is part of the payload and must therefore be unmasked.
-
--spec parse_close_code(binary(), mask_key()) -> {ok, close_code(), binary()} | error.
-parse_close_code(<< MaskedCode:2/binary, Rest/bits >>, MaskKey) ->
-	<< Code:16 >> = unmask(MaskedCode, MaskKey, 0),
-	if
-		Code < 1000; Code =:= 1004; Code =:= 1005; Code =:= 1006;
-				(Code > 1011) and (Code < 3000); Code > 4999 ->
-			error;
-		true ->
-			{ok, Code, Rest}
-	end.
+frag_state(Type, 0, Rsv, undefined) -> {nofin, Type, Rsv};
+frag_state(fragment, 0, _, FragState = {nofin, _, _}) -> FragState;
+frag_state(fragment, 1, _, {nofin, Type, Rsv}) -> {fin, Type, Rsv};
+frag_state(_, 1, _, FragState) -> FragState.
 
 %% @doc Parse and validate the frame's payload.
 %%
@@ -148,10 +239,45 @@ parse_close_code(<< MaskedCode:2/binary, Rest/bits >>, MaskKey) ->
 -spec parse_payload(binary(), mask_key(), utf8_state(), non_neg_integer(),
 		frame_type(), non_neg_integer(), frag_state(), extensions(), rsv())
 	-> {ok, binary(), utf8_state(), binary()} | {more, binary(), utf8_state()} | error.
-parse_payload(Data, MaskKey, Utf8State, ParsedLen, Type, Len, FragState, #{deflate_frame := Inflate}, << 1:1, 0:2 >>) ->
+%% Empty last frame of compressed message.
+parse_payload(Data, _, Utf8State, _, _, 0, {fin, _, << 1:1, 0:2 >>},
+		#{inflate := Inflate, inflate_takeover := TakeOver}, _) ->
+	case TakeOver of
+		no_takeover -> zlib:inflateReset(Inflate);
+		takeover -> ok
+	end,
+	{ok, <<>>, Utf8State, Data};
+%% Compressed fragmented frame.
+parse_payload(Data, MaskKey, Utf8State, ParsedLen, Type, Len, FragState = {_, _, << 1:1, 0:2 >>},
+		#{inflate := Inflate, inflate_takeover := TakeOver}, _) ->
 	{Data2, Rest, Eof} = split_payload(Data, Len),
-	Payload = inflate_frame(unmask(Data2, MaskKey, ParsedLen), Inflate, FragState, Eof),
+	Payload = inflate_frame(unmask(Data2, MaskKey, ParsedLen), Inflate, TakeOver, FragState, Eof),
 	validate_payload(Payload, Rest, Utf8State, ParsedLen, Type, FragState, Eof);
+%% Compressed frame.
+parse_payload(Data, MaskKey, Utf8State, ParsedLen, Type, Len, FragState,
+		#{inflate := Inflate, inflate_takeover := TakeOver}, << 1:1, 0:2 >>) when Type =:= text; Type =:= binary ->
+	{Data2, Rest, Eof} = split_payload(Data, Len),
+	Payload = inflate_frame(unmask(Data2, MaskKey, ParsedLen), Inflate, TakeOver, FragState, Eof),
+	validate_payload(Payload, Rest, Utf8State, ParsedLen, Type, FragState, Eof);
+%% Empty frame.
+parse_payload(Data, _, <<>>, 0, _, 0, _, _, _) ->
+	{ok, <<>>, <<>>, Data};
+%% Start of close frame.
+parse_payload(Data, MaskKey, Utf8State, 0, Type = close, Len, FragState, _, << 0:3 >>) ->
+	{<< MaskedCode:2/binary, Data2/bits >>, Rest, Eof} = split_payload(Data, Len),
+	<< CloseCode:16 >> = unmask(MaskedCode, MaskKey, 0),
+	case validate_close_code(CloseCode) of
+		ok ->
+			Payload = unmask(Data2, MaskKey, 2),
+			case validate_payload(Payload, Rest, Utf8State, 2, Type, FragState, Eof) of
+				{ok, _, Utf8State2, _} -> {ok, CloseCode, Payload, Utf8State2, Rest};
+				{more, _, Utf8State2} -> {more, CloseCode, Payload, Utf8State2};
+				Error -> Error
+			end;
+		error ->
+			{error, badframe}
+	end;
+%% Normal frame.
 parse_payload(Data, MaskKey, Utf8State, ParsedLen, Type, Len, FragState, _, << 0:3 >>) ->
 	{Data2, Rest, Eof} = split_payload(Data, Len),
 	Payload = unmask(Data2, MaskKey, ParsedLen),
@@ -166,6 +292,17 @@ split_payload(Data, Len) ->
 		_ ->
 			<< Data2:Len/binary, Rest/bits >> = Data,
 			{Data2, Rest, true}
+	end.
+
+validate_close_code(Code) ->
+	if
+		Code < 1000 -> error;
+		Code =:= 1004 -> error;
+		Code =:= 1005 -> error;
+		Code =:= 1006 -> error;
+		Code > 1011, Code < 3000 -> error;
+		Code > 4999 -> error;
+		true -> ok
 	end.
 
 unmask(Data, MaskKey, 0) ->
@@ -196,26 +333,32 @@ do_unmask(<< O:8 >>, MaskKey, Acc) ->
 	<< Acc/binary, T:8 >>.
 
 %% @todo Try using iodata() and see if it improves anything.
-inflate_frame(Data, Inflate, fin, true) ->
-	iolist_to_binary(zlib:inflate(Inflate, << Data/binary, 0, 0, 255, 255 >>));
-inflate_frame(Data, Inflate, _, _) ->
+inflate_frame(Data, Inflate, TakeOver, FragState, true)
+		when FragState =:= undefined; element(1, FragState) =:= fin ->
+	Data2 = zlib:inflate(Inflate, << Data/binary, 0, 0, 255, 255 >>),
+	case TakeOver of
+		no_takeover -> zlib:inflateReset(Inflate);
+		takeover -> ok
+	end,
+	iolist_to_binary(Data2);
+inflate_frame(Data, Inflate, _T, _F, _E) ->
 	iolist_to_binary(zlib:inflate(Inflate, Data)).
 
 %% Text frames and close control frames MUST have a payload that is valid UTF-8.
 validate_payload(Payload, Rest, Utf8State, _, Type, _, Eof) when Type =:= text; Type =:= close ->
 	case validate_utf8(<< Utf8State/binary, Payload/binary >>) of
-		false -> error;
-		Utf8State when not Eof -> {more, Payload, Utf8State};
+		false -> {error, badencoding};
+		Utf8State2 when not Eof -> {more, Payload, Utf8State2};
 		<<>> when Eof -> {ok, Payload, <<>>, Rest};
-		_ -> error
+		_ -> {error, badencoding}
 	end;
-validate_payload(Payload, Rest, Utf8State, _, fragment, {Fin, text}, Eof) ->
+validate_payload(Payload, Rest, Utf8State, _, fragment, {Fin, text, _}, Eof) ->
 	case validate_utf8(<< Utf8State/binary, Payload/binary >>) of
-		false -> error;
+		false -> {error, badencoding};
 		<<>> when Eof -> {ok, Payload, <<>>, Rest};
 		Utf8State2 when Eof, Fin =:= nofin -> {ok, Payload, Utf8State2, Rest};
 		Utf8State2 when not Eof -> {more, Payload, Utf8State2};
-		_ -> error
+		_ -> {error, badencoding}
 	end;
 validate_payload(Payload, _, Utf8State, _, _, _, false) ->
 	{more, Payload, Utf8State};
@@ -224,8 +367,8 @@ validate_payload(Payload, Rest, Utf8State, _, _, _, true) ->
 
 %% Returns <<>> if the argument is valid UTF-8, false if not,
 %% or the incomplete part of the argument if we need more data.
-validate_utf8(Valid = <<>>) ->
-	Valid;
+validate_utf8(<<>>) ->
+	<<>>;
 validate_utf8(<< _/utf8, Rest/bits >>) ->
 	validate_utf8(Rest);
 %% 2 bytes. Codepages C0 and C1 are invalid; fail early.
@@ -251,7 +394,22 @@ validate_utf8(Incomplete = << 2#11110:5, _:3, 2#10:2, _:6, 2#10:2, _:6 >>) ->
 validate_utf8(_) ->
 	false.
 
+%% @doc Return a frame tuple from parsed state and data.
+
+-spec make_frame(frame_type(), binary(), close_code(), frag_state()) -> frame().
+%% Fragmented frame.
+make_frame(fragment, Payload, _, {Fin, Type, _}) -> {fragment, Fin, Type, Payload};
+make_frame(text, Payload, _, _) -> {text, Payload};
+make_frame(binary, Payload, _, _) -> {binary, Payload};
+make_frame(close, <<>>, undefined, _) -> close;
+make_frame(close, Payload, CloseCode, _) -> {close, CloseCode, Payload};
+make_frame(ping, <<>>, _, _) -> ping;
+make_frame(ping, Payload, _, _) -> {ping, Payload};
+make_frame(pong, <<>>, _, _) -> pong;
+make_frame(pong, Payload, _, _) -> {pong, Payload}.
+
 %% @doc Construct an unmasked Websocket frame.
+%% @todo Add fragments support.
 
 -spec frame(frame(), extensions()) -> iodata().
 %% Control frames. Control packets must not be > 125 in length.
@@ -276,12 +434,12 @@ frame({pong, Payload}, _) ->
 	true = Len =< 125,
 	[<< 1:1, 0:3, 10:4, 0:1, Len:7 >>, Payload];
 %% Data frames, deflate-frame extension.
-frame({text, Payload}, #{deflate_frame := Deflate}) ->
-	Payload2 = deflate_frame(Payload, Deflate),
+frame({text, Payload}, #{deflate := Deflate, deflate_takeover := TakeOver}) ->
+	Payload2 = deflate_frame(Payload, Deflate, TakeOver),
 	Len = payload_length(Payload2),
 	[<< 1:1, 1:1, 0:2, 1:4, 0:1, Len/bits >>, Payload2];
-frame({binary, Payload}, #{deflate_frame := Deflate}) ->
-	Payload2 = deflate_frame(Payload, Deflate),
+frame({binary, Payload}, #{deflate := Deflate, deflate_takeover := TakeOver}) ->
+	Payload2 = deflate_frame(Payload, Deflate, TakeOver),
 	Len = payload_length(Payload2),
 	[<< 1:1, 1:1, 0:2, 2:4, 0:1, Len/bits >>, Payload2];
 %% Data frames.
@@ -299,8 +457,12 @@ payload_length(Payload) ->
 		N when N =< 16#7fffffffffffffff -> << 127:7, N:64 >>
 	end.
 
-deflate_frame(Payload, Deflate) ->
+deflate_frame(Payload, Deflate, TakeOver) ->
 	Deflated = iolist_to_binary(zlib:deflate(Deflate, Payload, sync)),
+	case TakeOver of
+		no_takeover -> zlib:deflateReset(Deflate);
+		takeover -> ok
+	end,
 	Len = byte_size(Deflated) - 4,
 	case Deflated of
 		<< Body:Len/binary, 0:8, 0:8, 255:8, 255:8 >> -> Body;

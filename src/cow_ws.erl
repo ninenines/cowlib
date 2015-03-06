@@ -34,11 +34,13 @@
 	| {fragment, fin | nofin, text | binary, iodata()}.
 -export_type([frame/0]).
 
+-type utf8_state() :: 0..8.
+-export_type([utf8_state/0]).
+
 -type extensions() :: map().
 -type frame_type() :: fragment | text | binary | close | ping | pong.
 -type mask_key() :: undefined | 0..16#ffffffff.
 -type rsv() :: <<_:3>>.
--type utf8_state() :: <<>> | <<_:8>> | <<_:16>> | <<_:24>>.
 
 %% @doc Negotiate the permessage-deflate extension.
 
@@ -260,8 +262,8 @@ parse_payload(Data, MaskKey, Utf8State, ParsedLen, Type, Len, FragState,
 	Payload = inflate_frame(unmask(Data2, MaskKey, ParsedLen), Inflate, TakeOver, FragState, Eof),
 	validate_payload(Payload, Rest, Utf8State, ParsedLen, Type, FragState, Eof);
 %% Empty frame.
-parse_payload(Data, _, <<>>, 0, _, 0, _, _, _) ->
-	{ok, <<>>, <<>>, Data};
+parse_payload(Data, _, Utf8State = 0, 0, _, 0, _, _, _) ->
+	{ok, <<>>, Utf8State, Data};
 %% Start of close frame.
 parse_payload(Data, MaskKey, Utf8State, 0, Type = close, Len, FragState, _, << 0:3 >>) ->
 	{<< MaskedCode:2/binary, Data2/bits >>, Rest, Eof} = split_payload(Data, Len),
@@ -346,16 +348,16 @@ inflate_frame(Data, Inflate, _T, _F, _E) ->
 
 %% Text frames and close control frames MUST have a payload that is valid UTF-8.
 validate_payload(Payload, Rest, Utf8State, _, Type, _, Eof) when Type =:= text; Type =:= close ->
-	case validate_utf8(<< Utf8State/binary, Payload/binary >>) of
-		false -> {error, badencoding};
+	case validate_utf8(Payload, Utf8State) of
+		1 -> {error, badencoding};
 		Utf8State2 when not Eof -> {more, Payload, Utf8State2};
-		<<>> when Eof -> {ok, Payload, <<>>, Rest};
+		0 when Eof -> {ok, Payload, 0, Rest};
 		_ -> {error, badencoding}
 	end;
 validate_payload(Payload, Rest, Utf8State, _, fragment, {Fin, text, _}, Eof) ->
-	case validate_utf8(<< Utf8State/binary, Payload/binary >>) of
-		false -> {error, badencoding};
-		<<>> when Eof -> {ok, Payload, <<>>, Rest};
+	case validate_utf8(Payload, Utf8State) of
+		1 -> {error, badencoding};
+		0 when Eof -> {ok, Payload, 0, Rest};
 		Utf8State2 when Eof, Fin =:= nofin -> {ok, Payload, Utf8State2, Rest};
 		Utf8State2 when not Eof -> {more, Payload, Utf8State2};
 		_ -> {error, badencoding}
@@ -365,34 +367,39 @@ validate_payload(Payload, _, Utf8State, _, _, _, false) ->
 validate_payload(Payload, Rest, Utf8State, _, _, _, true) ->
 	{ok, Payload, Utf8State, Rest}.
 
-%% Returns <<>> if the argument is valid UTF-8, false if not,
-%% or the incomplete part of the argument if we need more data.
-validate_utf8(<<>>) ->
-	<<>>;
-validate_utf8(<< _/utf8, Rest/bits >>) ->
-	validate_utf8(Rest);
-%% 2 bytes. Codepages C0 and C1 are invalid; fail early.
-validate_utf8(<< 2#1100000:7, _/bits >>) ->
-	false;
-validate_utf8(Incomplete = << 2#110:3, _:5 >>) ->
-	Incomplete;
-%% 3 bytes.
-validate_utf8(Incomplete = << 2#1110:4, _:4 >>) ->
-	Incomplete;
-validate_utf8(Incomplete = << 2#1110:4, _:4, 2#10:2, _:6 >>) ->
-	Incomplete;
-%% 4 bytes. Codepage F4 may have invalid values greater than 0x10FFFF.
-validate_utf8(<< 2#11110100:8, 2#10:2, High:6, _/bits >>) when High >= 2#10000 ->
-	false;
-validate_utf8(Incomplete = << 2#11110:5, _:3 >>) ->
-	Incomplete;
-validate_utf8(Incomplete = << 2#11110:5, _:3, 2#10:2, _:6 >>) ->
-	Incomplete;
-validate_utf8(Incomplete = << 2#11110:5, _:3, 2#10:2, _:6, 2#10:2, _:6 >>) ->
-	Incomplete;
-%% Invalid.
-validate_utf8(_) ->
-	false.
+%% Based on the Flexible and Economical UTF-8 Decoder algorithm by
+%% Bjoern Hoehrmann <bjoern@hoehrmann.de> (http://bjoern.hoehrmann.de/utf-8/decoder/dfa/).
+%%
+%% The original algorithm has been unrolled into all combinations of values for C and State
+%% each with a clause. The common clauses were then grouped together.
+%%
+%% This function returns 0 on success, 1 on error, and 2..8 on incomplete data.
+validate_utf8(<<>>, State) -> State;
+validate_utf8(<< C, Rest/bits >>, 0) when C < 128 -> validate_utf8(Rest, 0);
+validate_utf8(<< C, Rest/bits >>, 2) when C >= 128, C < 144 -> validate_utf8(Rest, 0);
+validate_utf8(<< C, Rest/bits >>, 3) when C >= 128, C < 144 -> validate_utf8(Rest, 2);
+validate_utf8(<< C, Rest/bits >>, 5) when C >= 128, C < 144 -> validate_utf8(Rest, 2);
+validate_utf8(<< C, Rest/bits >>, 7) when C >= 128, C < 144 -> validate_utf8(Rest, 3);
+validate_utf8(<< C, Rest/bits >>, 8) when C >= 128, C < 144 -> validate_utf8(Rest, 3);
+validate_utf8(<< C, Rest/bits >>, 2) when C >= 144, C < 160 -> validate_utf8(Rest, 0);
+validate_utf8(<< C, Rest/bits >>, 3) when C >= 144, C < 160 -> validate_utf8(Rest, 2);
+validate_utf8(<< C, Rest/bits >>, 5) when C >= 144, C < 160 -> validate_utf8(Rest, 2);
+validate_utf8(<< C, Rest/bits >>, 6) when C >= 144, C < 160 -> validate_utf8(Rest, 3);
+validate_utf8(<< C, Rest/bits >>, 7) when C >= 144, C < 160 -> validate_utf8(Rest, 3);
+validate_utf8(<< C, Rest/bits >>, 2) when C >= 160, C < 192 -> validate_utf8(Rest, 0);
+validate_utf8(<< C, Rest/bits >>, 3) when C >= 160, C < 192 -> validate_utf8(Rest, 2);
+validate_utf8(<< C, Rest/bits >>, 4) when C >= 160, C < 192 -> validate_utf8(Rest, 2);
+validate_utf8(<< C, Rest/bits >>, 6) when C >= 160, C < 192 -> validate_utf8(Rest, 3);
+validate_utf8(<< C, Rest/bits >>, 7) when C >= 160, C < 192 -> validate_utf8(Rest, 3);
+validate_utf8(<< C, Rest/bits >>, 0) when C >= 194, C < 224 -> validate_utf8(Rest, 2);
+validate_utf8(<< 224, Rest/bits >>, 0) -> validate_utf8(Rest, 4);
+validate_utf8(<< C, Rest/bits >>, 0) when C >= 225, C < 237 -> validate_utf8(Rest, 3);
+validate_utf8(<< 237, Rest/bits >>, 0) -> validate_utf8(Rest, 5);
+validate_utf8(<< C, Rest/bits >>, 0) when C =:= 238; C =:= 239 -> validate_utf8(Rest, 3);
+validate_utf8(<< 240, Rest/bits >>, 0) -> validate_utf8(Rest, 6);
+validate_utf8(<< C, Rest/bits >>, 0) when C =:= 241; C =:= 242; C =:= 243 -> validate_utf8(Rest, 7);
+validate_utf8(<< 244, Rest/bits >>, 0) -> validate_utf8(Rest, 8);
+validate_utf8(_, _) -> 1.
 
 %% @doc Return a frame tuple from parsed state and data.
 

@@ -284,13 +284,36 @@ settings_frame_test() ->
 -endif.
 
 build_headers(Zdef, Headers) ->
-	NbHeaders = length(Headers),
+	DedupedHeaders = dedupe_headers(Headers, []),
+	NbHeaders = length(DedupedHeaders),
 	Headers2 = [begin
 		L1 = iolist_size(Key),
 		L2 = iolist_size(Value),
 		[<< L1:32 >>, Key, << L2:32 >>, Value]
-	end || {Key, Value} <- Headers],
+	end || {Key, Value} <- DedupedHeaders],
 	zlib:deflate(Zdef, [<< NbHeaders:32 >>, Headers2], full).
+
+dedupe_headers([], Acc) ->
+	lists:reverse(Acc);
+dedupe_headers([{Key, Value}|Headers], Acc) ->
+	Acc2 = append_header_value(Key, Value, Acc, []),
+	dedupe_headers(Headers, Acc2).
+
+append_header_value(Key, Value, [], Acc) ->
+	[{Key, Value}|Acc];
+append_header_value(Key, Value, [{Key, PrevValue}|Rest], Acc) ->
+	[{Key, [PrevValue, 0, Value]}|Rest] ++ Acc;
+append_header_value(Key, Value, [Header|Headers], Acc) ->
+	append_header_value(Key, Value, Headers, [Header|Acc]).
+
+-ifdef(TEST).
+dedupe_headers_test_() ->
+	Tests = [
+		{[{<<"set-cookie">>, <<"session=123">>}, {<<"set-cookie">>, <<"other=456">>}, {<<"content-type">>, <<"text/html">>}],
+		 [{<<"set-cookie">>, [<<"session=123">>, 0, <<"other=456">>]}, {<<"content-type">>, <<"text/html">>}]}
+	],
+	[fun() -> D = dedupe_headers(R, []) end || {R, D} <- Tests].
+-endif.
 
 to_flag(false) -> 0;
 to_flag(true) -> 1.

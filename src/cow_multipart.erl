@@ -1,4 +1,4 @@
-%% Copyright (c) 2014, Loïc Hoguin <essen@ninenines.eu>
+%% Copyright (c) 2014-2015, Loïc Hoguin <essen@ninenines.eu>
 %%
 %% Permission to use, copy, modify, and/or distribute this software for any
 %% purpose with or without fee is hereby granted, provided that the above
@@ -362,9 +362,7 @@ parse_partial_test() ->
 	{ok, <<"boundary">>, <<"\r\n--">>}
 		= parse_body(<<"boundary\r\n--">>, <<"boundary">>),
 	ok.
--endif.
 
--ifdef(PERF).
 perf_parse_multipart(Stream, Boundary) ->
 	case parse_headers(Stream, Boundary) of
 		{ok, _, Rest} ->
@@ -461,9 +459,7 @@ identity_test() ->
 	{done, Body2, M6} = parse_body(M5, B),
 	{done, Epilogue} = parse_headers(M6, B),
 	ok.
--endif.
 
--ifdef(PERF).
 perf_build_multipart() ->
 	B = boundary(),
 	[
@@ -575,9 +571,7 @@ parse_content_disposition_test_() ->
 			{<<"file">>, [{<<"filename">>, <<"file2.gif">>}]}}
 	],
 	[{V, fun() -> R = parse_content_disposition(V) end} || {V, R} <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_content_disposition_attachment() ->
 	horse:repeat(100000,
 		parse_content_disposition(<<"attachment; filename=genome.jpeg;"
@@ -617,9 +611,7 @@ parse_content_transfer_encoding_test_() ->
 	],
 	[{V, fun() -> R = parse_content_transfer_encoding(V) end}
 		|| {V, R} <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_content_transfer_encoding() ->
 	horse:repeat(100000,
 		parse_content_transfer_encoding(<<"QUOTED-PRINTABLE">>)
@@ -680,9 +672,7 @@ parse_content_type_test_() ->
 	],
 	[{V, fun() -> R = parse_content_type(V) end}
 		|| {V, R} <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_content_type_zero() ->
 	horse:repeat(100000,
 		parse_content_type(<<"text/plain">>)

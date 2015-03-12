@@ -34,7 +34,7 @@
 	| {done, Data::binary(), TotalLen::non_neg_integer(), Rest::binary()}.
 -export_type([decode_ret/0]).
 
--ifdef(EXTRA).
+-ifdef(TEST).
 dripfeed(<< C, Rest/bits >>, Acc, State, F) ->
 	case F(<< Acc/binary, C >>, State) of
 		more ->
@@ -92,11 +92,8 @@ stream_identity_parts_test() ->
 	{done, << 0:7992 >>, 2999, <<>>}
 		= stream_identity(<< 0:7992 >>, S2),
 	ok.
--endif.
 
--ifdef(PERF).
 %% Using the same data as the chunked one for comparison.
-
 horse_stream_identity() ->
 	horse:repeat(10000,
 		stream_identity(<<
@@ -296,9 +293,7 @@ stream_chunked_error_test_() ->
 	[{lists:flatten(io_lib:format("value ~p state ~p", [V, S])),
 		fun() -> {'EXIT', _} = (catch stream_chunked(V, S)) end}
 			|| {V, S} <- Tests].
--endif.
 
--ifdef(PERF).
 horse_stream_chunked() ->
 	horse:repeat(10000,
 		stream_chunked(<<

@@ -1,4 +1,4 @@
-%% Copyright (c) 2013-2014, Loïc Hoguin <essen@ninenines.eu>
+%% Copyright (c) 2013-2015, Loïc Hoguin <essen@ninenines.eu>
 %%
 %% Permission to use, copy, modify, and/or distribute this software for any
 %% purpose with or without fee is hereby granted, provided that the above
@@ -82,9 +82,7 @@ parse_status_line_error_test_() ->
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_status_line(V)) end}
 		|| V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_status_line_200() ->
 	horse:repeat(200000,
 		parse_status_line(<<"HTTP/1.1 200 OK\r\n">>)
@@ -184,9 +182,7 @@ parse_headers_error_test_() ->
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_headers(V)) end}
 		|| V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_headers() ->
 	horse:repeat(50000,
 		parse_headers(<<"Server: Erlang/R17\r\n"

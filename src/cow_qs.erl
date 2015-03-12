@@ -1,4 +1,4 @@
-%% Copyright (c) 2013-2014, Loïc Hoguin <essen@ninenines.eu>
+%% Copyright (c) 2013-2015, Loïc Hoguin <essen@ninenines.eu>
 %%
 %% Permission to use, copy, modify, and/or distribute this software for any
 %% purpose with or without fee is hereby granted, provided that the above
@@ -126,9 +126,7 @@ parse_qs_identity_test_() ->
 			"b-sid=521732&ortb-xt=IAB3&ortb-ugc=">>
 	],
 	[{V, fun() -> V = qs(parse_qs(V)) end} || V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_qs_shorter() ->
 	horse:repeat(20000,
 		parse_qs(<<"hl=en&q=erlang%20cowboy">>)
@@ -310,9 +308,7 @@ qs_identity_test_() ->
 	[{lists:flatten(io_lib:format("~p", [V])), fun() ->
 		V = parse_qs(qs(V))
 	end} || V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_qs_shorter() ->
 	horse:repeat(20000, qs(?QS_SHORTER)).
 
@@ -395,9 +391,7 @@ urldecode_identity_test_() ->
 			"%BE%8B%E3%80%9C">>
 	],
 	[{V, fun() -> V = urlencode(urldecode(V)) end} || V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_urldecode() ->
 	horse:repeat(100000,
 		urldecode(<<"nothingnothingnothingnothing">>)
@@ -544,9 +538,7 @@ urlencode_identity_test_() ->
 			129,153,227,130,139,230,151,139,229,190,139,227,128,156>>
 	],
 	[{V, fun() -> V = urldecode(urlencode(V)) end} || V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_urlencode() ->
 	horse:repeat(100000,
 		urlencode(<<"nothingnothingnothingnothing">>)

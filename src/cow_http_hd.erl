@@ -1,4 +1,4 @@
-%% Copyright (c) 2014, Loïc Hoguin <essen@ninenines.eu>
+%% Copyright (c) 2014-2015, Loïc Hoguin <essen@ninenines.eu>
 %%
 %% Permission to use, copy, modify, and/or distribute this software for any
 %% purpose with or without fee is hereby granted, provided that the above
@@ -386,9 +386,7 @@ parse_accept_error_test_() ->
 		<<"audio/basic;t=\"zero \\", 0, " woo\"">>
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_accept(V)) end} || V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_accept() ->
 	horse:repeat(20000,
 		parse_accept(<<"text/*;q=0.3, text/html;q=0.7, text/html;level=1, "
@@ -480,9 +478,7 @@ parse_accept_charset_error_test_() ->
 		<<>>
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_accept_charset(V)) end} || V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_accept_charset() ->
 	horse:repeat(20000,
 		parse_accept_charset(<<"iso-8859-5, unicode-1-1;q=0.8">>)
@@ -538,9 +534,7 @@ parse_accept_encoding_test_() ->
 		]}
 	],
 	[{V, fun() -> R = parse_accept_encoding(V) end} || {V, R} <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_accept_encoding() ->
 	horse:repeat(20000,
 		parse_accept_encoding(<<"gzip;q=1.0, identity; q=0.5, *;q=0">>)
@@ -657,9 +651,7 @@ parse_accept_language_error_test_() ->
 		<<"419-en-us">>
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_accept_language(V)) end} || V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_accept_language() ->
 	horse:repeat(20000,
 		parse_accept_language(<<"da, en-gb;q=0.8, en;q=0.7">>)
@@ -688,9 +680,7 @@ parse_accept_ranges_error_test_() ->
 		<<>>
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_accept_ranges(V)) end} || V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_accept_ranges_none() ->
 	horse:repeat(200000,
 		parse_accept_ranges(<<"none">>)
@@ -764,9 +754,7 @@ parse_allow_test_() ->
 		{<<"GET, HEAD, PUT">>, [<<"GET">>, <<"HEAD">>, <<"PUT">>]}
 	],
 	[{V, fun() -> R = parse_allow(V) end} || {V, R} <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_allow() ->
 	horse:repeat(200000,
 		parse_allow(<<"GET, HEAD, PUT">>)
@@ -863,9 +851,7 @@ parse_authorization_test_() ->
 				{<<"opaque">>, <<"5ccc069c403ebaf9f0171e9517f40e41">>}]}}
 	],
 	[{V, fun() -> R = parse_authorization(V) end} || {V, R} <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_authorization_basic() ->
 	horse:repeat(20000,
 		parse_authorization(<<"Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==">>)
@@ -1014,9 +1000,7 @@ parse_cache_control_error_test_() ->
 		<<>>
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_cache_control(V)) end} || V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_cache_control_no_cache() ->
 	horse:repeat(200000,
 		parse_cache_control(<<"no-cache">>)
@@ -1078,9 +1062,7 @@ parse_connection_error_test_() ->
 		<<>>
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_connection(V)) end} || V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_connection_close() ->
 	horse:repeat(200000,
 		parse_connection(<<"close">>)
@@ -1115,9 +1097,7 @@ parse_content_encoding_error_test_() ->
 		<<>>
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_content_encoding(V)) end} || V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_content_encoding() ->
 	horse:repeat(200000,
 		parse_content_encoding(<<"gzip">>)
@@ -1403,9 +1383,7 @@ parse_content_language_error_test_() ->
 		<<>>
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_content_language(V)) end} || V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_content_language() ->
 	horse:repeat(100000,
 		parse_content_language(<<"fr, en-US, es-419, az-Arab, x-pig-latin, man-Nkoo-GN">>)
@@ -1449,9 +1427,7 @@ parse_content_length_error_test_() ->
 		<<"4.17">>
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_content_length(V)) end} || V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_content_length_zero() ->
 	horse:repeat(100000,
 		parse_content_length(<<"0">>)
@@ -1551,9 +1527,7 @@ parse_content_range_error_test_() ->
 		<<>>
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_content_range(V)) end} || V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_content_range_bytes() ->
 	horse:repeat(200000,
 		parse_content_range(<<"bytes 21010-47021/47022">>)
@@ -1666,9 +1640,7 @@ parse_content_type_test_() ->
 			]}}
 	],
 	[{V, fun() -> R = parse_content_type(V) end} || {V, R} <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_content_type() ->
 	horse:repeat(200000,
 		parse_content_type(<<"text/html;charset=utf-8">>)
@@ -1739,9 +1711,7 @@ parse_etag_error_test_() ->
 		<<"W/">>
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_etag(V)) end} || V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_etag() ->
 	horse:repeat(200000,
 		parse_etag(<<"W/\"xyzzy\"">>)
@@ -1789,9 +1759,7 @@ parse_expect_error_test_() ->
 		<<"Cookies">>
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_expect(V)) end} || V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_expect() ->
 	horse:repeat(200000,
 		parse_expect(<<"100-continue">>)
@@ -1821,9 +1789,7 @@ parse_expires_test_() ->
 		{<<"Thu, 01 Dec 1994 16:00:00 GMT">>, {{1994, 12, 1}, {16, 0, 0}}}
 	],
 	[{V, fun() -> R = parse_expires(V) end} || {V, R} <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_expires_0() ->
 	horse:repeat(200000,
 		parse_expires(<<"0">>)
@@ -1897,9 +1863,7 @@ parse_host_test_() ->
 		{<<"[::ffff:192.0.2.1]">>, {<<"[::ffff:192.0.2.1]">>, undefined}}
 	],
 	[{V, fun() -> R = parse_host(V) end} || {V, R} <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_host_blue_example_org() ->
 	horse:repeat(200000,
 		parse_host(<<"blue.example.org:8080">>)
@@ -1966,9 +1930,7 @@ parse_if_match_error_test_() ->
 		<<>>
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_if_match(V)) end} || V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_if_match() ->
 	horse:repeat(200000,
 		parse_if_match(<<"\"xyzzy\", \"r2d2xxxx\", \"c3piozzzz\"">>)
@@ -2015,9 +1977,7 @@ parse_if_none_match_error_test_() ->
 		<<>>
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_if_none_match(V)) end} || V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_if_none_match() ->
 	horse:repeat(200000,
 		parse_if_none_match(<<"W/\"xyzzy\", W/\"r2d2xxxx\", W/\"c3piozzzz\"">>)
@@ -2048,9 +2008,7 @@ parse_if_range_error_test_() ->
 		<<>>
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_if_range(V)) end} || V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_if_range_etag() ->
 	horse:repeat(200000,
 		parse_if_range(<<"\"xyzzy\"">>)
@@ -2255,9 +2213,7 @@ parse_range_error_test_() ->
 		<<>>
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_range(V)) end} || V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_range_first_last() ->
 	horse:repeat(200000,
 		parse_range(<<"bytes=500-999">>)
@@ -2307,9 +2263,7 @@ parse_retry_after_error_test_() ->
 		<<>>
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_retry_after(V)) end} || V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_retry_after_date() ->
 	horse:repeat(200000,
 		parse_retry_after(<<"Fri, 31 Dec 1999 23:59:59 GMT">>)
@@ -2417,9 +2371,7 @@ parse_sec_websocket_extensions_error_test_() ->
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_sec_websocket_extensions(V)) end}
 		|| V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_sec_websocket_extensions() ->
 	horse:repeat(200000,
 		parse_sec_websocket_extensions(<<"mux; max-channels=4; flow-control, deflate-stream">>)
@@ -2456,9 +2408,7 @@ parse_sec_websocket_protocol_req_error_test_() ->
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_sec_websocket_protocol_req(V)) end}
 		|| V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_sec_websocket_protocol_req() ->
 	horse:repeat(200000,
 		parse_sec_websocket_protocol_req(<<"chat, superchat">>)
@@ -2494,9 +2444,7 @@ parse_sec_websocket_protocol_resp_error_test_() ->
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_sec_websocket_protocol_resp(V)) end}
 		|| V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_sec_websocket_protocol_resp() ->
 	horse:repeat(200000,
 		parse_sec_websocket_protocol_resp(<<"chat">>)
@@ -2533,9 +2481,7 @@ parse_sec_websocket_version_req_error_test_() ->
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_sec_websocket_version_req(V)) end}
 		|| V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_sec_websocket_version_req_13() ->
 	horse:repeat(200000,
 		parse_sec_websocket_version_req(<<"13">>)
@@ -2591,9 +2537,7 @@ parse_sec_websocket_version_resp_error_test_() ->
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_sec_websocket_version_resp(V)) end}
 		|| V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_sec_websocket_version_resp() ->
 	horse:repeat(200000,
 		parse_sec_websocket_version_resp(<<"13, 8, 7">>)
@@ -2691,9 +2635,7 @@ parse_te_test_() ->
 		{<<"trailers, deflate;q=0.5">>, {trailers, [{<<"deflate">>, 500}]}}
 	],
 	[{V, fun() -> R = parse_te(V) end} || {V, R} <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_te() ->
 	horse:repeat(200000,
 		parse_te(<<"trailers, deflate;q=0.5">>)
@@ -2718,9 +2660,7 @@ parse_trailer_error_test_() ->
 		<<>>
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_trailer(V)) end} || V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_trailer() ->
 	horse:repeat(200000,
 		parse_trailer(<<"Date, Content-MD5">>)
@@ -2769,9 +2709,7 @@ parse_transfer_encoding_error_test_() ->
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_transfer_encoding(V)) end}
 		|| V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_transfer_encoding_chunked() ->
 	horse:repeat(200000,
 		parse_transfer_encoding(<<"chunked">>)
@@ -3018,9 +2956,7 @@ parse_www_authenticate_error_test_() ->
 		<<>>
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_www_authenticate(V)) end} || V <- Tests].
--endif.
 
--ifdef(PERF).
 horse_parse_www_authenticate() ->
 	horse:repeat(200000,
 		parse_www_authenticate(<<"Newauth realm=\"apps\", type=1, title=\"Login to \\\"apps\\\"\", Basic realm=\"simple\"">>)

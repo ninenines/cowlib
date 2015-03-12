@@ -1,4 +1,4 @@
-%% Copyright (c) 2013-2014, Loïc Hoguin <essen@ninenines.eu>
+%% Copyright (c) 2013-2015, Loïc Hoguin <essen@ninenines.eu>
 %%
 %% Permission to use, copy, modify, and/or distribute this software for any
 %% purpose with or without fee is hereby granted, provided that the above
@@ -182,9 +182,7 @@ http_date_test_() ->
 		{<<"Sun Nov  6 08:49:37 1994">>, {{1994, 11, 6}, {8, 49, 37}}}
 	],
 	[{V, fun() -> R = http_date(V) end} || {V, R} <- Tests].
--endif.
 
--ifdef(PERF).
 horse_http_date_fixdate() ->
 	horse:repeat(200000,
 		http_date(<<"Sun, 06 Nov 1994 08:49:37 GMT">>)
@@ -221,9 +219,7 @@ rfc2109_test_() ->
 		{<<"Sun, 01-Jan-2012 00:00:00 GMT">>, {{2012, 1,  1}, { 0,  0,  0}}}
 	],
 	[{R, fun() -> R = rfc2109(D) end} || {R, D} <- Tests].
--endif.
 
--ifdef(PERF).
 horse_rfc2019_20130101_000000() ->
 	horse:repeat(100000,
 		rfc2109({{2013, 1, 1}, {0, 0, 0}})

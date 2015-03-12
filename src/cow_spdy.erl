@@ -257,6 +257,17 @@ settings(ClearSettingsFlag, Settings) ->
 	[<< 1:1, 3:15, 4:16, 0:7, IsClearSettingsFlag:1, Length:24,
 		NbEntries:32 >>, Entries].
 
+-ifdef(TEST).
+settings_frame_test() ->
+	ClearSettingsFlag = false,
+	Settings = [{max_concurrent_streams,1000,false,false},
+				{initial_window_size,10485760,false,false}],
+	Bin = list_to_binary(cow_spdy:settings(ClearSettingsFlag, Settings)),
+	P = cow_spdy:parse(Bin, undefined),
+	P = {settings, ClearSettingsFlag, Settings},
+	ok.
+-endif.
+
 ping(PingID) ->
 	<< 1:1, 3:15, 6:16, 0:8, 4:24, PingID:32 >>.
 
@@ -271,17 +282,6 @@ goaway(LastGoodStreamID, Status) ->
 
 %% @todo headers
 %% @todo window_update
-
--ifdef(TEST).
-settings_frame_test() ->
-	ClearSettingsFlag = false,
-	Settings = [{max_concurrent_streams,1000,false,false},
-				{initial_window_size,10485760,false,false}],
-	Bin = list_to_binary(cow_spdy:settings(ClearSettingsFlag, Settings)),
-	P = cow_spdy:parse(Bin, undefined),
-	P = {settings, ClearSettingsFlag, Settings},
-	ok.
--endif.
 
 build_headers(Zdef, Headers) ->
 	DedupedHeaders = dedupe_headers(Headers, []),

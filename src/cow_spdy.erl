@@ -284,35 +284,29 @@ goaway(LastGoodStreamID, Status) ->
 %% @todo window_update
 
 build_headers(Zdef, Headers) ->
-	DedupedHeaders = dedupe_headers(Headers, []),
-	NbHeaders = length(DedupedHeaders),
+	Headers1 = merge_headers(lists:sort(Headers), []),
+	NbHeaders = length(Headers1),
 	Headers2 = [begin
 		L1 = iolist_size(Key),
 		L2 = iolist_size(Value),
 		[<< L1:32 >>, Key, << L2:32 >>, Value]
-	end || {Key, Value} <- DedupedHeaders],
+	end || {Key, Value} <- Headers1],
 	zlib:deflate(Zdef, [<< NbHeaders:32 >>, Headers2], full).
 
-dedupe_headers([], Acc) ->
+merge_headers([], Acc) ->
 	lists:reverse(Acc);
-dedupe_headers([{Key, Value}|Headers], Acc) ->
-	Acc2 = append_header_value(Key, Value, Acc, []),
-	dedupe_headers(Headers, Acc2).
-
-append_header_value(Key, Value, [], Acc) ->
-	[{Key, Value}|Acc];
-append_header_value(Key, Value, [{Key, PrevValue}|Rest], Acc) ->
-	[{Key, [PrevValue, 0, Value]}|Rest] ++ Acc;
-append_header_value(Key, Value, [Header|Headers], Acc) ->
-	append_header_value(Key, Value, Headers, [Header|Acc]).
+merge_headers([{Name, Value1}, {Name, Value2}|Tail], Acc) ->
+	merge_headers([{Name, [Value1, 0, Value2]}|Tail], Acc);
+merge_headers([Head|Tail], Acc) ->
+	merge_headers(Tail, [Head|Acc]).
 
 -ifdef(TEST).
-dedupe_headers_test_() ->
+merge_headers_test_() ->
 	Tests = [
 		{[{<<"set-cookie">>, <<"session=123">>}, {<<"set-cookie">>, <<"other=456">>}, {<<"content-type">>, <<"text/html">>}],
 		 [{<<"set-cookie">>, [<<"session=123">>, 0, <<"other=456">>]}, {<<"content-type">>, <<"text/html">>}]}
 	],
-	[fun() -> D = dedupe_headers(R, []) end || {R, D} <- Tests].
+	[fun() -> D = merge_headers(R, []) end || {R, D} <- Tests].
 -endif.
 
 to_flag(false) -> 0;

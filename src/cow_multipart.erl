@@ -98,6 +98,29 @@
 >>).
 -define(TEST4_BOUNDARY, <<"boundary">>).
 
+%% RFC 2046, Section 5.1.1
+-define(TEST5_MIME, <<
+        "This is the preamble.  It is to be ignored, though it\r\n"
+        "is a handy place for composition agents to include an\r\n"
+        "explanatory note to non-MIME conformant readers.\r\n"
+        "\r\n"
+        "--simple boundary\r\n",
+        "\r\n"
+        "This is implicitly typed plain US-ASCII text.\r\n"
+        "It does NOT end with a linebreak."
+        "\r\n"
+        "--simple boundary\r\n",
+        "Content-type: text/plain; charset=us-ascii\r\n"
+        "\r\n"
+        "This is explicitly typed plain US-ASCII text.\r\n"
+        "It DOES end with a linebreak.\r\n"
+        "\r\n"
+        "--simple boundary--\r\n"
+        "\r\n"
+        "This is the epilogue.  It is also to be ignored."
+>>).
+-define(TEST5_BOUNDARY, <<"simple boundary">>).
+
 %% Parsing.
 %%
 %% The multipart format is defined in RFC 2045.
@@ -179,12 +202,11 @@ skip_preamble(Stream, Boundary) ->
 			end
 	end.
 
-%% There is a line break right after the boundary, skip it.
-%%
-%% We only skip it now because there might be no headers at all,
-%% which means the \r\n\r\n indicating the end of headers also
-%% includes this line break.
+before_parse_headers(<< "\r\n\r\n", Stream/bits >>) ->
+	%% This indicates that there are no headers, so we can abort immediately.
+	{ok, [], Stream};
 before_parse_headers(<< "\r\n", Stream/bits >>) ->
+	%% There is a line break right after the boundary, skip it.
 	parse_hd_name(Stream, [], <<>>).
 
 parse_hd_name(<< C, Rest/bits >>, H, SoFar) ->
@@ -338,6 +360,21 @@ parse_epilogue_crlf_test() ->
 	{done, Body1, Rest2} = parse_body(Rest, ?TEST4_BOUNDARY),
 	done = parse_body(Rest2, ?TEST4_BOUNDARY),
 	{done, Epilogue} = parse_headers(Rest2, ?TEST4_BOUNDARY),
+	ok.
+
+parse_rfc2046_test() ->
+	%% The following is an example included in RFC 2046, Section 5.1.1.
+	Body1 = <<"This is implicitly typed plain US-ASCII text.\r\n"
+		"It does NOT end with a linebreak.">>,
+	Body2 = <<"This is explicitly typed plain US-ASCII text.\r\n"
+		"It DOES end with a linebreak.\r\n">>,
+	H2 = [{<<"content-type">>, <<"text/plain; charset=us-ascii">>}],
+	Epilogue = <<"\r\n\r\nThis is the epilogue.  It is also to be ignored.">>,
+	{ok, [], Rest} = parse_headers(?TEST5_MIME, ?TEST5_BOUNDARY),
+	{done, Body1, Rest2} = parse_body(Rest, ?TEST5_BOUNDARY),
+	{ok, H2, Rest3} = parse_headers(Rest2, ?TEST5_BOUNDARY),
+	{done, Body2, Rest4} = parse_body(Rest3, ?TEST5_BOUNDARY),
+	{done, Epilogue} = parse_headers(Rest4, ?TEST5_BOUNDARY),
 	ok.
 
 parse_partial_test() ->

@@ -1,11 +1,13 @@
 # See LICENSE for licensing information.
 
 PROJECT = cowlib
+
 #ERLC_OPTS += +bin_opt_info
-TEST_ERLC_OPTS += +'{parse_transform, eunit_autoexport}' +'{parse_transform, horse_autoexport}'
 PLT_APPS = crypto
 
-TEST_DEPS = triq
+TEST_ERLC_OPTS += +'{parse_transform, eunit_autoexport}' +'{parse_transform, horse_autoexport}'
+TEST_DEPS = horse triq
+dep_horse = git https://github.com/extend/horse master
 dep_triq = git https://github.com/krestenkrab/triq master
 
 include erlang.mk
@@ -40,11 +42,6 @@ gen:
 ifeq ($(MAKECMDGOALS),perfs)
 .NOTPARALLEL:
 endif
-
-deps/horse:
-	git clone -n -- https://github.com/extend/horse $(DEPS_DIR)/horse
-	cd $(DEPS_DIR)/horse ; git checkout -q master
-	$(MAKE) -C $(DEPS_DIR)/horse
 
 perfs: test-build
 	$(gen_verbose) erl -noshell -pa ebin deps/horse/ebin \

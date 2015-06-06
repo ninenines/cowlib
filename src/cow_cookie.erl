@@ -196,12 +196,12 @@ setcookie(Name, Value, Opts) ->
 		{_, Path} -> [<<"; Path=">>, Path]
 	end,
 	SecureBin = case lists:keyfind(secure, 1, Opts) of
-		false -> <<>>;
-		{_, true} -> <<"; Secure">>
+		{_, true} -> <<"; Secure">>;
+		_ -> <<>>
 	end,
 	HttpOnlyBin = case lists:keyfind(http_only, 1, Opts) of
-		false -> <<>>;
-		{_, true} -> <<"; HttpOnly">>
+		{_, true} -> <<"; HttpOnly">>;
+		_ -> <<>>
 	end,
 	[Name, <<"=">>, Value, <<"; Version=1">>,
 		MaxAgeBin, DomainBin, PathBin, SecureBin, HttpOnlyBin].

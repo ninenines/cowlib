@@ -1391,8 +1391,6 @@ horse_parse_content_language() ->
 -endif.
 
 %% @doc Parse the Content-Length header.
-%%
-%% The value has at least one digit, and may be followed by whitespace.
 
 -spec parse_content_length(binary()) -> non_neg_integer().
 parse_content_length(ContentLength) ->

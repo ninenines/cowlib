@@ -82,7 +82,7 @@ parse(<< Len0:24, 0:8, _:4, 1:1, _:2, FlagEndStream:1, _:1, StreamID:31, PadLen:
 		when byte_size(Rest0) >= Len0 - 1 ->
 	Len = Len0 - PadLen,
 	case Rest0 of
-		<< Data:Len/binary, 0:PadLen/binary, Rest/bits >> ->
+		<< Data:Len/binary, 0:PadLen/unit:8, Rest/bits >> ->
 			{ok, {data, StreamID, parse_fin(FlagEndStream), Data}, Rest};
 		_ ->
 			{connection_error, protocol_error, 'Padding octets MUST be set to zero. (RFC7540 6.1)'}
@@ -105,7 +105,7 @@ parse(<< Len0:24, 1:8, _:2, 0:1, _:1, 1:1, FlagEndHeaders:1, _:1, FlagEndStream:
 		PadLen:8, Rest0/bits >>) when byte_size(Rest0) >= Len0 - 1 ->
 	Len = Len0 - PadLen - 1,
 	case Rest0 of
-		<< HeaderBlockFragment:Len/binary, 0:PadLen/binary, Rest/bits >> ->
+		<< HeaderBlockFragment:Len/binary, 0:PadLen/unit:8, Rest/bits >> ->
 			{ok, {headers, StreamID, parse_fin(FlagEndStream), parse_head_fin(FlagEndHeaders), HeaderBlockFragment}, Rest};
 		_ ->
 			{connection_error, protocol_error, 'Padding octets MUST be set to zero. (RFC7540 6.2)'}
@@ -122,7 +122,7 @@ parse(<< Len0:24, 1:8, _:2, 1:1, _:1, 1:1, FlagEndHeaders:1, _:1, FlagEndStream:
 		PadLen:8, E:1, DepStreamID:31, Weight:8, Rest0/bits >>) when byte_size(Rest0) >= Len0 - 6 ->
 	Len = Len0 - PadLen - 6,
 	case Rest0 of
-		<< HeaderBlockFragment:Len/binary, 0:PadLen/binary, Rest/bits >> ->
+		<< HeaderBlockFragment:Len/binary, 0:PadLen/unit:8, Rest/bits >> ->
 			{ok, {headers, StreamID, parse_fin(FlagEndStream), parse_head_fin(FlagEndHeaders),
 				parse_exclusive(E), DepStreamID, Weight + 1, HeaderBlockFragment}, Rest};
 		_ ->
@@ -177,7 +177,7 @@ parse(<< Len0:24, 5:8, _:4, 1:1, FlagEndHeaders:1, _:2, StreamID:31, PadLen:8, _
 		when byte_size(Rest0) >= Len0 - 5 ->
 	Len = Len0 - 5,
 	case Rest0 of
-		<< HeaderBlockFragment:Len/binary, 0:PadLen/binary, Rest/bits >> ->
+		<< HeaderBlockFragment:Len/binary, 0:PadLen/unit:8, Rest/bits >> ->
 			{ok, {push_promise, StreamID, parse_head_fin(FlagEndHeaders), PromisedStreamID, HeaderBlockFragment}, Rest};
 		_ ->
 			{connection_error, protocol_error, 'Padding octets MUST be set to zero. (RFC7540 6.6)'}

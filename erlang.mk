@@ -16,7 +16,7 @@
 
 ERLANG_MK_FILENAME := $(realpath $(lastword $(MAKEFILE_LIST)))
 
-ERLANG_MK_VERSION = 1.2.0-645-ge88092a
+ERLANG_MK_VERSION = 1.2.0-646-gcf43676
 
 # Core configuration.
 
@@ -5855,7 +5855,7 @@ shell: build-shell-deps
 # Copyright (c) 2015, Loïc Hoguin <essen@ninenines.eu>
 # This file is part of erlang.mk and subject to the terms of the ISC License.
 
-ifneq ($(wildcard $(DEPS_DIR)/triq),)
+ifeq ($(filter triq,$(DEPS) $(TEST_DEPS)),triq)
 .PHONY: triq
 
 # Targets.

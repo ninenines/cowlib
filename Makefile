@@ -6,6 +6,7 @@ PROJECT_VERSION = 1.3.0
 
 #ERLC_OPTS += +bin_opt_info
 OTP_DEPS = crypto
+DIALYZER_OPTS = -Werror_handling -Wunmatched_returns
 CI_OTP = OTP-18.0.3
 
 TEST_ERLC_OPTS += +'{parse_transform, eunit_autoexport}' +'{parse_transform, horse_autoexport}'

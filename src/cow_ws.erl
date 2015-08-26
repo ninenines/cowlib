@@ -315,7 +315,7 @@ frag_state(_, 1, _, FragState) -> FragState.
 %% Empty last frame of compressed message.
 parse_payload(Data, _, Utf8State, _, _, 0, {fin, _, << 1:1, 0:2 >>},
 		#{inflate := Inflate, inflate_takeover := TakeOver}, _) ->
-	zlib:inflate(Inflate, << 0, 0, 255, 255 >>),
+	_ = zlib:inflate(Inflate, << 0, 0, 255, 255 >>),
 	case TakeOver of
 		no_takeover -> zlib:inflateReset(Inflate);
 		takeover -> ok

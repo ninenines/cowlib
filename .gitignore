@@ -2,7 +2,7 @@
 .erlang.mk.packages.*
 _rel
 deps
-ebin
+ebin/*.beam
 logs
 relx
 test/*.beam

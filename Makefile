@@ -1,9 +1,12 @@
 # See LICENSE for licensing information.
 
 PROJECT = cowlib
+PROJECT_DESCRIPTION = Support library for manipulating Web protocols.
+PROJECT_VERSION = 1.3.0
 
 #ERLC_OPTS += +bin_opt_info
-PLT_APPS = crypto
+OTP_DEPS = crypto
+CI_OTP = OTP-18.0.3
 
 TEST_ERLC_OPTS += +'{parse_transform, eunit_autoexport}' +'{parse_transform, horse_autoexport}'
 TEST_DEPS = horse triq

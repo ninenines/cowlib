@@ -580,7 +580,7 @@ masked_frame({binary, Payload}, _) ->
 	[<< 1:1, 0:3, 2:4, 1:1, Len/bits >>, MaskKeyBin, mask(iolist_to_binary(Payload), MaskKey, <<>>)].
 
 payload_length(Payload) ->
-	case byte_size(Payload) of
+	case iolist_size(Payload) of
 		N when N =< 125 -> << N:7 >>;
 		N when N =< 16#ffff -> << 126:7, N:16 >>;
 		N when N =< 16#7fffffffffffffff -> << 127:7, N:64 >>

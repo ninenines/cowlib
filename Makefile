@@ -6,6 +6,8 @@ CI_OTP = OTP_R15B OTP_R15B01 OTP_R15B02 OTP_R15B03-1 OTP_R16B01 OTP_R16B02 OTP_R
 
 include erlang.mk
 
+TEST_ERLC_OPTS += +'{parse_transform, eunit_autoexport}' -DEXTRA=1
+
 .PHONY: gen perfs
 
 # Mimetypes module generator.

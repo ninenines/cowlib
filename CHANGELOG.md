@@ -1,6 +1,11 @@
 CHANGELOG
 =========
 
+1.0.2
+-----
+
+ *  Fix handling of default values in cookie options
+
 1.0.1
 -----
 

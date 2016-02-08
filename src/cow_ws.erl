@@ -138,12 +138,8 @@ parse_max_window_bits(_) -> error.
 init_permessage_deflate(InflateWindowBits, DeflateWindowBits, Opts) ->
 	Inflate = zlib:open(),
 	ok = zlib:inflateInit(Inflate, -InflateWindowBits),
+
 	Deflate = zlib:open(),
-	%% @todo Remove this case .. of for OTP 18+ if PR https://github.com/erlang/otp/pull/633 gets merged.
-	DeflateWindowBits2 = case DeflateWindowBits of
-		8 -> 9;
-		_ -> DeflateWindowBits
-	end,
 	ok = zlib:deflateInit(Deflate,
 		maps:get(level, Opts, best_compression),
 		deflated,

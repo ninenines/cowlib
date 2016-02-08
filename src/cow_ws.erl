@@ -165,25 +165,6 @@ negotiate_x_webkit_deflate_frame(_Params, Extensions, Opts) ->
 			inflate => Inflate,
 			inflate_takeover => takeover}}.
 
-parse_response_permessage_deflate_params([], CB, CTO, SB, STO) ->
-	{CB, CTO, SB, STO};
-parse_response_permessage_deflate_params([{<<"client_max_window_bits">>, Max}|Tail], _, CTO, SB, STO) ->
-	case parse_max_window_bits(Max) of
-		error -> error;
-		CB -> parse_response_permessage_deflate_params(Tail, CB, CTO, SB, STO)
-	end;
-parse_response_permessage_deflate_params([<<"client_no_context_takeover">>|Tail], CB, _, SB, STO) ->
-	parse_response_permessage_deflate_params(Tail, CB, no_takeover, SB, STO);
-parse_response_permessage_deflate_params([{<<"server_max_window_bits">>, Max}|Tail], CB, CTO, _, STO) ->
-	case parse_max_window_bits(Max) of
-		error -> error;
-		SB -> parse_response_permessage_deflate_params(Tail, CB, CTO, SB, STO)
-	end;
-parse_response_permessage_deflate_params([<<"server_no_context_takeover">>|Tail], CB, CTO, SB, _) ->
-	parse_response_permessage_deflate_params(Tail, CB, CTO, SB, no_takeover);
-%% Error if unknown parameter; error if parameter with invalid or missing value.
-parse_response_permessage_deflate_params(_, _, _, _, _) ->
-	error.
 
 %% @doc Parse and validate the Websocket frame header.
 %%

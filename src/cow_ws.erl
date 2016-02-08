@@ -80,8 +80,8 @@ negotiate_permessage_deflate(Params, Extensions, Opts) ->
 			ignore;
 		Params2 ->
 			%% @todo Might want to make these configurable defaults.
-
-			case parse_request_permessage_deflate_params(Params2, 15, takeover, 15, takeover, []) of
+			MaxWindowBits = proplists:get_value(max_window_bits, Opts, 15),
+			case parse_request_permessage_deflate_params(Params2, MaxWindowBits, takeover, MaxWindowBits, takeover, []) of
 				ignore ->
 					ignore;
 				{ClientWindowBits, ClientTakeOver, ServerWindowBits, ServerTakeOver, RespParams} ->
@@ -166,32 +166,6 @@ negotiate_x_webkit_deflate_frame(_Params, Extensions, Opts) ->
 			deflate_takeover => takeover,
 			inflate => Inflate,
 			inflate_takeover => takeover}}.
-
-%% @doc Validate the negotiated permessage-deflate extension.
-
-%% Error when more than one deflate extension was negotiated.
-validate_permessage_deflate(_, #{deflate := _}, _) ->
-	error;
-validate_permessage_deflate(Params, Extensions, Opts) ->
-	case lists:usort(Params) of
-		%% Error if multiple parameters with the same name.
-		Params2 when length(Params) =/= length(Params2) ->
-			error;
-		Params2 ->
-			%% @todo Might want to make some of these configurable defaults if at all possible.
-			MaxWindowBits = proplists:get_value(max_window_bits, Opts, 15),
-			case parse_response_permessage_deflate_params(Params2, MaxWindowBits, takeover, MaxWindowBits, takeover) of
-				error ->
-					error;
-				{ClientWindowBits, ClientTakeOver, ServerWindowBits, ServerTakeOver} ->
-					{Inflate, Deflate} = init_permessage_deflate(ServerWindowBits, ClientWindowBits, Opts),
-					{ok, Extensions#{
-						deflate => Deflate,
-						deflate_takeover => ClientTakeOver,
-						inflate => Inflate,
-						inflate_takeover => ServerTakeOver}}
-			end
-	end.
 
 parse_response_permessage_deflate_params([], CB, CTO, SB, STO) ->
 	{CB, CTO, SB, STO};

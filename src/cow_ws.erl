@@ -137,13 +137,13 @@ parse_max_window_bits(_) -> error.
 % A negative WindowBits value indicates that zlib headers are not used.
 init_permessage_deflate(InflateWindowBits, DeflateWindowBits, Opts) ->
 	Inflate = zlib:open(),
-	ok = zlib:inflateInit(Inflate, -InflateWindowBits),
+	ok = zlib:inflateInit(Inflate, InflateWindowBits),
 
 	Deflate = zlib:open(),
 	ok = zlib:deflateInit(Deflate,
 		maps:get(level, Opts, best_compression),
 		deflated,
-		-DeflateWindowBits2,
+		DeflateWindowBits2,
 		maps:get(mem_level, Opts, 8),
 		maps:get(strategy, Opts, default)),
 	{Inflate, Deflate}.

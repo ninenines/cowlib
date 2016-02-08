@@ -141,7 +141,7 @@ init_permessage_deflate(InflateWindowBits, DeflateWindowBits, Opts) ->
 
 	Deflate = zlib:open(),
 	ok = zlib:deflateInit(Deflate,
-		maps:get(level, Opts, best_compression),
+		maps:get(level, Opts, best_speed),
 		deflated,
 		DeflateWindowBits2,
 		maps:get(mem_level, Opts, 8),

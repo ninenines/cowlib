@@ -80,6 +80,7 @@ negotiate_permessage_deflate(Params, Extensions, Opts) ->
 			ignore;
 		Params2 ->
 			%% @todo Might want to make these configurable defaults.
+
 			case parse_request_permessage_deflate_params(Params2, 15, takeover, 15, takeover, []) of
 				ignore ->
 					ignore;
@@ -182,7 +183,8 @@ validate_permessage_deflate(Params, Extensions, Opts) ->
 			error;
 		Params2 ->
 			%% @todo Might want to make some of these configurable defaults if at all possible.
-			case parse_response_permessage_deflate_params(Params2, 15, takeover, 15, takeover) of
+			MaxWindowBits = proplists:get_value(max_window_bits, Opts, 15),
+			case parse_response_permessage_deflate_params(Params2, MaxWindowBits, takeover, MaxWindowBits, takeover) of
 				error ->
 					error;
 				{ClientWindowBits, ClientTakeOver, ServerWindowBits, ServerTakeOver} ->

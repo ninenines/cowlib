@@ -20,8 +20,6 @@
 -export([negotiate_permessage_deflate/3]).
 -export([negotiate_x_webkit_deflate_frame/3]).
 
--export([validate_permessage_deflate/3]).
-
 -export([parse_header/3]).
 -export([parse_payload/9]).
 -export([make_frame/4]).

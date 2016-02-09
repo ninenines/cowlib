@@ -78,7 +78,8 @@ negotiate_permessage_deflate(Params, Extensions, Opts) ->
 			ignore;
 		Params2 ->
 			%% @todo Might want to make these configurable defaults.
-			MaxWindowBits = proplists:get_value(max_window_bits, Opts, 15),
+			MaxWindowBits = maps:get(max_window_bits, Opts, 15),
+			Mode = maps:get(mode, Opts, active),
 			case parse_request_permessage_deflate_params(Params2, MaxWindowBits, takeover, MaxWindowBits, takeover, []) of
 				ignore ->
 					ignore;
@@ -89,7 +90,8 @@ negotiate_permessage_deflate(Params, Extensions, Opts) ->
 							deflate => Deflate,
 							deflate_takeover => ServerTakeOver,
 							inflate => Inflate,
-							inflate_takeover => ClientTakeOver}}
+							inflate_takeover => ClientTakeOver,
+							mode => Mode}}
 			end
 	end.
 
@@ -135,13 +137,13 @@ parse_max_window_bits(_) -> error.
 % A negative WindowBits value indicates that zlib headers are not used.
 init_permessage_deflate(InflateWindowBits, DeflateWindowBits, Opts) ->
 	Inflate = zlib:open(),
-	ok = zlib:inflateInit(Inflate, InflateWindowBits),
+	ok = zlib:inflateInit(Inflate, -InflateWindowBits),
 
 	Deflate = zlib:open(),
 	ok = zlib:deflateInit(Deflate,
 		maps:get(level, Opts, best_speed),
 		deflated,
-		DeflateWindowBits,
+		-DeflateWindowBits,
 		maps:get(mem_level, Opts, 8),
 		maps:get(strategy, Opts, default)),
 	{Inflate, Deflate}.
@@ -463,16 +465,30 @@ frame({pong, Payload}, _) ->
 	Len = iolist_size(Payload),
 	true = Len =< 125,
 	[<< 1:1, 0:3, 10:4, 0:1, Len:7 >>, Payload];
+
 %% Data frames, deflate-frame extension.
-frame({text, Payload}, #{deflate := Deflate, deflate_takeover := TakeOver}) ->
+frame({TOB, Payload}, Ext=#{deflate := Deflate, deflate_takeover := TakeOver, mode := Mode}) ->
+	case Mode of
+		active ->
+			frame({TOB, Payload, compress}, Ext);
+		passive ->
+			frame({TOB, Payload, no_compress}, Ext)
+	end;
+frame({TOB, Payload, compress}, #{deflate := Deflate, deflate_takeover := TakeOver}) ->
 	Payload2 = deflate_frame(Payload, Deflate, TakeOver),
 	Len = payload_length(Payload2),
-	[<< 1:1, 1:1, 0:2, 1:4, 0:1, Len/bits >>, Payload2];
-frame({binary, Payload}, #{deflate := Deflate, deflate_takeover := TakeOver}) ->
-	Payload2 = deflate_frame(Payload, Deflate, TakeOver),
-	Len = payload_length(Payload2),
-	[<< 1:1, 1:1, 0:2, 2:4, 0:1, Len/bits >>, Payload2];
+	TOBBit = case TOB of text -> 1; binary -> 2 end,
+	[<< 1:1, 1:1, 0:2, TOBBit:4, 0:1, Len/bits >>, Payload2];
+frame({TOB, Payload, no_compress}, #{deflate := Deflate, deflate_takeover := TakeOver}) ->
+	Len = payload_length(Payload),
+	TOBBit = case TOB of text -> 1; binary -> 2 end,
+	[<< 1:1, 0:3, TOBBit:4, 0:1, Len/bits >>, Payload];
+
 %% Data frames.
+frame({TOB, Payload, _}, _) ->
+	TOBBit = case TOB of text -> 1; binary -> 2 end,
+	Len = payload_length(Payload),
+	[<< 1:1, 0:3, TOBBit:4, 0:1, Len/bits >>, Payload];
 frame({text, Payload}, _) ->
 	Len = payload_length(Payload),
 	[<< 1:1, 0:3, 1:4, 0:1, Len/bits >>, Payload];

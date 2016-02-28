@@ -69,7 +69,7 @@
 -export([parse_max_forwards/1]).
 % @todo -export([parse_memento_datetime/1]). RFC7089
 % @todo -export([parse_negotiate/1]). RFC2295
-% @todo -export([parse_origin/1]). CORS, RFC6454
+-export([parse_origin/1]).
 -export([parse_pragma/1]).
 % @todo -export([parse_prefer/1]). RFC7240
 -export([parse_proxy_authenticate/1]).
@@ -2079,6 +2079,148 @@ parse_max_forwards_error_test_() ->
 		<<"4.17">>
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_max_forwards(V)) end} || V <- Tests].
+-endif.
+
+%% @doc Parse the Origin header.
+
+%% According to the RFC6454 we should generate
+%% a fresh globally unique identifier and return that value if:
+%% - URI does not use a hierarchical element as a naming authority
+%%   or the URI is not an absolute URI
+%% - the implementation doesn't support the protocol given by uri-scheme
+%% Thus, erlang reference represents a GUID here.
+%%
+%% We only seek to have legal characters and separate the
+%% host and port values. The number of segments in the host
+%% or the size of each segment is not checked.
+%%
+%% There is no way to distinguish IPv4 addresses from regular
+%% names until the last segment is reached therefore we do not
+%% differentiate them.
+%%
+%% The following valid hosts are currently rejected: IPv6
+%% addresses with a zone identifier; IPvFuture addresses;
+%% and percent-encoded addresses.
+
+-spec parse_origin(binary()) -> [{binary(), binary(), 0..65535} | reference()].
+parse_origin(Origins) ->
+	nonempty(origin_scheme(Origins, [])).
+
+origin_scheme(<<>>, Acc) -> Acc;
+origin_scheme(<< "http://", R/bits >>, Acc) -> origin_host(R, Acc, <<"http">>);
+origin_scheme(<< "https://", R/bits >>, Acc) -> origin_host(R, Acc, <<"https">>);
+origin_scheme(<< C, R/bits >>, Acc) when ?IS_TOKEN(C)  -> origin_scheme(next_origin(R), [make_ref()|Acc]).
+
+origin_host(<< $[, R/bits >>, Acc, Scheme) -> origin_ipv6_address(R, Acc, Scheme, << $[ >>);
+origin_host(Host, Acc, Scheme) -> origin_reg_name(Host, Acc, Scheme, <<>>).
+
+origin_ipv6_address(<< $] >>, Acc, Scheme, IP) ->
+	lists:reverse([{Scheme, << IP/binary, $] >>, default_port(Scheme)}|Acc]);
+origin_ipv6_address(<< $], $\s, R/bits >>, Acc, Scheme, IP) ->
+	origin_scheme(R, [{Scheme, << IP/binary, $] >>, default_port(Scheme)}|Acc]);
+origin_ipv6_address(<< $], $:, Port/bits >>, Acc, Scheme, IP) ->
+	origin_port(Port, Acc, Scheme, << IP/binary, $] >>, <<>>);
+origin_ipv6_address(<< C, R/bits >>, Acc, Scheme, IP) when ?IS_HEX(C) or (C =:= $:) or (C =:= $.) ->
+	?LOWER(origin_ipv6_address, R, Acc, Scheme, IP).
+
+origin_reg_name(<<>>, Acc, Scheme, Name) ->
+	lists:reverse([{Scheme, Name, default_port(Scheme)}|Acc]);
+origin_reg_name(<< $\s, R/bits >>, Acc, Scheme, Name) ->
+	origin_scheme(R, [{Scheme, Name, default_port(Scheme)}|Acc]);
+origin_reg_name(<< $:, Port/bits >>, Acc, Scheme, Name) ->
+	origin_port(Port, Acc, Scheme, Name, <<>>);
+origin_reg_name(<< C, R/bits >>, Acc, Scheme, Name) when ?IS_URI_UNRESERVED(C) or ?IS_URI_SUB_DELIMS(C) ->
+	?LOWER(origin_reg_name, R, Acc, Scheme, Name).
+
+origin_port(<<>>, Acc, Scheme, Host, Port) ->
+	lists:reverse([{Scheme, Host, binary_to_integer(Port)}|Acc]);
+origin_port(<< $\s, R/bits >>, Acc, Scheme, Host, Port) ->
+	origin_scheme(R, [{Scheme, Host, binary_to_integer(Port)}|Acc]);
+origin_port(<< C, R/bits >>, Acc, Scheme, Host, Port) when ?IS_DIGIT(C) ->
+	origin_port(R, Acc, Scheme, Host, << Port/binary, C >>).
+
+next_origin(<<>>) -> <<>>;
+next_origin(<< $\s, C, R/bits >>) when ?IS_TOKEN(C) -> << C, R/bits >>;
+next_origin(<< C, R/bits >>) when ?IS_TOKEN(C) or (C =:= $:) or (C =:= $/) -> next_origin(R).
+
+default_port(<< "http" >>) -> 80;
+default_port(<< "https" >>) -> 443.
+
+-ifdef(TEST).
+scheme() -> oneof([<<"http">>, <<"https">>]).
+
+scheme_host_port() ->
+	?LET({Scheme, Host, Port},
+		{scheme(), host(), int(1, 65535)},
+		begin
+			HostBin = list_to_binary(Host),
+			{[{Scheme, ?LOWER(HostBin), Port}],
+				case default_port(Scheme) of
+					Port -> << Scheme/binary, "://", HostBin/binary>>;
+					_ -> << Scheme/binary, "://", HostBin/binary, $:, (integer_to_binary(Port))/binary >>
+				end}
+		end).
+
+prop_parse_origin() ->
+	?FORALL({Res, Origin}, scheme_host_port(), Res =:= parse_origin(Origin)).
+
+parse_origin_test_() ->
+	Tests = [
+		{<<"http://www.example.org:8080">>, [{<<"http">>, <<"www.example.org">>, 8080}]},
+		{<<"http://www.example.org">>, [{<<"http">>, <<"www.example.org">>, 80}]},
+		{<<"http://192.0.2.1:8080">>, [{<<"http">>, <<"192.0.2.1">>, 8080}]},
+		{<<"http://192.0.2.1">>, [{<<"http">>, <<"192.0.2.1">>, 80}]},
+		{<<"http://[2001:db8::1]:8080">>, [{<<"http">>, <<"[2001:db8::1]">>, 8080}]},
+		{<<"http://[2001:db8::1]">>, [{<<"http">>, <<"[2001:db8::1]">>, 80}]},
+		{<<"http://[::ffff:192.0.2.1]:8080">>, [{<<"http">>, <<"[::ffff:192.0.2.1]">>, 8080}]},
+		{<<"http://[::ffff:192.0.2.1]">>, [{<<"http">>, <<"[::ffff:192.0.2.1]">>, 80}]},
+		{<<"http://example.org https://blue.example.com:8080">>,
+			[{<<"http">>, <<"example.org">>, 80},
+			 {<<"https">>, <<"blue.example.com">>, 8080}]}
+	],
+	[{V, fun() -> R = parse_origin(V) end} || {V, R} <- Tests].
+
+parse_origin_reference_test_() ->
+	Tests = [
+		<<"null">>,
+		<<"httpx://example.org:80">>,
+		<<"httpx://example.org:80 null">>,
+		<<"null null">>
+	],
+	[{V, fun() -> [true = is_reference(Ref) || Ref <- parse_origin(V)] end} || V <- Tests].
+
+parse_origin_error_test_() ->
+	Tests = [
+		<<>>,
+		<<"null", $\t, "null">>,
+		<<"null", $\s, $\s, "null">>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_origin(V)) end} || V <- Tests].
+
+horse_parse_origin_blue_example_org() ->
+	horse:repeat(200000,
+		parse_origin(<<"http://blue.example.org:8080">>)
+	).
+
+horse_parse_origin_ipv4() ->
+	horse:repeat(200000,
+		parse_origin(<<"http://192.0.2.1:8080">>)
+	).
+
+horse_parse_origin_ipv6() ->
+	horse:repeat(200000,
+		parse_origin(<<"http://[2001:db8::1]:8080">>)
+	).
+
+horse_parse_origin_ipv6_v4() ->
+	horse:repeat(200000,
+		parse_origin(<<"http://[::ffff:192.0.2.1]:8080">>)
+	).
+
+horse_parse_origin_null() ->
+	horse:repeat(200000,
+		parse_origin(<<"null">>)
+	).
 -endif.
 
 %% @doc Parse the Pragma header.

@@ -28,7 +28,7 @@
 % @todo -export([parse_access_control_expose_headers/1]). CORS
 % @todo -export([parse_access_control_max_age/1]). CORS
 -export([parse_access_control_request_headers/1]).
-% @todo -export([parse_access_control_request_method/1]). CORS
+-export([parse_access_control_request_method/1]).
 -export([parse_age/1]).
 -export([parse_allow/1]).
 % @todo -export([parse_alternates/1]). RFC2295
@@ -731,6 +731,43 @@ parse_access_control_request_headers_test_() ->
 horse_parse_access_control_request_headers() ->
 	horse:repeat(200000,
 		parse_access_control_request_headers(<<"accept, authorization, content-type">>)
+	).
+-endif.
+
+%% @doc Parse the Access-Control-Request-Method header.
+
+-spec parse_access_control_request_method(binary()) -> binary().
+parse_access_control_request_method(Method) ->
+	true = <<>> =/= Method,
+	ok = validate_token(Method),
+	Method.
+
+validate_token(<< C, R/bits >>) when ?IS_TOKEN(C) -> validate_token(R);
+validate_token(<<>>) -> ok. 
+
+-ifdef(TEST).
+parse_access_control_request_method_test_() ->
+	Tests = [
+		<<"GET">>,
+		<<"HEAD">>,
+		<<"POST">>,
+		<<"PUT">>,
+		<<"DELETE">>,
+		<<"TRACE">>,
+		<<"CONNECT">>,
+		<<"whatever">>
+	],
+	[{V, fun() -> R = parse_access_control_request_method(V) end} || {V, R} <- Tests].
+
+parse_access_control_request_method_error_test_() ->
+	Tests = [
+		<<>>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_access_control_request_method(V)) end} || V <- Tests].
+
+horse_parse_access_control_request_method() ->
+	horse:repeat(200000,
+		parse_access_control_request_method(<<"POST">>)
 	).
 -endif.
 

@@ -3250,3 +3250,9 @@ token_ci(R, Acc, T) -> token_ci_list_sep(R, [T|Acc]).
 token_ci_list_sep(<<>>, Acc) -> lists:reverse(Acc);
 token_ci_list_sep(<< C, R/bits >>, Acc) when ?IS_WS(C) -> token_ci_list_sep(R, Acc);
 token_ci_list_sep(<< $,, R/bits >>, Acc) -> token_ci_list(R, Acc).
+
+join_token_list([]) -> [];
+join_token_list([H|T]) -> join_token_list(T, [H]).
+
+join_token_list([], Acc) -> lists:reverse(Acc);
+join_token_list([H|T], Acc) -> join_token_list(T, [H,<<", ">>|Acc]).

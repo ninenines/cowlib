@@ -115,6 +115,7 @@
 -export([access_control_allow_credentials/0]).
 -export([access_control_allow_headers/1]).
 -export([access_control_allow_methods/1]).
+-export([access_control_allow_origin/1]).
 
 -type etag() :: {weak | strong, binary()}.
 -export_type([etag/0]).
@@ -3277,6 +3278,40 @@ access_control_allow_methods_error_test_() ->
 horse_access_control_allow_methods() ->
 	horse:repeat(200000,
 		access_control_allow_methods([<<"GET">>, <<"POST">>, <<"DELETE">>])
+	).
+-endif.
+
+%% @doc Build the Access-Control-Allow-Origin header.
+
+-spec access_control_allow_origin({binary(), binary(), 0..65535} | reference() | '*') -> iodata().
+access_control_allow_origin({Scheme, Host, Port}) ->
+	case default_port(Scheme) of
+		Port -> [Scheme, <<"://">>, Host];
+		_ -> [Scheme, <<"://">>, Host, <<":">>, integer_to_binary(Port)]
+	end;
+access_control_allow_origin('*') -> <<$*>>;
+access_control_allow_origin(Ref) when is_reference(Ref) -> <<"null">>.
+
+-ifdef(TEST).
+access_control_allow_origin_test_() ->
+	Tests = [
+		{{<<"http">>, <<"www.example.org">>, 8080}, <<"http://www.example.org:8080">>},
+		{{<<"http">>, <<"www.example.org">>, 80}, <<"http://www.example.org">>},
+		{{<<"http">>, <<"192.0.2.1">>, 8080}, <<"http://192.0.2.1:8080">>},
+		{{<<"http">>, <<"192.0.2.1">>, 80}, <<"http://192.0.2.1">>},
+		{{<<"http">>, <<"[2001:db8::1]">>, 8080}, <<"http://[2001:db8::1]:8080">>},
+		{{<<"http">>, <<"[2001:db8::1]">>, 80}, <<"http://[2001:db8::1]">>},
+		{{<<"http">>, <<"[::ffff:192.0.2.1]">>, 8080}, <<"http://[::ffff:192.0.2.1]:8080">>},
+		{{<<"http">>, <<"[::ffff:192.0.2.1]">>, 80}, <<"http://[::ffff:192.0.2.1]">>},
+		{make_ref(), <<"null">>},
+		{'*', <<$*>>}
+	],
+	[{lists:flatten(io_lib:format("~p", [V])),
+		fun() -> R = iolist_to_binary(access_control_allow_origin(V)) end} || {V, R} <- Tests].
+
+horse_access_control_allow_origin() ->
+	horse:repeat(200000,
+		access_control_allow_origin({<<"http">>, <<"example.org">>, 8080})
 	).
 -endif.
 

@@ -21,6 +21,7 @@
 % @todo -export([parse_accept_features/1]). RFC2295
 -export([parse_accept_language/1]).
 -export([parse_accept_ranges/1]).
+-export([access_control_allow_credentials/0]).
 % @todo -export([parse_access_control_allow_credentials/1]). CORS
 % @todo -export([parse_access_control_allow_headers/1]). CORS
 % @todo -export([parse_access_control_allow_methods/1]). CORS
@@ -696,6 +697,11 @@ horse_parse_accept_ranges_other() ->
 		parse_accept_ranges(<<"bytes, pages, kilos">>)
 	).
 -endif.
+
+%% @doc Parse the Access-Control-Allow-Credentials header.
+
+-spec access_control_allow_credentials() -> iodata().
+access_control_allow_credentials() -> <<"true">>.
 
 %% @doc Parse the Age header.
 

@@ -23,6 +23,7 @@
 -export([parse_accept_ranges/1]).
 % @todo -export([parse_access_control_allow_credentials/1]). CORS
 % @todo -export([parse_access_control_allow_headers/1]). CORS
+-export([access_control_allow_methods/1]).
 % @todo -export([parse_access_control_allow_methods/1]). CORS
 % @todo -export([parse_access_control_allow_origin/1]). CORS
 % @todo -export([parse_access_control_expose_headers/1]). CORS
@@ -694,6 +695,28 @@ horse_parse_accept_ranges_bytes() ->
 horse_parse_accept_ranges_other() ->
 	horse:repeat(200000,
 		parse_accept_ranges(<<"bytes, pages, kilos">>)
+	).
+-endif.
+
+%% @doc Make the Access-Control-Allow-Methods header.
+
+-spec access_control_allow_methods([binary()]) -> iodata().
+access_control_allow_methods(Methods) ->
+	join_token_list(Methods).
+
+-ifdef(TEST).
+access_control_allow_methods_test_() ->
+	Tests = [
+		{[], <<>>},
+		{[<<"GET">>], <<"GET">>},
+		{[<<"GET">>, <<"POST">>, <<"DELETE">>], <<"GET,POST,DELETE">>}
+	],
+	[{lists:flatten(io_lib:format("~p", [R])),
+		fun() -> R = iolist_to_binary(access_control_allow_methods(V)) end} || {V, R} <- Tests].
+
+horse_access_control_allow_methods() ->
+	horse:repeat(200000,
+		access_control_allow_methods([<<"GET">>, <<"POST">>, <<"DELETE">>])
 	).
 -endif.
 

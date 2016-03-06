@@ -117,6 +117,7 @@
 -export([access_control_allow_methods/1]).
 -export([access_control_allow_origin/1]).
 -export([access_control_expose_headers/1]).
+-export([access_control_max_age/1]).
 
 -type etag() :: {weak | strong, binary()}.
 -export_type([etag/0]).
@@ -3342,6 +3343,24 @@ horse_access_control_expose_headers() ->
 	horse:repeat(200000,
 		access_control_expose_headers([<<"accept">>, <<"authorization">>, <<"content-type">>])
 	).
+-endif.
+
+%% @doc Build the Access-Control-Max-Age header.
+
+-spec access_control_max_age(non_neg_integer()) -> iodata().
+access_control_max_age(MaxAge) -> integer_to_binary(MaxAge).
+
+-ifdef(TEST).
+access_control_max_age_test_() ->
+	Tests = [
+		{0, <<"0">>},
+		{42, <<"42">>},
+		{69, <<"69">>},
+		{1337, <<"1337">>},
+		{3495, <<"3495">>},
+		{1234567890, <<"1234567890">>}
+	],
+	[{V, fun() -> R = access_control_max_age(V) end} || {V, R} <- Tests].
 -endif.
 
 %% Internal.

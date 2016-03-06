@@ -26,6 +26,7 @@
 % @todo -export([parse_access_control_allow_methods/1]). CORS
 % @todo -export([parse_access_control_allow_origin/1]). CORS
 % @todo -export([parse_access_control_expose_headers/1]). CORS
+-export([access_control_max_age/1]).
 % @todo -export([parse_access_control_max_age/1]). CORS
 % @todo -export([parse_access_control_request_headers/1]). CORS
 % @todo -export([parse_access_control_request_method/1]). CORS
@@ -695,6 +696,24 @@ horse_parse_accept_ranges_other() ->
 	horse:repeat(200000,
 		parse_accept_ranges(<<"bytes, pages, kilos">>)
 	).
+-endif.
+
+%% @doc Make the Access-Control-Max-Age header.
+
+-spec access_control_max_age(non_neg_integer()) -> iodata().
+access_control_max_age(MaxAge) -> integer_to_binary(MaxAge).
+
+-ifdef(TEST).
+access_control_max_age_test_() ->
+	Tests = [
+		{0, <<"0">>},
+		{42, <<"42">>},
+		{69, <<"69">>},
+		{1337, <<"1337">>},
+		{3495, <<"3495">>},
+		{1234567890, <<"1234567890">>}
+	],
+	[{V, fun() -> R = access_control_max_age(V) end} || {V, R} <- Tests].
 -endif.
 
 %% @doc Parse the Age header.

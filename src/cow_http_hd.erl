@@ -113,6 +113,7 @@
 
 %% Building.
 -export([access_control_allow_credentials/0]).
+-export([access_control_allow_headers/1]).
 
 -type etag() :: {weak | strong, binary()}.
 -export_type([etag/0]).
@@ -3221,6 +3222,34 @@ parse_x_forwarded_for_error_test_() ->
 
 -spec access_control_allow_credentials() -> iodata().
 access_control_allow_credentials() -> <<"true">>.
+
+%% @doc Build the Access-Control-Allow-Headers header.
+
+-spec access_control_allow_headers([binary()]) -> iodata().
+access_control_allow_headers(Headers) ->
+	join_token_list(nonempty(Headers)).
+
+-ifdef(TEST).
+access_control_allow_headers_test_() ->
+	Tests = [
+		{[<<"accept">>], <<"accept">>},
+		{[<<"accept">>, <<"authorization">>, <<"content-type">>], <<"accept, authorization, content-type">>}
+	],
+	[{lists:flatten(io_lib:format("~p", [V])),
+		fun() -> R = iolist_to_binary(access_control_allow_headers(V)) end} || {V, R} <- Tests].
+
+access_control_allow_headers_error_test_() ->
+	Tests = [
+		[]
+	],
+	[{lists:flatten(io_lib:format("~p", [V])),
+		fun() -> {'EXIT', _} = (catch access_control_allow_headers(V)) end} || V <- Tests].
+
+horse_access_control_allow_headers() ->
+	horse:repeat(200000,
+		access_control_allow_headers([<<"accept">>, <<"authorization">>, <<"content-type">>])
+	).
+-endif.
 
 %% Internal.
 

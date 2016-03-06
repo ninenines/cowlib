@@ -24,6 +24,7 @@
 % @todo -export([parse_access_control_allow_credentials/1]). CORS
 % @todo -export([parse_access_control_allow_headers/1]). CORS
 % @todo -export([parse_access_control_allow_methods/1]). CORS
+-export([access_control_allow_origin/1]).
 % @todo -export([parse_access_control_allow_origin/1]). CORS
 % @todo -export([parse_access_control_expose_headers/1]). CORS
 % @todo -export([parse_access_control_max_age/1]). CORS
@@ -696,6 +697,38 @@ horse_parse_accept_ranges_other() ->
 		parse_accept_ranges(<<"bytes, pages, kilos">>)
 	).
 -endif.
+
+%% @doc Make the Access-Control-Allow-Origin header.
+
+-spec access_control_allow_origin({binary(), binary(), 0..65535} | reference() | '*') -> iodata().
+access_control_allow_origin({Scheme, Host, Port}) ->
+	case default_port(Scheme) of
+		Port -> [Scheme, <<"://">>, Host];
+		_ -> [Scheme, <<"://">>, Host, <<":">>, integer_to_binary(Port)]
+	end;
+access_control_allow_origin('*') -> <<$*>>;
+access_control_allow_origin(Ref) when is_reference(Ref) -> <<"null">>.
+
+access_control_allow_origin_test_() ->
+	Tests = [
+		{{<<"http">>, <<"www.example.org">>, 8080}, <<"http://www.example.org:8080">>},
+		{{<<"http">>, <<"www.example.org">>, 80}, <<"http://www.example.org">>},
+		{{<<"http">>, <<"192.0.2.1">>, 8080}, <<"http://192.0.2.1:8080">>},
+		{{<<"http">>, <<"192.0.2.1">>, 80}, <<"http://192.0.2.1">>},
+		{{<<"http">>, <<"[2001:db8::1]">>, 8080}, <<"http://[2001:db8::1]:8080">>},
+		{{<<"http">>, <<"[2001:db8::1]">>, 80}, <<"http://[2001:db8::1]">>},
+		{{<<"http">>, <<"[::ffff:192.0.2.1]">>, 8080}, <<"http://[::ffff:192.0.2.1]:8080">>},
+		{{<<"http">>, <<"[::ffff:192.0.2.1]">>, 80}, <<"http://[::ffff:192.0.2.1]">>},
+		{make_ref(), <<"null">>},
+		{'*', <<$*>>}
+	],
+	[{lists:flatten(io_lib:format("~p", [V])),
+		fun() -> R = iolist_to_binary(access_control_allow_origin(V)) end} || {V, R} <- Tests].
+
+horse_access_control_allow_origin() ->
+	horse:repeat(200000,
+		access_control_allow_origin({<<"http">>, <<"example.org">>, 8080})
+	).
 
 %% @doc Parse the Age header.
 

@@ -14,6 +14,7 @@
 
 -module(cow_http_hd).
 
+%% Parsing.
 -export([parse_accept/1]).
 -export([parse_accept_charset/1]).
 % @todo -export([parse_accept_datetime/1]). RFC7089
@@ -110,6 +111,9 @@
 -export([parse_x_forwarded_for/1]).
 % @todo -export([parse_x_frame_options/1]). RFC7034
 
+%% Building.
+-export([access_control_allow_credentials/0]).
+
 -type etag() :: {weak | strong, binary()}.
 -export_type([etag/0]).
 
@@ -202,6 +206,8 @@ qvalue_to_iodata(Q) when Q < 100 -> [<<"0.0">>, integer_to_binary(Q)];
 qvalue_to_iodata(Q) when Q < 1000 -> [<<"0.">>, integer_to_binary(Q)];
 qvalue_to_iodata(1000) -> <<"1">>.
 -endif.
+
+%% Parsing.
 
 %% @doc Parse the Accept header.
 
@@ -3208,6 +3214,13 @@ parse_x_forwarded_for_error_test_() ->
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_x_forwarded_for(V)) end} || V <- Tests].
 -endif.
+
+%% Building.
+
+%% @doc Build the Access-Control-Allow-Credentials header.
+
+-spec access_control_allow_credentials() -> iodata().
+access_control_allow_credentials() -> <<"true">>.
 
 %% Internal.
 

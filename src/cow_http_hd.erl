@@ -22,6 +22,7 @@
 -export([parse_accept_language/1]).
 -export([parse_accept_ranges/1]).
 % @todo -export([parse_access_control_allow_credentials/1]). CORS
+-export([access_control_allow_headers/1]).
 % @todo -export([parse_access_control_allow_headers/1]). CORS
 % @todo -export([parse_access_control_allow_methods/1]). CORS
 % @todo -export([parse_access_control_allow_origin/1]). CORS
@@ -694,6 +695,28 @@ horse_parse_accept_ranges_bytes() ->
 horse_parse_accept_ranges_other() ->
 	horse:repeat(200000,
 		parse_accept_ranges(<<"bytes, pages, kilos">>)
+	).
+-endif.
+
+%% @doc Make the Access-Control-Allow-Headers header.
+
+-spec access_control_allow_headers([binary()]) -> iodata().
+access_control_allow_headers(Headers) ->
+	join_token_list(Headers).
+
+-ifdef(TEST).
+access_control_allow_headers_test_() ->
+	Tests = [
+		{[], <<>>},
+		{[<<"accept">>], <<"accept">>},
+		{[<<"accept">>, <<"authorization">>, <<"content-type">>], <<"accept,authorization,content-type">>}
+	],
+	[{lists:flatten(io_lib:format("~p", [R])),
+		fun() -> R = iolist_to_binary(access_control_allow_headers(V)) end} || {V, R} <- Tests].
+
+horse_access_control_allow_headers() ->
+	horse:repeat(200000,
+		access_control_allow_headers([<<"accept">>, <<"authorization">>, <<"content-type">>])
 	).
 -endif.
 

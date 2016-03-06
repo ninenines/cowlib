@@ -27,7 +27,7 @@
 % @todo -export([parse_access_control_allow_origin/1]). CORS
 % @todo -export([parse_access_control_expose_headers/1]). CORS
 % @todo -export([parse_access_control_max_age/1]). CORS
-% @todo -export([parse_access_control_request_headers/1]). CORS
+-export([parse_access_control_request_headers/1]).
 % @todo -export([parse_access_control_request_method/1]). CORS
 -export([parse_age/1]).
 -export([parse_allow/1]).
@@ -694,6 +694,43 @@ horse_parse_accept_ranges_bytes() ->
 horse_parse_accept_ranges_other() ->
 	horse:repeat(200000,
 		parse_accept_ranges(<<"bytes, pages, kilos">>)
+	).
+-endif.
+
+%% @doc Parse the Access-Control-Request-Headers header.
+
+-spec parse_access_control_request_headers(binary()) -> [binary()].
+parse_access_control_request_headers(Headers) ->
+	token_ci_list(Headers, []).
+
+-ifdef(TEST).
+headers() ->
+	?LET(L,
+		list({ows(), ows(), token()}),
+		case L of
+			[] -> {[], <<>>};
+			_ ->
+				<< _, Headers/binary >> = iolist_to_binary([[OWS1, $,, OWS2, M] || {OWS1, OWS2, M} <- L]),
+				{[M || {_, _, M} <- L], Headers}
+		end).
+
+prop_parse_access_control_request_headers() ->
+	?FORALL({L, Headers},
+		headers(),
+		L =:= parse_access_control_request_headers(Headers)).
+
+parse_access_control_request_headers_test_() ->
+	Tests = [
+		{<<>>, []},
+		{<<"Content-Type">>, [<<"content-type">>]},
+		{<<"accept, authorization, content-type">>, [<<"accept">>, <<"authorization">>, <<"content-type">>]},
+		{<<"accept,, , authorization,content-type">>, [<<"accept">>, <<"authorization">>, <<"content-type">>]}
+	],
+	[{V, fun() -> R = parse_access_control_request_headers(V) end} || {V, R} <- Tests].
+
+horse_parse_access_control_request_headers() ->
+	horse:repeat(200000,
+		parse_access_control_request_headers(<<"accept, authorization, content-type">>)
 	).
 -endif.
 

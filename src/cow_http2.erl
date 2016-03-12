@@ -22,7 +22,10 @@
 -export([headers/3]).
 -export([rst_stream/2]).
 -export([settings/1]).
+-export([settings_payload/1]).
+-export([settings_ack/0]).
 -export([push_promise/3]).
+-export([ping/1]).
 -export([ping_ack/1]).
 
 -type streamid() :: pos_integer().
@@ -309,11 +312,21 @@ rst_stream(StreamID, Reason) ->
 settings(#{}) ->
 	<< 0:24, 4:8, 0:40 >>.
 
+%% @todo Actually implement it. :-)
+settings_payload(#{}) ->
+	<<>>.
+
+settings_ack() ->
+	<< 0:24, 4:8, 1:8, 0:32 >>.
+
 %% @todo Check size of HeaderBlock and use CONTINUATION frames if needed.
 push_promise(StreamID, PromisedStreamID, HeaderBlock) ->
 	Len = iolist_size(HeaderBlock) + 4,
 	FlagEndHeaders = 1,
 	[<< Len:24, 5:8, 0:5, FlagEndHeaders:1, 0:3, StreamID:31, 0:1, PromisedStreamID:31 >>, HeaderBlock].
+
+ping(Opaque) ->
+	<< 8:24, 6:8, 0:40, Opaque:64 >>.
 
 ping_ack(Opaque) ->
 	<< 8:24, 6:8, 0:7, 1:1, 0:32, Opaque:64 >>.

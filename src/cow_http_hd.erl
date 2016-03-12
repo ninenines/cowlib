@@ -56,7 +56,7 @@
 % @todo -export([parse_forwarded/1]). RFC7239
 % @todo -export([parse_from/1]). RFC7231
 -export([parse_host/1]).
-% @todo -export([parse_http2_settings/1]). HTTP/2 (upcoming)
+-export([parse_http2_settings/1]).
 -export([parse_if_match/1]).
 -export([parse_if_modified_since/1]).
 -export([parse_if_none_match/1]).
@@ -1882,6 +1882,12 @@ horse_parse_host_ipv6_v4() ->
 		parse_host(<<"[::ffff:192.0.2.1]:8080">>)
 	).
 -endif.
+
+%% @doc Parse the HTTP2-Settings header.
+
+-spec parse_http2_settings(binary()) -> binary().
+parse_http2_settings(HTTP2Settings) ->
+	base64:decode(HTTP2Settings).
 
 %% @doc Parse the If-Match header.
 

@@ -1887,7 +1887,7 @@ horse_parse_host_ipv6_v4() ->
 
 -spec parse_http2_settings(binary()) -> binary().
 parse_http2_settings(HTTP2Settings) ->
-	base64:decode(HTTP2Settings).
+	cow_http2:parse_settings_payload(base64:decode(HTTP2Settings)).
 
 %% @doc Parse the If-Match header.
 

@@ -16,6 +16,7 @@
 
 %% Parsing.
 -export([parse/1]).
+-export([parse_settings_payload/1]).
 
 %% Building.
 -export([data/3]).
@@ -163,7 +164,7 @@ parse(<< _:24, 4:8, _:7, 1:1, _:1, 0:31, _/bits >>) ->
 parse(<< Len:24, 4:8, _:7, 0:1, _:1, 0:31, _/bits >>) when Len rem 6 =/= 0 ->
 	{connection_error, frame_size_error, 'SETTINGS frames MUST have a length multiple of 6. (RFC7540 6.5)'};
 parse(<< Len:24, 4:8, _:7, 0:1, _:1, 0:31, Rest/bits >>) when byte_size(Rest) >= Len ->
-	parse_settings(Rest, Len, #{});
+	parse_settings_payload(Rest, Len, #{});
 parse(<< _:24, 4:8, _/bits >>) ->
 	{connection_error, protocol_error, 'SETTINGS frames MUST NOT be associated with a stream. (RFC7540 6.5)'};
 %%
@@ -256,38 +257,43 @@ parse_error_code(12) -> inadequate_security;
 parse_error_code(13) -> http_1_1_required;
 parse_error_code(_) -> unknown_error.
 
-parse_settings(Rest, 0, Settings) ->
+parse_settings_payload(SettingsPayload) ->
+	{ok, {settings, Settings}, <<>>}
+		= parse_settings_payload(SettingsPayload, byte_size(SettingsPayload), #{}),
+	Settings.
+
+parse_settings_payload(Rest, 0, Settings) ->
 	{ok, {settings, Settings}, Rest};
 %% SETTINGS_HEADER_TABLE_SIZE.
-parse_settings(<< 1:16, Value:32, Rest/bits >>, Len, Settings) ->
-	parse_settings(Rest, Len - 6, Settings#{header_table_size => Value});
+parse_settings_payload(<< 1:16, Value:32, Rest/bits >>, Len, Settings) ->
+	parse_settings_payload(Rest, Len - 6, Settings#{header_table_size => Value});
 %% SETTINGS_ENABLE_PUSH.
-parse_settings(<< 2:16, 0:32, Rest/bits >>, Len, Settings) ->
-	parse_settings(Rest, Len - 6, Settings#{enable_push => false});
-parse_settings(<< 2:16, 1:32, Rest/bits >>, Len, Settings) ->
-	parse_settings(Rest, Len - 6, Settings#{enable_push => true});
-parse_settings(<< 2:16, _:32, _/bits >>, _, _) ->
+parse_settings_payload(<< 2:16, 0:32, Rest/bits >>, Len, Settings) ->
+	parse_settings_payload(Rest, Len - 6, Settings#{enable_push => false});
+parse_settings_payload(<< 2:16, 1:32, Rest/bits >>, Len, Settings) ->
+	parse_settings_payload(Rest, Len - 6, Settings#{enable_push => true});
+parse_settings_payload(<< 2:16, _:32, _/bits >>, _, _) ->
 	{connection_error, protocol_error, 'The SETTINGS_ENABLE_PUSH value MUST be 0 or 1. (RFC7540 6.5.2)'};
 %% SETTINGS_MAX_CONCURRENT_STREAMS.
-parse_settings(<< 3:16, Value:32, Rest/bits >>, Len, Settings) ->
-	parse_settings(Rest, Len - 6, Settings#{max_concurrent_streams => Value});
+parse_settings_payload(<< 3:16, Value:32, Rest/bits >>, Len, Settings) ->
+	parse_settings_payload(Rest, Len - 6, Settings#{max_concurrent_streams => Value});
 %% SETTINGS_INITIAL_WINDOW_SIZE.
-parse_settings(<< 4:16, Value:32, _/bits >>, _, _) when Value > 16#7fffffff ->
+parse_settings_payload(<< 4:16, Value:32, _/bits >>, _, _) when Value > 16#7fffffff ->
 	{connection_error, flow_control_error, 'The maximum SETTINGS_INITIAL_WINDOW_SIZE value is 0x7fffffff. (RFC7540 6.5.2)'};
-parse_settings(<< 4:16, Value:32, Rest/bits >>, Len, Settings) ->
-	parse_settings(Rest, Len - 6, Settings#{initial_window_size => Value});
+parse_settings_payload(<< 4:16, Value:32, Rest/bits >>, Len, Settings) ->
+	parse_settings_payload(Rest, Len - 6, Settings#{initial_window_size => Value});
 %% SETTINGS_MAX_FRAME_SIZE.
-parse_settings(<< 5:16, Value:32, _/bits >>, _, _) when Value =< 16#3fff ->
+parse_settings_payload(<< 5:16, Value:32, _/bits >>, _, _) when Value =< 16#3fff ->
 	{connection_error, protocol_error, 'The SETTINGS_MAX_FRAME_SIZE value must be > 0x3fff. (RFC7540 6.5.2)'};
-parse_settings(<< 5:16, Value:32, Rest/bits >>, Len, Settings) when Value =< 16#ffffff ->
-	parse_settings(Rest, Len - 6, Settings#{max_frame_size => Value});
-parse_settings(<< 5:16, _:32, _/bits >>, _, _) ->
+parse_settings_payload(<< 5:16, Value:32, Rest/bits >>, Len, Settings) when Value =< 16#ffffff ->
+	parse_settings_payload(Rest, Len - 6, Settings#{max_frame_size => Value});
+parse_settings_payload(<< 5:16, _:32, _/bits >>, _, _) ->
 	{connection_error, protocol_error, 'The SETTINGS_MAX_FRAME_SIZE value must be =< 0xffffff. (RFC7540 6.5.2)'};
 %% SETTINGS_MAX_HEADER_LIST_SIZE.
-parse_settings(<< 6:16, Value:32, Rest/bits >>, Len, Settings) ->
-	parse_settings(Rest, Len - 6, Settings#{max_header_list_size => Value});
-parse_settings(<< _:48, Rest/bits >>, Len, Settings) ->
-	parse_settings(Rest, Len - 6, Settings).
+parse_settings_payload(<< 6:16, Value:32, Rest/bits >>, Len, Settings) ->
+	parse_settings_payload(Rest, Len - 6, Settings#{max_header_list_size => Value});
+parse_settings_payload(<< _:48, Rest/bits >>, Len, Settings) ->
+	parse_settings_payload(Rest, Len - 6, Settings).
 
 %% Building.
 

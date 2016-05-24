@@ -563,7 +563,9 @@ encode(Headers, State, Opts) ->
 %% @todo Handle cases where no/never indexing is expected.
 encode([], State, _, Acc) ->
 	{lists:reverse(Acc), State};
-encode([Header = {Name, Value}|Tail], State, Opts, Acc) ->
+encode([Header0 = {Name, Value0}|Tail], State, Opts, Acc) ->
+	Value = iolist_to_binary(Value0),
+	Header = {Name, Value},
 	case table_find(Header, State) of
 		%% Indexed header field representation.
 		{field, Index} ->
@@ -974,13 +976,24 @@ resp_encode_test() ->
 		{52,{<<"content-encoding">>, <<"gzip">>}},
 		{65,{<<"date">>, <<"Mon, 21 Oct 2013 20:13:22 GMT">>}}]} = State3,
 	ok.
+
+encode_iolist_test() ->
+	Headers = [
+		{<<":method">>, <<"GET">>},
+		{<<":scheme">>, <<"http">>},
+		{<<":path">>, <<"/">>},
+		{<<":authority">>, <<"www.example.com">>},
+		{<<"content-type">>, [<<"image">>,<<"/">>,<<"png">>,<<>>]}
+	],
+	{_, _} = encode(Headers),
+	ok.
 -endif.
 
 %% Static and dynamic tables.
 
 %% @todo There must be a more efficient way.
-table_find({Name, Value}, State) ->
-	case table_find_field({Name, iolist_to_binary(Value)}, State) of
+table_find(Header = {Name, _}, State) ->
+	case table_find_field(Header, State) of
 		not_found ->
 			case table_find_name(Name, State) of
 				NotFound = not_found ->

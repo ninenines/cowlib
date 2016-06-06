@@ -20,6 +20,7 @@
 
 %% Building.
 -export([data/3]).
+-export([data_header/3]).
 -export([headers/3]).
 -export([rst_stream/2]).
 -export([settings/1]).
@@ -299,9 +300,11 @@ parse_settings_payload(<< _:48, Rest/bits >>, Len, Settings) ->
 
 %% @todo Check size and create multiple frames if needed.
 data(StreamID, IsFin, Data) ->
-	Len = iolist_size(Data),
+	[data_header(StreamID, IsFin, iolist_size(Data)), Data].
+
+data_header(StreamID, IsFin, Len) ->
 	FlagEndStream = flag_fin(IsFin),
-	[<< Len:24, 0:15, FlagEndStream:1, 0:1, StreamID:31 >>, Data].
+	<< Len:24, 0:15, FlagEndStream:1, 0:1, StreamID:31 >>.
 
 %% @todo Check size of HeaderBlock and use CONTINUATION frames if needed.
 headers(StreamID, IsFin, HeaderBlock) ->

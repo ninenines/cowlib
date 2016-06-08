@@ -563,7 +563,7 @@ encode(Headers, State, Opts) ->
 %% @todo Handle cases where no/never indexing is expected.
 encode([], State, _, Acc) ->
 	{lists:reverse(Acc), State};
-encode([Header0 = {Name, Value0}|Tail], State, Opts, Acc) ->
+encode([_Header0 = {Name, Value0}|Tail], State, Opts, Acc) ->
 	Value = iolist_to_binary(Value0),
 	Header = {Name, Value},
 	case table_find(Header, State) of

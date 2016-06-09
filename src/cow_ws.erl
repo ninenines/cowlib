@@ -60,7 +60,7 @@
 
 -spec key() -> binary().
 key() ->
-	base64:encode(crypto:rand_bytes(16)).
+	base64:encode(crypto:strong_rand_bytes(16)).
 
 %% @doc Encode the key into the accept value for the Websocket handshake response.
 
@@ -546,36 +546,36 @@ masked_frame({close, Payload}, Extensions) ->
 masked_frame({close, StatusCode, Payload}, _) ->
 	Len = 2 + iolist_size(Payload),
 	true = Len =< 125,
-	MaskKeyBin = << MaskKey:32 >> = crypto:rand_bytes(4),
+	MaskKeyBin = << MaskKey:32 >> = crypto:strong_rand_bytes(4),
 	[<< 1:1, 0:3, 8:4, 1:1, Len:7 >>, MaskKeyBin, mask(iolist_to_binary([<< StatusCode:16 >>, Payload]), MaskKey, <<>>)];
 masked_frame({ping, Payload}, _) ->
 	Len = iolist_size(Payload),
 	true = Len =< 125,
-	MaskKeyBin = << MaskKey:32 >> = crypto:rand_bytes(4),
+	MaskKeyBin = << MaskKey:32 >> = crypto:strong_rand_bytes(4),
 	[<< 1:1, 0:3, 9:4, 1:1, Len:7 >>, MaskKeyBin, mask(iolist_to_binary(Payload), MaskKey, <<>>)];
 masked_frame({pong, Payload}, _) ->
 	Len = iolist_size(Payload),
 	true = Len =< 125,
-	MaskKeyBin = << MaskKey:32 >> = crypto:rand_bytes(4),
+	MaskKeyBin = << MaskKey:32 >> = crypto:strong_rand_bytes(4),
 	[<< 1:1, 0:3, 10:4, 1:1, Len:7 >>, MaskKeyBin, mask(iolist_to_binary(Payload), MaskKey, <<>>)];
 %% Data frames, deflate-frame extension.
 masked_frame({text, Payload}, #{deflate := Deflate, deflate_takeover := TakeOver}) ->
-	MaskKeyBin = << MaskKey:32 >> = crypto:rand_bytes(4),
+	MaskKeyBin = << MaskKey:32 >> = crypto:strong_rand_bytes(4),
 	Payload2 = mask(deflate_frame(Payload, Deflate, TakeOver), MaskKey, <<>>),
 	Len = payload_length(Payload2),
 	[<< 1:1, 1:1, 0:2, 1:4, 1:1, Len/bits >>, MaskKeyBin, Payload2];
 masked_frame({binary, Payload}, #{deflate := Deflate, deflate_takeover := TakeOver}) ->
-	MaskKeyBin = << MaskKey:32 >> = crypto:rand_bytes(4),
+	MaskKeyBin = << MaskKey:32 >> = crypto:strong_rand_bytes(4),
 	Payload2 = mask(deflate_frame(Payload, Deflate, TakeOver), MaskKey, <<>>),
 	Len = payload_length(Payload2),
 	[<< 1:1, 1:1, 0:2, 2:4, 1:1, Len/bits >>, MaskKeyBin, Payload2];
 %% Data frames.
 masked_frame({text, Payload}, _) ->
-	MaskKeyBin = << MaskKey:32 >> = crypto:rand_bytes(4),
+	MaskKeyBin = << MaskKey:32 >> = crypto:strong_rand_bytes(4),
 	Len = payload_length(Payload),
 	[<< 1:1, 0:3, 1:4, 1:1, Len/bits >>, MaskKeyBin, mask(iolist_to_binary(Payload), MaskKey, <<>>)];
 masked_frame({binary, Payload}, _) ->
-	MaskKeyBin = << MaskKey:32 >> = crypto:rand_bytes(4),
+	MaskKeyBin = << MaskKey:32 >> = crypto:strong_rand_bytes(4),
 	Len = payload_length(Payload),
 	[<< 1:1, 0:3, 2:4, 1:1, Len/bits >>, MaskKeyBin, mask(iolist_to_binary(Payload), MaskKey, <<>>)].
 

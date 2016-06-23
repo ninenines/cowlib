@@ -79,23 +79,37 @@ negotiate_permessage_deflate(Params, Extensions, Opts) ->
 		Params2 when length(Params) =/= length(Params2) ->
 			ignore;
 		Params2 ->
+			CTO = maps:get(client_takeover, Opts, takeover),
+			STO = maps:get(server_takeover, Opts, takeover),
+			CB = maps:get(client_max_window, Opts, 15),
+			SB = maps:get(server_max_window, Opts, 15),
+			Threshold = maps:get(compression_threshold, Opts, 0),
 			%% @todo Might want to make these configurable defaults.
-			case parse_request_permessage_deflate_params(Params2, 15, takeover, 15, takeover, []) of
+			case parse_request_permessage_deflate_params(Params2, CB, CTO, SB, STO, []) of
 				ignore ->
 					ignore;
 				{ClientWindowBits, ClientTakeOver, ServerWindowBits, ServerTakeOver, RespParams} ->
-					{Inflate, Deflate} = init_permessage_deflate(ClientWindowBits, ServerWindowBits, Opts),
+					NewOpts = Opts#{server_takeover => ServerTakeOver},
+					{Inflate, Deflate} = init_permessage_deflate(ClientWindowBits, ServerWindowBits, NewOpts),
 					{ok, [<<"permessage-deflate">>, RespParams],
 						Extensions#{
 							deflate => Deflate,
 							deflate_takeover => ServerTakeOver,
+							deflate_window_bits => ServerWindowBits,
 							inflate => Inflate,
-							inflate_takeover => ClientTakeOver}}
+							inflate_takeover => ClientTakeOver,
+							inflate_window_bits => ClientWindowBits,
+							compression_threshold => Threshold}}
 			end
 	end.
 
+parse_request_permessage_deflate_params([], CB, negotiable, SB, STO, RespParams) ->
+	parse_request_permessage_deflate_params([], CB, takeover, SB, STO, RespParams);
+parse_request_permessage_deflate_params([], CB, CTO, SB, negotiable, RespParams) ->
+	parse_request_permessage_deflate_params([], CB, CTO, SB, takeover, RespParams);
 parse_request_permessage_deflate_params([], CB, CTO, SB, STO, RespParams) ->
-	{CB, CTO, SB, STO, RespParams};
+	FinalRespParams = parse_forced_params(CTO, STO, RespParams),
+	{CB, CTO, SB, STO, FinalRespParams};
 parse_request_permessage_deflate_params([<<"client_max_window_bits">>|Tail], CB, CTO, SB, STO, RespParams) ->
 	parse_request_permessage_deflate_params(Tail, CB, CTO, SB, STO,
 		[<<"; ">>, <<"client_max_window_bits=">>, integer_to_binary(CB)|RespParams]);
@@ -107,6 +121,8 @@ parse_request_permessage_deflate_params([{<<"client_max_window_bits">>, Max}|Tai
 			parse_request_permessage_deflate_params(Tail, CB, CTO, SB, STO,
 				[<<"; ">>, <<"client_max_window_bits=">>, Max|RespParams])
 	end;
+parse_request_permessage_deflate_params([<<"client_no_context_takeover">>|Tail], CB, takeover, SB, STO, RespParams) ->
+	parse_request_permessage_deflate_params(Tail, CB, takeover, SB, STO, RespParams);
 parse_request_permessage_deflate_params([<<"client_no_context_takeover">>|Tail], CB, _, SB, STO, RespParams) ->
 	parse_request_permessage_deflate_params(Tail, CB, no_takeover, SB, STO, [<<"; ">>, <<"client_no_context_takeover">>|RespParams]);
 parse_request_permessage_deflate_params([{<<"server_max_window_bits">>, Max}|Tail], CB, CTO, _, STO, RespParams) ->
@@ -117,11 +133,32 @@ parse_request_permessage_deflate_params([{<<"server_max_window_bits">>, Max}|Tai
 			parse_request_permessage_deflate_params(Tail, CB, CTO, SB, STO,
 				[<<"; ">>, <<"server_max_window_bits=">>, Max|RespParams])
 	end;
+parse_request_permessage_deflate_params([<<"server_no_context_takeover">>|Tail], CB, CTO, SB, takeover, RespParams) ->
+	parse_request_permessage_deflate_params(Tail, CB, CTO, SB, takeover, RespParams);
 parse_request_permessage_deflate_params([<<"server_no_context_takeover">>|Tail], CB, CTO, SB, _, RespParams) ->
 	parse_request_permessage_deflate_params(Tail, CB, CTO, SB, no_takeover, [<<"; ">>, <<"server_no_context_takeover">>|RespParams]);
 %% Ignore if unknown parameter; ignore if parameter with invalid or missing value.
 parse_request_permessage_deflate_params(_, _, _, _, _, _) ->
 	ignore.
+
+%% Check if we've set no_takeover anywhere. Then, if we haven't placed '__no_context_takeover'
+%% into the resp, place it and return params.
+parse_forced_params(CTO, no_takeover, RespParams) ->
+	case lists:member(<<"server_no_context_takeover">>, RespParams) of
+		true ->
+			parse_forced_params(CTO, resolved, RespParams);
+		false ->
+			parse_forced_params(CTO, resolved, [<<"; ">>, <<"server_no_context_takeover">>|RespParams])
+	end;
+parse_forced_params(no_takeover, STO, RespParams) ->
+	case lists:member(<<"client_no_context_takeover">>, RespParams) of
+		true ->
+			parse_forced_params(resolved, STO, RespParams);
+		false ->
+			parse_forced_params(resolved, STO, [<<"; ">>, <<"client_no_context_takeover">>|RespParams])
+	end;
+parse_forced_params(_CTO, _STO, RespParams) ->
+	RespParams.
 
 parse_max_window_bits(<<"8">>) -> 8;
 parse_max_window_bits(<<"9">>) -> 9;
@@ -137,18 +174,25 @@ parse_max_window_bits(_) -> error.
 init_permessage_deflate(InflateWindowBits, DeflateWindowBits, Opts) ->
 	Inflate = zlib:open(),
 	ok = zlib:inflateInit(Inflate, -InflateWindowBits),
-	Deflate = zlib:open(),
-	%% @todo Remove this case .. of for OTP 18+ if PR https://github.com/erlang/otp/pull/633 gets merged.
-	DeflateWindowBits2 = case DeflateWindowBits of
-		8 -> 9;
-		_ -> DeflateWindowBits
-	end,
-	ok = zlib:deflateInit(Deflate,
-		maps:get(level, Opts, best_compression),
-		deflated,
-		-DeflateWindowBits2,
-		maps:get(mem_level, Opts, 8),
-		maps:get(strategy, Opts, default)),
+	ServerTakeOver = maps:get(server_takeover, Opts, takeover),
+	Deflate = case ServerTakeOver of
+				  takeover ->
+					  DeflateStream = zlib:open(),
+					  %% @todo Remove this case .. of for OTP 18+ if PR https://github.com/erlang/otp/pull/633 gets merged.
+					  DeflateWindowBits2 = case DeflateWindowBits of
+											   8 -> 9;
+											   _ -> DeflateWindowBits
+										   end,
+					  ok = zlib:deflateInit(DeflateStream,
+						  maps:get(level, Opts, best_compression),
+						  deflated,
+						  -DeflateWindowBits2,
+						  maps:get(mem_level, Opts, 8),
+						  maps:get(strategy, Opts, default)),
+					  DeflateStream;
+				  no_takeover ->
+					  undefined
+			  end,
 	{Inflate, Deflate}.
 
 %% @doc Negotiate the x-webkit-deflate-frame extension.
@@ -163,12 +207,14 @@ negotiate_x_webkit_deflate_frame(_Params, Extensions, Opts) ->
 	% then we must be willing to accept frames using the
 	% maximum window size which is 2^15.
 	{Inflate, Deflate} = init_permessage_deflate(15, 15, Opts),
+	Threshold = maps:get(compression_threshold, Opts, 0),
 	{ok, <<"x-webkit-deflate-frame">>,
 		Extensions#{
 			deflate => Deflate,
 			deflate_takeover => takeover,
 			inflate => Inflate,
-			inflate_takeover => takeover}}.
+			inflate_takeover => takeover,
+			compression_threshold => Threshold}}.
 
 %% @doc Validate the negotiated permessage-deflate extension.
 
@@ -186,12 +232,14 @@ validate_permessage_deflate(Params, Extensions, Opts) ->
 				error ->
 					error;
 				{ClientWindowBits, ClientTakeOver, ServerWindowBits, ServerTakeOver} ->
+					Threshold = maps:get(compression_threshold, Opts, 0),
 					{Inflate, Deflate} = init_permessage_deflate(ServerWindowBits, ClientWindowBits, Opts),
 					{ok, Extensions#{
 						deflate => Deflate,
 						deflate_takeover => ClientTakeOver,
 						inflate => Inflate,
-						inflate_takeover => ServerTakeOver}}
+						inflate_takeover => ServerTakeOver,
+						compression_threshold => Threshold}}
 			end
 	end.
 
@@ -226,8 +274,8 @@ parse_response_permessage_deflate_params(_, _, _, _, _) ->
 %% that defines meanings for non-zero values.
 parse_header(<< _:1, Rsv:3, _/bits >>, Extensions, _) when Extensions =:= #{}, Rsv =/= 0 -> error;
 %% Last 2 RSV bits MUST be 0 if deflate-frame extension is used.
-parse_header(<< _:2, 1:1, _/bits >>, #{deflate := _}, _) -> error;
-parse_header(<< _:3, 1:1, _/bits >>, #{deflate := _}, _) -> error;
+parse_header(<< _:2, 1:1, _/bits >>, #{deflate := Deflate}, _) when Deflate =/= undefined -> error;
+parse_header(<< _:3, 1:1, _/bits >>, #{deflate := Deflate}, _) when Deflate =/= undefined -> error;
 %% Invalid opcode. Note that these opcodes may be used by extensions.
 parse_header(<< _:4, 3:4, _/bits >>, _, _) -> error;
 parse_header(<< _:4, 4:4, _/bits >>, _, _) -> error;
@@ -513,12 +561,38 @@ frame({pong, Payload}, _) ->
 	true = Len =< 125,
 	[<< 1:1, 0:3, 10:4, 0:1, Len:7 >>, Payload];
 %% Data frames, deflate-frame extension.
-frame({text, Payload}, #{deflate := Deflate, deflate_takeover := TakeOver}) ->
-	Payload2 = deflate_frame(Payload, Deflate, TakeOver),
+%% Iolist Compression Thresholds - Compress only if payload is above threshold
+frame({text, Payload}, #{deflate_takeover := TakeOver,
+	compression_threshold := Threshold} = DeflateOpts) when is_list(Payload) ->
+	case iolist_size(Payload) >= Threshold of
+		true ->
+			Payload2 = deflate_frame(Payload, DeflateOpts, TakeOver),
+			Len = payload_length(Payload2),
+			[<< 1:1, 1:1, 0:2, 1:4, 0:1, Len/bits >>, Payload2];
+		false ->
+			Len = payload_length(Payload),
+			[<< 1:1, 0:3, 1:4, 0:1, Len/bits >>, Payload]
+	end;
+frame({binary, Payload}, #{deflate_takeover := TakeOver,
+	compression_threshold := Threshold} = DeflateOpts) when is_list(Payload) ->
+	case iolist_size(Payload) >= Threshold of
+		true ->
+			Payload2 = deflate_frame(Payload, DeflateOpts, TakeOver),
+			Len = payload_length(Payload2),
+			[<< 1:1, 1:1, 0:2, 2:4, 0:1, Len/bits >>, Payload2];
+		false ->
+			Len = payload_length(Payload),
+			[<< 1:1, 0:3, 2:4, 0:1, Len/bits >>, Payload]
+	end;
+%% Binary Compression Threshold - Compress only if payload is above thresholds
+frame({text, Payload}, #{deflate_takeover := TakeOver,
+	compression_threshold := Threshold} = DeflateOpts) when byte_size(Payload) >= Threshold ->
+	Payload2 = deflate_frame(Payload, DeflateOpts, TakeOver),
 	Len = payload_length(Payload2),
 	[<< 1:1, 1:1, 0:2, 1:4, 0:1, Len/bits >>, Payload2];
-frame({binary, Payload}, #{deflate := Deflate, deflate_takeover := TakeOver}) ->
-	Payload2 = deflate_frame(Payload, Deflate, TakeOver),
+frame({binary, Payload}, #{deflate_takeover := TakeOver,
+	compression_threshold := Threshold} = DeflateOpts) when byte_size(Payload) >= Threshold ->
+	Payload2 = deflate_frame(Payload, DeflateOpts, TakeOver),
 	Len = payload_length(Payload2),
 	[<< 1:1, 1:1, 0:2, 2:4, 0:1, Len/bits >>, Payload2];
 %% Data frames.
@@ -559,14 +633,42 @@ masked_frame({pong, Payload}, _) ->
 	MaskKeyBin = << MaskKey:32 >> = crypto:strong_rand_bytes(4),
 	[<< 1:1, 0:3, 10:4, 1:1, Len:7 >>, MaskKeyBin, mask(iolist_to_binary(Payload), MaskKey, <<>>)];
 %% Data frames, deflate-frame extension.
-masked_frame({text, Payload}, #{deflate := Deflate, deflate_takeover := TakeOver}) ->
+%% Iolist Compression Thresholds - Compress only if payload is above thresholds
+masked_frame({text, Payload}, #{deflate_takeover := TakeOver,
+	compression_threshold := Threshold} = DeflateOpts) when is_list(Payload) ->
 	MaskKeyBin = << MaskKey:32 >> = crypto:strong_rand_bytes(4),
-	Payload2 = mask(deflate_frame(Payload, Deflate, TakeOver), MaskKey, <<>>),
+	case iolist_size(Payload) >= Threshold of
+		true ->
+			Payload2 = mask(deflate_frame(Payload, DeflateOpts, TakeOver), MaskKey, <<>>),
+			Len = payload_length(Payload2),
+			[<< 1:1, 1:1, 0:2, 1:4, 1:1, Len/bits >>, MaskKeyBin, Payload2];
+		false ->
+			Len = payload_length(Payload),
+			[<< 1:1, 0:3, 1:4, 1:1, Len/bits >>, MaskKeyBin, mask(iolist_to_binary(Payload), MaskKey, <<>>)]
+	end;
+masked_frame({binary, Payload}, #{deflate_takeover := TakeOver,
+	compression_threshold := Threshold} = DeflateOpts) when is_list(Payload) ->
+	MaskKeyBin = << MaskKey:32 >> = crypto:strong_rand_bytes(4),
+	case iolist_size(Payload) >= Threshold of
+		true ->
+			Payload2 = mask(deflate_frame(Payload, DeflateOpts, TakeOver), MaskKey, <<>>),
+			Len = payload_length(Payload2),
+			[<< 1:1, 1:1, 0:2, 2:4, 1:1, Len/bits >>, MaskKeyBin, Payload2];
+		false ->
+			Len = payload_length(Payload),
+			[<< 1:1, 0:3, 2:4, 1:1, Len/bits >>, MaskKeyBin, mask(iolist_to_binary(Payload), MaskKey, <<>>)]
+	end;
+%% Binary Compression Thresholds - Compress only if payload is above thresholds
+masked_frame({text, Payload}, #{deflate_takeover := TakeOver,
+	compression_threshold := Threshold} = DeflateOpts) when byte_size(Payload) >= Threshold ->
+	MaskKeyBin = << MaskKey:32 >> = crypto:strong_rand_bytes(4),
+	Payload2 = mask(deflate_frame(Payload, DeflateOpts, TakeOver), MaskKey, <<>>),
 	Len = payload_length(Payload2),
 	[<< 1:1, 1:1, 0:2, 1:4, 1:1, Len/bits >>, MaskKeyBin, Payload2];
-masked_frame({binary, Payload}, #{deflate := Deflate, deflate_takeover := TakeOver}) ->
+masked_frame({binary, Payload}, #{deflate_takeover := TakeOver,
+	compression_threshold := Threshold} = DeflateOpts) when byte_size(Payload) >= Threshold ->
 	MaskKeyBin = << MaskKey:32 >> = crypto:strong_rand_bytes(4),
-	Payload2 = mask(deflate_frame(Payload, Deflate, TakeOver), MaskKey, <<>>),
+	Payload2 = mask(deflate_frame(Payload, DeflateOpts, TakeOver), MaskKey, <<>>),
 	Len = payload_length(Payload2),
 	[<< 1:1, 1:1, 0:2, 2:4, 1:1, Len/bits >>, MaskKeyBin, Payload2];
 %% Data frames.
@@ -586,12 +688,24 @@ payload_length(Payload) ->
 		N when N =< 16#7fffffffffffffff -> << 127:7, N:64 >>
 	end.
 
-deflate_frame(Payload, Deflate, TakeOver) ->
+deflate_frame(Payload, #{deflate := Deflate}, takeover) ->
 	Deflated = iolist_to_binary(zlib:deflate(Deflate, Payload, sync)),
-	case TakeOver of
-		no_takeover -> zlib:deflateReset(Deflate);
-		takeover -> ok
-	end,
+	Len = byte_size(Deflated) - 4,
+	case Deflated of
+		<< Body:Len/binary, 0:8, 0:8, 255:8, 255:8 >> -> Body;
+		_ -> Deflated
+	end;
+deflate_frame(Payload, #{deflate_window_bits := DeflateWindowBits}, no_takeover) ->
+	Deflate = zlib:open(),
+	DeflateWindowBits2 = case DeflateWindowBits of
+							 8 -> 9;
+							 _ -> DeflateWindowBits
+						 end,
+	ok = zlib:deflateInit(Deflate, best_compression, deflated, -DeflateWindowBits2, 8, default),
+	Deflated = iolist_to_binary(zlib:deflate(Deflate, Payload, sync)),
+	_ = zlib:deflate(Deflate, [], finish),
+	ok = zlib:deflateEnd(Deflate),
+	zlib:close(Deflate),
 	Len = byte_size(Deflated) - 4,
 	case Deflated of
 		<< Body:Len/binary, 0:8, 0:8, 255:8, 255:8 >> -> Body;

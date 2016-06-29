@@ -79,8 +79,8 @@ negotiate_permessage_deflate(Params, Extensions, Opts) ->
 		Params2 when length(Params) =/= length(Params2) ->
 			ignore;
 		Params2 ->
-			CTO = maps:get(client_takeover, Opts, takeover),
-			STO = maps:get(server_takeover, Opts, takeover),
+			CTO = maps:get(client_takeover, Opts, negotiable),
+			STO = maps:get(server_takeover, Opts, negotiable),
 			CB = maps:get(client_max_window, Opts, 15),
 			SB = maps:get(server_max_window, Opts, 15),
 			Threshold = maps:get(compression_threshold, Opts, 0),

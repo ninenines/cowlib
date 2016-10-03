@@ -5,8 +5,7 @@ deps
 doc/man3
 doc/man7
 doc/markdown
-ebin/*.beam
-ebin/test
+ebin
 examples/*/ebin
 logs
 relx

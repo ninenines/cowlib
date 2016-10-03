@@ -5,7 +5,7 @@ PROJECT_DESCRIPTION = Support library for manipulating Web protocols.
 PROJECT_VERSION = 1.3.0
 
 #ERLC_OPTS += +bin_opt_info
-OTP_DEPS = crypto
+LOCAL_DEPS = crypto
 DIALYZER_OPTS = -Werror_handling -Wunmatched_returns
 
 CI_OTP ?= OTP-19.1.1 OTP-19.0.7 OTP-18.3.4.4 OTP-18.2.4.1 OTP-18.1.5 OTP-18.0.3

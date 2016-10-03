@@ -1,4 +1,4 @@
-%% Copyright (c) 2013-2015, Loïc Hoguin <essen@ninenines.eu>
+%% Copyright (c) 2013-2016, Loïc Hoguin <essen@ninenines.eu>
 %%
 %% Permission to use, copy, modify, and/or distribute this software for any
 %% purpose with or without fee is hereby granted, provided that the above
@@ -444,6 +444,7 @@ all_ext(<<"m2v">>) -> {<<"video">>, <<"mpeg">>, []};
 all_ext(<<"m3a">>) -> {<<"audio">>, <<"mpeg">>, []};
 all_ext(<<"m3u8">>) -> {<<"application">>, <<"vnd.apple.mpegurl">>, []};
 all_ext(<<"m3u">>) -> {<<"audio">>, <<"x-mpegurl">>, []};
+all_ext(<<"m4a">>) -> {<<"audio">>, <<"mp4">>, []};
 all_ext(<<"m4u">>) -> {<<"video">>, <<"vnd.mpegurl">>, []};
 all_ext(<<"m4v">>) -> {<<"video">>, <<"x-m4v">>, []};
 all_ext(<<"ma">>) -> {<<"application">>, <<"mathematica">>, []};

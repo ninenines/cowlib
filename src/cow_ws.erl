@@ -149,6 +149,16 @@ init_permessage_deflate(InflateWindowBits, DeflateWindowBits, Opts) ->
 		-DeflateWindowBits2,
 		maps:get(mem_level, Opts, 8),
 		maps:get(strategy, Opts, default)),
+	%% Set the owner pid of the zlib contexts if requested.
+	_ = case Opts of
+		#{owner := Pid} ->
+			true = erlang:port_connect(Inflate, Pid),
+			true = unlink(Inflate),
+			true = erlang:port_connect(Deflate, Pid),
+			unlink(Deflate);
+		_ ->
+			true
+	end,
 	{Inflate, Deflate}.
 
 %% @doc Negotiate the x-webkit-deflate-frame extension.

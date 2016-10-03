@@ -16,7 +16,7 @@
 
 ERLANG_MK_FILENAME := $(realpath $(lastword $(MAKEFILE_LIST)))
 
-ERLANG_MK_VERSION = 2.0.0-pre.2-140-gc313f4d
+ERLANG_MK_VERSION = 2.0.0-pre.2-141-g8fc7cf4
 
 # Core configuration.
 
@@ -5963,11 +5963,12 @@ ci_verbose = $(ci_verbose_$(V))
 
 define ci_target
 ci-$(1): $(CI_INSTALL_DIR)/$(1)
+	$(verbose) $(MAKE) --no-print-directory clean;
 	$(ci_verbose) \
 		PATH="$(CI_INSTALL_DIR)/$(1)/bin:$(PATH)" \
 		CI_OTP_RELEASE="$(1)" \
 		CT_OPTS="-label $(1)" \
-		$(MAKE) clean ci-setup tests
+		$(MAKE) ci-setup tests
 endef
 
 $(foreach otp,$(CI_OTP),$(eval $(call ci_target,$(otp))))

@@ -32,7 +32,7 @@
 -record(state, {
 	size = 0 :: non_neg_integer(),
 	max_size = 4096 :: non_neg_integer(),
-	dyn_table = [] :: queue:queue({binary(), binary()})
+	dyn_table = [] :: [{pos_integer(), {binary(), binary()}}]
 }).
 
 -opaque state() :: #state{}.
@@ -548,15 +548,15 @@ resp_decode_test() ->
 
 %% Encoding.
 
--spec encode(cow_http:headers()) -> iodata().
+-spec encode(cow_http:headers()) -> {iodata(), state()}.
 encode(Headers) ->
 	encode(Headers, init(), #{}, []).
 
--spec encode(cow_http:headers(), State) -> iodata() when State::state().
+-spec encode(cow_http:headers(), State) -> {iodata(), State} when State::state().
 encode(Headers, State) ->
 	encode(Headers, State, #{}, []).
 
--spec encode(cow_http:headers(), State, opts()) -> iodata() when State::state().
+-spec encode(cow_http:headers(), State, opts()) -> {iodata(), State} when State::state().
 encode(Headers, State, Opts) ->
 	encode(Headers, State, Opts, []).
 

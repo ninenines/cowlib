@@ -5,6 +5,11 @@ PROJECT_DESCRIPTION = Support library for manipulating Web protocols.
 PROJECT_VERSION = 1.3.0
 
 #ERLC_OPTS += +bin_opt_info
+ifdef HIPE
+	ERLC_OPTS += -smp +native
+	TEST_ERLC_OPTS += -smp +native
+endif
+
 LOCAL_DEPS = crypto
 DIALYZER_OPTS = -Werror_handling -Wunmatched_returns
 

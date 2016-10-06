@@ -218,7 +218,7 @@ parse(<< 4:24, 8:8, _:9, StreamID:31, _:1, 0:31, _/bits >>) ->
 	{stream_error, StreamID, protocol_error, 'WINDOW_UPDATE frames MUST have a non-zero increment. (RFC7540 6.9)'};
 parse(<< 4:24, 8:8, _:9, StreamID:31, _:1, Increment:31, Rest/bits >>) ->
 	{ok, {window_update, StreamID, Increment}, Rest};
-parse(<< _:24, 8:8, _/bits >>) ->
+parse(<< Len:24, 8:8, _/bits >>) when Len =/= 4->
 	{connection_error, frame_size_error, 'WINDOW_UPDATE frames MUST be 4 bytes wide. (RFC7540 6.9)'};
 %%
 %% CONTINUATION frames.
@@ -241,6 +241,12 @@ parse_ping_test_() ->
 	IncompleteCases = [ ?_assertEqual(more, parse(binary:part(Ping, 0, I))) || I <- lists:seq(1,size(Ping)-1)],
 	[?_assertEqual({ok,{ping, 11},<<>>}, parse(Ping)) | IncompleteCases].
 
+parse_windows_update_test_() ->
+	Increment = 200,
+	WindowUpdate = << 4:24, 8:8, 0:9, 0:31, 0:1, Increment:31>>,
+	IncompleteCases = [ ?_assertEqual(more, parse(binary:part(WindowUpdate, 0, I))) || 
+		I <- lists:seq(1,size(WindowUpdate)-1)],
+	[?_assertEqual({ok,{window_update, Increment},<<>>}, parse(WindowUpdate)) | IncompleteCases].
 -endif.
 
 parse_fin(0) -> nofin;

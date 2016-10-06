@@ -196,7 +196,7 @@ parse(<< 8:24, 6:8, _:7, 0:1, _:1, 0:31, Opaque:64, Rest/bits >>) ->
 	{ok, {ping, Opaque}, Rest};
 parse(<< 8:24, 6:8, _:104, _/bits >>) ->
 	{connection_error, protocol_error, 'PING frames MUST NOT be associated with a stream. (RFC7540 6.7)'};
-parse(<< _:24, 6:8, _/bits >>) ->
+parse(<< Len:24, 6:8, _/bits >>) when Len =/= 8 ->
 	{connection_error, frame_size_error, 'PING frames MUST be 8 bytes wide. (RFC7540 6.7)'};
 %%
 %% GOAWAY frames.
@@ -232,6 +232,16 @@ parse(<< Len:24, 9:8, _:5, FlagEndHeaders:1, _:3, StreamID:31, HeaderBlockFragme
 %%
 parse(_) ->
 	more.
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+parse_ping_test_() ->
+	Ping = ping(11), %% test check we got that opaque value back
+	IncompleteCases = [ ?_assertEqual(more, parse(binary:part(Ping, 0, I))) || I <- lists:seq(1,size(Ping)-1)],
+	[?_assertEqual({ok,{ping, 11},<<>>}, parse(Ping)) | IncompleteCases].
+
+-endif.
 
 parse_fin(0) -> nofin;
 parse_fin(1) -> fin.

@@ -201,6 +201,12 @@ horse_http_date_asctime() ->
 	).
 -endif.
 
+%% @doc Return the date formatted according to RFC1123.
+
+-spec rfc1123(calendar:datetime()) -> binary().
+rfc1123(DateTime) ->
+	rfc7231(DateTime).
+
 %% @doc Return the date formatted according to RFC2109.
 
 -spec rfc2109(calendar:datetime()) -> binary().
@@ -237,12 +243,6 @@ horse_rfc2109_12340506_070809() ->
 		rfc2109({{1234, 5, 6}, {7, 8, 9}})
 	).
 -endif.
-
-%% @doc Return the date formatted according to RFC1123.
-
--spec rfc1123(calendar:datetime()) -> binary().
-rfc1123(DateTime) ->
-	rfc7231(DateTime).
 
 %% @doc Return the date formatted according to RFC7231.
 

@@ -16,7 +16,7 @@
 
 ERLANG_MK_FILENAME := $(realpath $(lastword $(MAKEFILE_LIST)))
 
-ERLANG_MK_VERSION = 2016.11.03-1-g07bb14c
+ERLANG_MK_VERSION = 2016.11.03-2-gf7e7898
 
 # Make 3.81 and 3.82 are deprecated.
 
@@ -6051,7 +6051,7 @@ ci_verbose = $(ci_verbose_$(V))
 
 define ci_target
 ci-$1: $(CI_INSTALL_DIR)/$2
-	$(verbose) $(MAKE) --no-print-directory clean;
+	$(verbose) $(MAKE) --no-print-directory clean
 	$(ci_verbose) \
 		PATH="$(CI_INSTALL_DIR)/$2/bin:$(PATH)" \
 		CI_OTP_RELEASE="$1" \
@@ -6060,7 +6060,7 @@ ci-$1: $(CI_INSTALL_DIR)/$2
 		$(MAKE) ci-setup tests
 endef
 
-$(foreach otp,$(CI_OTP),$(eval $(call ci_target,$(otp),$(otp)otp)))
+$(foreach otp,$(CI_OTP),$(eval $(call ci_target,$(otp),$(otp),otp)))
 $(foreach otp,$(CI_HIPE),$(eval $(call ci_target,$(otp)-native,$(otp)-native,native)))
 $(foreach otp,$(CI_HIPE_LLVM),$(eval $(call ci_target,$(otp)-native-llvm,$(otp)-native,native-llvm)))
 

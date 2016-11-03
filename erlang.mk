@@ -16,7 +16,7 @@
 
 ERLANG_MK_FILENAME := $(realpath $(lastword $(MAKEFILE_LIST)))
 
-ERLANG_MK_VERSION = 2016.10.21-43-g4f5d8d7-dirty
+ERLANG_MK_VERSION = 2016.11.03-1-g07bb14c
 
 # Make 3.81 and 3.82 are deprecated.
 
@@ -6011,13 +6011,17 @@ endif
 
 CI_OTP ?=
 CI_HIPE ?=
+CI_HIPE_LLVM ?=
 
 ifeq ($(CI_VM),native)
 ERLC_OPTS += +native
 TEST_ERLC_OPTS += +native
+else ifeq ($(CI_VM),native-llvm)
+ERLC_OPTS += +native +'{hipe, [to_llvm]}'
+TEST_ERLC_OPTS += +native +'{hipe, [to_llvm]}'
 endif
 
-ifeq ($(strip $(CI_OTP) $(CI_HIPE)),)
+ifeq ($(strip $(CI_OTP) $(CI_HIPE) $(CI_HIPE_LLVM)),)
 ci::
 else
 
@@ -6036,7 +6040,7 @@ OTP_GIT ?= https://github.com/erlang/otp
 
 CI_INSTALL_DIR ?= $(HOME)/erlang
 
-ci:: $(addprefix ci-,$(CI_OTP) $(addsuffix -native,$(CI_HIPE)))
+ci:: $(addprefix ci-,$(CI_OTP) $(addsuffix -native,$(CI_HIPE)) $(addsuffix -native-llvm,$(CI_HIPE_LLVM)))
 
 ci-prepare: $(addprefix $(CI_INSTALL_DIR)/,$(CI_OTP) $(addsuffix -native,$(CI_HIPE)))
 
@@ -6046,18 +6050,19 @@ ci_verbose_0 = @echo " CI    " $(1);
 ci_verbose = $(ci_verbose_$(V))
 
 define ci_target
-ci-$(1): $(CI_INSTALL_DIR)/$(1)
+ci-$1: $(CI_INSTALL_DIR)/$2
 	$(verbose) $(MAKE) --no-print-directory clean;
 	$(ci_verbose) \
-		PATH="$(CI_INSTALL_DIR)/$(1)/bin:$(PATH)" \
-		CI_OTP_RELEASE="$(1)" \
-		CT_OPTS="-label $(1)" \
-		CI_VM="$(2)" \
+		PATH="$(CI_INSTALL_DIR)/$2/bin:$(PATH)" \
+		CI_OTP_RELEASE="$1" \
+		CT_OPTS="-label $1" \
+		CI_VM="$3" \
 		$(MAKE) ci-setup tests
 endef
 
-$(foreach otp,$(CI_OTP),$(eval $(call ci_target,$(otp),otp)))
-$(foreach otp,$(CI_HIPE),$(eval $(call ci_target,$(otp)-native,native)))
+$(foreach otp,$(CI_OTP),$(eval $(call ci_target,$(otp),$(otp)otp)))
+$(foreach otp,$(CI_HIPE),$(eval $(call ci_target,$(otp)-native,$(otp)-native,native)))
+$(foreach otp,$(CI_HIPE_LLVM),$(eval $(call ci_target,$(otp)-native-llvm,$(otp)-native,native-llvm)))
 
 define ci_otp_target
 ifeq ($(wildcard $(CI_INSTALL_DIR)/$(1)),)
@@ -6078,7 +6083,7 @@ $(CI_INSTALL_DIR)/$1-native: $(KERL)
 endif
 endef
 
-$(foreach otp,$(CI_HIPE),$(eval $(call ci_hipe_target,$(otp))))
+$(foreach otp,$(sort $(CI_HIPE) $(CI_HIPE_LLVM)),$(eval $(call ci_hipe_target,$(otp))))
 
 $(KERL):
 	$(verbose) mkdir -p $(ERLANG_MK_TMP)

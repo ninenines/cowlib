@@ -15,7 +15,7 @@ DIALYZER_OPTS = -Werror_handling -Wunmatched_returns
 
 CI_OTP ?= OTP-18.0.3 OTP-18.1.5 OTP-18.2.4.1 OTP-18.3.4.4 OTP-19.0.7 OTP-19.1.5
 CI_HIPE ?= OTP-19.1.5
-CI_HIPE_LLVM ?= $(CI_HIPE)
+CI_ERLLVM ?= $(CI_HIPE)
 
 TEST_ERLC_OPTS += +'{parse_transform, eunit_autoexport}' +'{parse_transform, horse_autoexport}'
 TEST_DEPS = horse triq
@@ -54,6 +54,8 @@ gen:
 ifeq ($(MAKECMDGOALS),perfs)
 .NOTPARALLEL:
 endif
+
+ci-extra:: perfs
 
 perfs: test-build
 	$(gen_verbose) erl -noshell -pa ebin deps/horse/ebin \

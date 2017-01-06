@@ -2,7 +2,7 @@
 
 PROJECT = cowlib
 PROJECT_DESCRIPTION = Support library for manipulating Web protocols.
-PROJECT_VERSION = 1.3.0
+PROJECT_VERSION = 2.0.0-pre.1
 
 #ERLC_OPTS += +bin_opt_info
 ifdef HIPE
@@ -13,8 +13,8 @@ endif
 LOCAL_DEPS = crypto
 DIALYZER_OPTS = -Werror_handling -Wunmatched_returns
 
-CI_OTP ?= OTP-18.0.3 OTP-18.1.5 OTP-18.2.4.1 OTP-18.3.4.4 OTP-19.0.7 OTP-19.1.5
-CI_HIPE ?= OTP-19.1.5
+CI_OTP ?= OTP-18.0.3 OTP-18.1.5 OTP-18.2.4.1 OTP-18.3.4.4 OTP-19.0.7 OTP-19.1.6 OTP-19.2
+CI_HIPE ?= $(lastword $(CI_OTP))
 CI_ERLLVM ?= $(CI_HIPE)
 
 TEST_ERLC_OPTS += +'{parse_transform, eunit_autoexport}' +'{parse_transform, horse_autoexport}'

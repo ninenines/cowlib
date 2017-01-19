@@ -196,7 +196,7 @@ parse(<< 8:24, 6:8, _:7, 0:1, _:1, 0:31, Opaque:64, Rest/bits >>) ->
 	{ok, {ping, Opaque}, Rest};
 parse(<< 8:24, 6:8, _:104, _/bits >>) ->
 	{connection_error, protocol_error, 'PING frames MUST NOT be associated with a stream. (RFC7540 6.7)'};
-parse(<< _:24, 6:8, _/bits >>) ->
+parse(<< Len:24, 6:8, _/bits >>) when Len =/= 8 ->
 	{connection_error, frame_size_error, 'PING frames MUST be 8 bytes wide. (RFC7540 6.7)'};
 %%
 %% GOAWAY frames.
@@ -218,7 +218,7 @@ parse(<< 4:24, 8:8, _:9, StreamID:31, _:1, 0:31, _/bits >>) ->
 	{stream_error, StreamID, protocol_error, 'WINDOW_UPDATE frames MUST have a non-zero increment. (RFC7540 6.9)'};
 parse(<< 4:24, 8:8, _:9, StreamID:31, _:1, Increment:31, Rest/bits >>) ->
 	{ok, {window_update, StreamID, Increment}, Rest};
-parse(<< _:24, 8:8, _/bits >>) ->
+parse(<< Len:24, 8:8, _/bits >>) when Len =/= 4->
 	{connection_error, frame_size_error, 'WINDOW_UPDATE frames MUST be 4 bytes wide. (RFC7540 6.9)'};
 %%
 %% CONTINUATION frames.
@@ -232,6 +232,22 @@ parse(<< Len:24, 9:8, _:5, FlagEndHeaders:1, _:3, StreamID:31, HeaderBlockFragme
 %%
 parse(_) ->
 	more.
+
+-ifdef(TEST).
+parse_ping_test() ->
+	Ping = ping(1234567890),
+	_ = [more = parse(binary:part(Ping, 0, I)) || I <- lists:seq(1, byte_size(Ping) - 1)],
+	{ok, {ping, 1234567890}, <<>>} = parse(Ping),
+	{ok, {ping, 1234567890}, << 42 >>} = parse(<< Ping/binary, 42 >>),
+	ok.
+
+parse_windows_update_test() ->
+	WindowUpdate = << 4:24, 8:8, 0:9, 0:31, 0:1, 12345:31 >>,
+	_ = [more = parse(binary:part(WindowUpdate, 0, I)) || I <- lists:seq(1, byte_size(WindowUpdate) - 1)],
+	{ok, {window_update, 12345}, <<>>} = parse(WindowUpdate),
+	{ok, {window_update, 12345}, << 42 >>} = parse(<< WindowUpdate/binary, 42 >>),
+	ok.
+-endif.
 
 parse_fin(0) -> nofin;
 parse_fin(1) -> fin.

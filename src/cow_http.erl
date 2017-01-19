@@ -28,6 +28,7 @@
 -type version() :: 'HTTP/1.0' | 'HTTP/1.1'.
 -type status() :: 100..999.
 -type headers() :: [{binary(), iodata()}].
+-export_type([headers/0]).
 
 -include("cow_inline.hrl").
 

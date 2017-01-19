@@ -32,7 +32,7 @@
 -record(state, {
 	size = 0 :: non_neg_integer(),
 	max_size = 4096 :: non_neg_integer(),
-	dyn_table = [] :: queue:queue({binary(), binary()})
+	dyn_table = [] :: [{pos_integer(), {binary(), binary()}}]
 }).
 
 -opaque state() :: #state{}.
@@ -523,7 +523,7 @@ resp_decode_test() ->
 		{<<"date">>, <<"Mon, 21 Oct 2013 20:13:21 GMT">>},
 		{<<"location">>, <<"https://www.example.com">>}
 	],
-	#state{size=180, dyn_table=[
+	#state{size=222, dyn_table=[
 		{42,{<<":status">>, <<"307">>}},
 		{63,{<<"location">>, <<"https://www.example.com">>}},
 		{65,{<<"date">>, <<"Mon, 21 Oct 2013 20:13:21 GMT">>}},
@@ -539,7 +539,7 @@ resp_decode_test() ->
 		{<<"content-encoding">>, <<"gzip">>},
 		{<<"set-cookie">>, <<"foo=ASDJKHQKBZXOQWEOPIUAXQWEOIU; max-age=3600; version=1">>}
 	],
-	#state{size=117, dyn_table=[
+	#state{size=215, dyn_table=[
 		{98,{<<"set-cookie">>, <<"foo=ASDJKHQKBZXOQWEOPIUAXQWEOIU; max-age=3600; version=1">>}},
 		{52,{<<"content-encoding">>, <<"gzip">>}},
 		{65,{<<"date">>, <<"Mon, 21 Oct 2013 20:13:22 GMT">>}}]} = State3,
@@ -548,15 +548,15 @@ resp_decode_test() ->
 
 %% Encoding.
 
--spec encode(cow_http:headers()) -> iodata().
+-spec encode(cow_http:headers()) -> {iodata(), state()}.
 encode(Headers) ->
 	encode(Headers, init(), #{}, []).
 
--spec encode(cow_http:headers(), State) -> iodata() when State::state().
+-spec encode(cow_http:headers(), State) -> {iodata(), State} when State::state().
 encode(Headers, State) ->
 	encode(Headers, State, #{}, []).
 
--spec encode(cow_http:headers(), State, opts()) -> iodata() when State::state().
+-spec encode(cow_http:headers(), State, opts()) -> {iodata(), State} when State::state().
 encode(Headers, State, Opts) ->
 	encode(Headers, State, Opts, []).
 
@@ -953,7 +953,7 @@ resp_encode_test() ->
 	<< 16#4803333037c1c0bf:64 >> = iolist_to_binary(Raw2),
 	{Huff2, State2} = encode(Headers2, State1),
 	<< 16#4883640effc1c0bf:64 >> = iolist_to_binary(Huff2),
-	#state{size=180, dyn_table=[
+	#state{size=222, dyn_table=[
 		{42,{<<":status">>, <<"307">>}},
 		{63,{<<"location">>, <<"https://www.example.com">>}},
 		{65,{<<"date">>, <<"Mon, 21 Oct 2013 20:13:21 GMT">>}},
@@ -971,7 +971,7 @@ resp_encode_test() ->
 	<< 16#88c1611d4d6f6e2c203231204f637420323031332032303a31333a323220474d54c05a04677a69707738666f6f3d4153444a4b48514b425a584f5157454f50495541585157454f49553b206d61782d6167653d333630303b2076657273696f6e3d31:784 >> = iolist_to_binary(Raw3),
 	{Huff3, State3} = encode(Headers3, State2),
 	<< 16#88c16196d07abe941054d444a8200595040b8166e084a62d1bffc05a839bd9ab77ad94e7821dd7f2e6c7b335dfdfcd5b3960d5af27087f3672c1ab270fb5291f9587316065c003ed4ee5b1063d5007:632 >> = iolist_to_binary(Huff3),
-	#state{size=117, dyn_table=[
+	#state{size=215, dyn_table=[
 		{98,{<<"set-cookie">>, <<"foo=ASDJKHQKBZXOQWEOPIUAXQWEOIU; max-age=3600; version=1">>}},
 		{52,{<<"content-encoding">>, <<"gzip">>}},
 		{65,{<<"date">>, <<"Mon, 21 Oct 2013 20:13:22 GMT">>}}]} = State3,
@@ -1264,14 +1264,13 @@ table_get_name(Index, #state{dyn_table=DynamicTable}) ->
 
 table_insert(Entry = {Name, Value}, State=#state{size=Size, max_size=MaxSize, dyn_table=DynamicTable}) ->
 	EntrySize = byte_size(Name) + byte_size(Value) + 32,
-	Size2 = Size + EntrySize,
-	{DynamicTable2, Size3} = if
+	{DynamicTable2, Size2} = if
 		Size + EntrySize > MaxSize ->
 			table_resize(DynamicTable, MaxSize - EntrySize, 0, []);
 		true ->
-			{DynamicTable, Size2}
+			{DynamicTable, Size}
 	end,
-	State#state{size=Size3, dyn_table=[{EntrySize, Entry}|DynamicTable2]}.
+	State#state{size=Size2 + EntrySize, dyn_table=[{EntrySize, Entry}|DynamicTable2]}.
 
 table_resize([], _, Size, Acc) ->
 	{lists:reverse(Acc), Size};

@@ -174,7 +174,7 @@ parse_max_window_bits(_) -> error.
 init_permessage_deflate(InflateWindowBits, DeflateWindowBits, Opts) ->
 	Inflate = zlib:open(),
 	ok = zlib:inflateInit(Inflate, -InflateWindowBits),
-	ServerTakeOver = maps:get(server_takeover, Opts, takeover),
+  ServerTakeOver = maps:get(server_takeover, Opts, takeover),
 	Deflate = case ServerTakeOver of
 				  takeover ->
 					  DeflateStream = zlib:open(),
@@ -193,6 +193,16 @@ init_permessage_deflate(InflateWindowBits, DeflateWindowBits, Opts) ->
 				  no_takeover ->
 					  undefined
 			  end,
+  %% Set the owner pid of the zlib contexts if requested.
+	_ = case Opts of
+		#{owner := Pid} ->
+			true = erlang:port_connect(Inflate, Pid),
+			true = unlink(Inflate),
+			true = erlang:port_connect(Deflate, Pid),
+			unlink(Deflate);
+		_ ->
+			true
+	end,
 	{Inflate, Deflate}.
 
 %% @doc Negotiate the x-webkit-deflate-frame extension.

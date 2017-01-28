@@ -29,6 +29,11 @@
 -export([push_promise/3]).
 -export([ping/1]).
 -export([ping_ack/1]).
+%% Splitting.
+-export([split_data/3]).
+-export([split_data/4]).
+%% Framing.
+-export([frame_data/3]).
 
 -type streamid() :: pos_integer().
 -type fin() :: fin | nofin.
@@ -238,6 +243,29 @@ parse(_) ->
 	{more, 9}.
 
 -ifdef(TEST).
+parse_data_test() ->
+	Data = iolist_to_binary(data(1, fin, <<>>)),
+	_ = [{more, _} = parse(binary:part(Data, 0, I)) || I <- lists:seq(1, byte_size(Data) - 1)],
+	{ok, {data, 1, fin, <<>>}, <<>>} = parse(Data),
+	{ok, {data, 1, fin, <<>>}, << 42 >>} = parse(<< Data/binary, 42 >>),
+	Data2 = iolist_to_binary(split_data(2, #{
+		end_stream => 1,
+		padded => 1
+	}, #{
+		data => <<"abc">>,
+		pad_length => 2
+	}, 3)),
+	{ok, {data, 2, nofin, <<"a">>}, Rest0} = parse(Data2),
+	{ok, {data, 2, nofin, <<"b">>}, Rest1} = parse(Rest0),
+	{ok, {data, 2, fin, <<"c">>}, <<>>} = parse(Rest1),
+	Data3 = iolist_to_binary(frame_data(0, #{}, #{})),
+	{connection_error, protocol_error, 'DATA frames MUST be associated with a stream. (RFC7540 6.1)'} = parse(Data3),
+	Data4 = << 0:24, 0:8, 0:4, 1:1, 0:4, 2:31, 1:8, 0:8 >>,
+	{connection_error, protocol_error, 'Length of padding MUST be less than length of payload. (RFC7540 6.1)'} = parse(Data4),
+	Data5 = << 2:24, 0:8, 0:4, 1:1, 0:4, 2:31, 1:8, 1:8 >>,
+	{connection_error, protocol_error, 'Padding octets MUST be set to zero. (RFC7540 6.1)'} = parse(Data5),
+	ok.
+
 parse_ping_test() ->
 	Ping = ping(1234567890),
 	_ = [{more, _} = parse(binary:part(Ping, 0, I)) || I <- lists:seq(1, byte_size(Ping) - 1)],
@@ -318,9 +346,12 @@ parse_settings_payload(<< _:48, Rest/bits >>, Len, Settings) ->
 
 %% Building.
 
-%% @todo Check size and create multiple frames if needed.
 data(StreamID, IsFin, Data) ->
-	[data_header(StreamID, IsFin, iolist_size(Data)), Data].
+	split_data(StreamID, #{
+		end_stream => flag_fin(IsFin)
+	}, #{
+		data => Data
+	}).
 
 data_header(StreamID, IsFin, Len) ->
 	FlagEndStream = flag_fin(IsFin),
@@ -359,6 +390,60 @@ ping(Opaque) ->
 
 ping_ack(Opaque) ->
 	<< 8:24, 6:8, 0:7, 1:1, 0:32, Opaque:64 >>.
+
+%% Splitting.
+
+split_data(StreamID, Flags, Fields) ->
+	split_data(StreamID, Flags, Fields, 16#4000).
+
+split_data(StreamID, Flags, Fields, FrameSize) when FrameSize > 0 ->
+	FlagPadded = maps:get(padded, Flags, 0),
+	PadLength = maps:get(pad_length, Fields, 0) band 16#ff,
+	Data = maps:get(data, Fields, []),
+	LenPadded = case FlagPadded of 1 -> 1 + PadLength; _ -> 0 end,
+	Len = iolist_size(Data) + LenPadded,
+	if
+		FrameSize < Len ->
+			ContFlags = Flags#{ end_stream => 0 },
+			ContFields = Fields#{ data => [] },
+			NewFrameSize = if
+				FrameSize =< LenPadded ->
+					1;
+				true ->
+					FrameSize - LenPadded
+			end,
+			split_data(StreamID, iolist_to_binary(Data), ContFlags, ContFields, Flags, NewFrameSize, []);
+		true ->
+			frame_data(StreamID, Flags, Fields)
+	end.
+
+split_data(StreamID, Data, ContFlags, ContFields, Flags, FrameSize, Acc) when FrameSize < byte_size(Data) ->
+	<< Chunk:FrameSize/binary, Rest/binary >> = Data,
+	Frame = frame_data(StreamID, ContFlags, ContFields#{ data => Chunk }),
+	split_data(StreamID, Rest, ContFlags, ContFields, Flags, FrameSize, [Acc, Frame]);
+split_data(StreamID, Data, _ContFlags, Fields, Flags, _FrameSize, Acc) ->
+	Frame = frame_data(StreamID, Flags, Fields#{ data => Data }),
+	[Acc, Frame].
+
+%% Framing.
+
+frame_data(StreamID, Flags, Fields) ->
+	FlagEndStream = maps:get(end_stream, Flags, 0),
+	FlagPadded = maps:get(padded, Flags, 0),
+	PadLength = maps:get(pad_length, Fields, 0) band 16#ff,
+	Data = maps:get(data, Fields, []),
+	LenPadded = case FlagPadded of 1 -> 1 + PadLength; _ -> 0 end,
+	Len = iolist_size(Data) + LenPadded,
+	[
+		<<
+			Len:24, 0:8,
+			0:4, FlagPadded:1, 0:2, FlagEndStream:1,
+			0:1, StreamID:31,
+			PadLength:(FlagPadded * 8)
+		>>,
+		Data,
+		<< 0:(FlagPadded * PadLength * 8) >>
+	].
 
 flag_fin(nofin) -> 0;
 flag_fin(fin) -> 1.

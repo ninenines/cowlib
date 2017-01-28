@@ -25,6 +25,7 @@
 -export([headers/3]).
 -export([ping/1]).
 -export([ping_ack/1]).
+-export([priority/4]).
 -export([push_promise/3]).
 -export([rst_stream/2]).
 -export([settings/1]).
@@ -44,6 +45,7 @@
 -export([frame_data/3]).
 -export([frame_goaway/2]).
 -export([frame_headers/3]).
+-export([frame_priority/2]).
 -export([frame_push_promise/3]).
 -export([frame_settings/3]).
 
@@ -380,6 +382,19 @@ parse_ping_test() ->
 	{ok, {ping, 1234567890}, << 42 >>} = parse(<< Ping/binary, 42 >>),
 	ok.
 
+parse_priority_test() ->
+	Priority = iolist_to_binary(priority(3, exclusive, 1, 16)),
+	_ = [{more, _} = parse(binary:part(Priority, 0, I)) || I <- lists:seq(1, byte_size(Priority) - 1)],
+	{ok, {priority, 3, exclusive, 1, 16}, <<>>} = parse(Priority),
+	{ok, {priority, 3, exclusive, 1, 16}, << 42 >>} = parse(<< Priority/binary, 42 >>),
+	Priority2 = iolist_to_binary(priority(5, shared, 3, 256)),
+	{ok, {priority, 5, shared, 3, 256}, <<>>} = parse(Priority2),
+	Priority3 = iolist_to_binary(priority(0, exclusive, 0, 1)),
+	{connection_error, protocol_error, 'PRIORITY frames MUST be associated with a stream. (RFC7540 6.3)'} = parse(Priority3),
+	Priority4 = << 6:24, 2:8, 0:8, 0:1, 1:31, 0:48 >>,
+	{stream_error, 1, frame_size_error, 'PRIORITY frames MUST be 5 bytes wide. (RFC7540 6.3)', <<>>} = parse(Priority4),
+	ok.
+
 parse_push_promise_test() ->
 	%% No padding.
 	PushPromise = iolist_to_binary(push_promise(1, 3, <<>>)),
@@ -545,6 +560,13 @@ ping(Opaque) ->
 
 ping_ack(Opaque) ->
 	<< 8:24, 6:8, 0:7, 1:1, 0:32, Opaque:64 >>.
+
+priority(StreamID, Exclusive, StreamDependency, Weight) ->
+	frame_priority(StreamID, #{
+		exclusive => exclusive(Exclusive),
+		stream_dependency => StreamDependency,
+		weight => Weight
+	}).
 
 push_promise(StreamID, PromisedStreamID, HeaderBlockFragment) ->
 	split_push_promise(StreamID, #{
@@ -788,6 +810,18 @@ frame_headers(StreamID, Flags, Fields) ->
 		<< 0:(FlagPadded * PadLength * 8) >>
 	].
 
+frame_priority(StreamID, Fields) ->
+	Exclusive = maps:get(exclusive, Fields, 0),
+	StreamDependency = maps:get(stream_dependency, Fields, 0),
+	Weight = (maps:get(weight, Fields, 0) - 1) band 16#ff,
+	<<
+		5:24, 2:8,
+		0:8,
+		0:1, StreamID:31,
+		Exclusive:1, StreamDependency:31,
+		Weight:8
+	>>.
+
 frame_push_promise(StreamID, Flags, Fields) ->
 	FlagEndHeaders = maps:get(end_headers, Flags, 0),
 	FlagPadded = maps:get(padded, Flags, 0),
@@ -838,3 +872,6 @@ error_code(connect_error) -> 10;
 error_code(enhance_your_calm) -> 11;
 error_code(inadequate_security) -> 12;
 error_code(http_1_1_required) -> 13.
+
+exclusive(shared) -> 0;
+exclusive(exclusive) -> 1.

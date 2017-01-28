@@ -21,6 +21,7 @@
 %% Building.
 -export([data/3]).
 -export([data_header/3]).
+-export([goaway/3]).
 -export([headers/3]).
 -export([ping/1]).
 -export([ping_ack/1]).
@@ -41,6 +42,7 @@
 %% Framing.
 -export([frame_continuation/3]).
 -export([frame_data/3]).
+-export([frame_goaway/2]).
 -export([frame_headers/3]).
 -export([frame_push_promise/3]).
 -export([frame_settings/3]).
@@ -288,6 +290,33 @@ parse_data_test() ->
 	{connection_error, protocol_error, 'Padding octets MUST be set to zero. (RFC7540 6.1)'} = parse(Data5),
 	ok.
 
+parse_goaway_test() ->
+	Goaway = iolist_to_binary(goaway(1, no_error, <<"closing connection">>)),
+	_ = [{more, _} = parse(binary:part(Goaway, 0, I)) || I <- lists:seq(1, byte_size(Goaway) - 1)],
+	{ok, {goaway, 1, no_error, <<"closing connection">>}, <<>>} = parse(Goaway),
+	{ok, {goaway, 1, no_error, <<"closing connection">>}, << 42 >>} = parse(<< Goaway/binary, 42 >>),
+	ErrorCodes = [
+		no_error,
+		protocol_error,
+		internal_error,
+		flow_control_error,
+		settings_timeout,
+		stream_closed,
+		frame_size_error,
+		refused_stream,
+		cancel,
+		compression_error,
+		connect_error,
+		enhance_your_calm,
+		inadequate_security,
+		http_1_1_required
+	],
+	_ = [begin
+		{ok, {goaway, 2, ErrorCode, <<>>}, <<>>} = parse(iolist_to_binary(goaway(2, ErrorCode, <<>>)))
+	end || ErrorCode <- ErrorCodes],
+	Goaway2 = iolist_to_binary(frame_goaway(3, #{})),
+	{connection_error, protocol_error, 'GOAWAY frames MUST NOT be associated with a stream. (RFC7540 6.8)'} = parse(Goaway2),
+	ok.
 
 parse_headers_test() ->
 	%% No padding, no priority.
@@ -494,6 +523,14 @@ data(StreamID, IsFin, Data) ->
 data_header(StreamID, IsFin, Len) ->
 	FlagEndStream = flag_fin(IsFin),
 	<< Len:24, 0:15, FlagEndStream:1, 0:1, StreamID:31 >>.
+
+goaway(LastStreamID, Reason, AdditionalDebugData) ->
+	ErrorCode = error_code(Reason),
+	frame_goaway(0, #{
+		last_stream_id => LastStreamID,
+		error_code => ErrorCode,
+		additional_debug_data => AdditionalDebugData
+	}).
 
 headers(StreamID, IsFin, HeaderBlockFragment) ->
 	split_headers(StreamID, #{
@@ -706,6 +743,22 @@ frame_data(StreamID, Flags, Fields) ->
 		>>,
 		Data,
 		<< 0:(FlagPadded * PadLength * 8) >>
+	].
+
+frame_goaway(StreamID, Fields) ->
+	LastStreamID = maps:get(last_stream_id, Fields, 0),
+	ErrorCode = maps:get(error_code, Fields, 0),
+	AdditionalDebugData = maps:get(additional_debug_data, Fields, []),
+	Len = 8 + iolist_size(AdditionalDebugData),
+	[
+		<<
+			Len:24, 7:8,
+			0:8,
+			0:1, StreamID:31,
+			0:1, LastStreamID:31,
+			ErrorCode:32
+		>>,
+		AdditionalDebugData
 	].
 
 frame_headers(StreamID, Flags, Fields) ->

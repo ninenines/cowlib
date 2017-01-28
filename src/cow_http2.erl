@@ -30,10 +30,16 @@
 -export([ping/1]).
 -export([ping_ack/1]).
 %% Splitting.
+-export([split_continuation/3]).
+-export([split_continuation/4]).
 -export([split_data/3]).
 -export([split_data/4]).
+-export([split_headers/3]).
+-export([split_headers/4]).
 %% Framing.
+-export([frame_continuation/3]).
 -export([frame_data/3]).
+-export([frame_headers/3]).
 
 -type streamid() :: pos_integer().
 -type fin() :: fin | nofin.
@@ -243,6 +249,18 @@ parse(_) ->
 	{more, 9}.
 
 -ifdef(TEST).
+parse_continuation_test() ->
+	Continuation = iolist_to_binary(frame_continuation(1, #{ end_headers => 1 }, #{ header_block_fragment => <<>> })),
+	_ = [{more, _} = parse(binary:part(Continuation, 0, I)) || I <- lists:seq(1, byte_size(Continuation) - 1)],
+	{ok, {continuation, 1, head_fin, <<>>}, <<>>} = parse(Continuation),
+	{ok, {continuation, 1, head_fin, <<>>}, << 42 >>} = parse(<< Continuation/binary, 42 >>),
+	Continuation2 = iolist_to_binary(split_continuation(2, #{ end_headers => 1 }, #{ header_block_fragment => <<"abc">> }, 2)),
+	{ok, {continuation, 2, head_nofin, <<"ab">>}, Rest0} = parse(Continuation2),
+	{ok, {continuation, 2, head_fin, <<"c">>}, <<>>} = parse(Rest0),
+	Continuation3 = iolist_to_binary(frame_continuation(0, #{}, #{})),
+	{connection_error, protocol_error, 'CONTINUATION frames MUST be associated with a stream. (RFC7540 6.10)'} = parse(Continuation3),
+	ok.
+
 parse_data_test() ->
 	Data = iolist_to_binary(data(1, fin, <<>>)),
 	_ = [{more, _} = parse(binary:part(Data, 0, I)) || I <- lists:seq(1, byte_size(Data) - 1)],
@@ -264,6 +282,62 @@ parse_data_test() ->
 	{connection_error, protocol_error, 'Length of padding MUST be less than length of payload. (RFC7540 6.1)'} = parse(Data4),
 	Data5 = << 2:24, 0:8, 0:4, 1:1, 0:4, 2:31, 1:8, 1:8 >>,
 	{connection_error, protocol_error, 'Padding octets MUST be set to zero. (RFC7540 6.1)'} = parse(Data5),
+	ok.
+
+
+parse_headers_test() ->
+	%% No padding, no priority.
+	Headers = iolist_to_binary(headers(1, fin, <<>>)),
+	_ = [{more, _} = parse(binary:part(Headers, 0, I)) || I <- lists:seq(1, byte_size(Headers) - 1)],
+	{ok, {headers, 1, fin, head_fin, <<>>}, <<>>} = parse(Headers),
+	{ok, {headers, 1, fin, head_fin, <<>>}, << 42 >>} = parse(<< Headers/binary, 42 >>),
+	%% Padding, priority.
+	Headers2 = iolist_to_binary(split_headers(5, #{
+		end_stream => 0,
+		end_headers => 1,
+		padded => 1,
+		priority => 1
+	}, #{
+		pad_length => 2,
+		exclusive => 1,
+		stream_dependency => 3,
+		weight => 16,
+		header_block_fragment => <<"abc">>
+	}, 9)),
+	{ok, {headers, 5, nofin, head_nofin, exclusive, 3, 16, <<"a">>}, Rest0} = parse(Headers2),
+	{ok, {continuation, 5, head_fin, <<"bc">>}, <<>>} = parse(Rest0),
+	%% No padding, priority.
+	Headers3 = iolist_to_binary(split_headers(5, #{
+		end_stream => 1,
+		end_headers => 0,
+		padded => 0,
+		priority => 1
+	}, #{
+		exclusive => 0,
+		stream_dependency => 3,
+		weight => 1,
+		header_block_fragment => <<"abc">>
+	}, 6)),
+	{ok, {headers, 5, fin, head_nofin, shared, 3, 1, <<"a">>}, Rest1} = parse(Headers3),
+	{ok, {continuation, 5, head_nofin, <<"bc">>}, <<>>} = parse(Rest1),
+	%% Padding, no priority.
+	Headers4 = iolist_to_binary(split_headers(5, #{
+		end_stream => 0,
+		end_headers => 0,
+		padded => 1,
+		priority => 0
+	}, #{
+		pad_length => 2,
+		header_block_fragment => <<"abc">>
+	}, 4)),
+	{ok, {headers, 5, nofin, head_nofin, <<"a">>}, Rest2} = parse(Headers4),
+	{ok, {continuation, 5, head_nofin, <<"bc">>}, <<>>} = parse(Rest2),
+	Headers5 = iolist_to_binary(headers(0, fin, <<>>)),
+	{connection_error, protocol_error, 'HEADERS frames MUST be associated with a stream. (RFC7540 6.2)'} = parse(Headers5),
+	Headers6 = << 0:24, 1:8, 0:4, 1:1, 0:4, 2:31, 1:8, 0:8 >>,
+	{connection_error, protocol_error, 'Length of padding MUST be less than length of payload. (RFC7540 6.2)'} = parse(Headers6),
+	Headers7 = << 2:24, 1:8, 0:2, 1:1, 0:1, 1:1, 0:3, 0:1, 1:31, 1:8, 0:40, 0:8 >>,
+	{connection_error, protocol_error, 'Length of padding MUST be less than length of payload. (RFC7540 6.2)'} = parse(Headers7),
 	ok.
 
 parse_ping_test() ->
@@ -357,12 +431,13 @@ data_header(StreamID, IsFin, Len) ->
 	FlagEndStream = flag_fin(IsFin),
 	<< Len:24, 0:15, FlagEndStream:1, 0:1, StreamID:31 >>.
 
-%% @todo Check size of HeaderBlock and use CONTINUATION frames if needed.
-headers(StreamID, IsFin, HeaderBlock) ->
-	Len = iolist_size(HeaderBlock),
-	FlagEndStream = flag_fin(IsFin),
-	FlagEndHeaders = 1,
-	[<< Len:24, 1:8, 0:5, FlagEndHeaders:1, 0:1, FlagEndStream:1, 0:1, StreamID:31 >>, HeaderBlock].
+headers(StreamID, IsFin, HeaderBlockFragment) ->
+	split_headers(StreamID, #{
+		end_headers => 1,
+		end_stream => flag_fin(IsFin)
+	}, #{
+		header_block_fragment => HeaderBlockFragment
+	}).
 
 rst_stream(StreamID, Reason) ->
 	ErrorCode = error_code(Reason),
@@ -392,6 +467,29 @@ ping_ack(Opaque) ->
 	<< 8:24, 6:8, 0:7, 1:1, 0:32, Opaque:64 >>.
 
 %% Splitting.
+
+split_continuation(StreamID, Flags, Fields) ->
+	split_continuation(StreamID, Flags, Fields, 16#4000).
+
+split_continuation(StreamID, Flags, Fields, FrameSize) when FrameSize > 0 ->
+	HeaderBlockFragment = maps:get(header_block_fragment, Fields, []),
+	Len = iolist_size(HeaderBlockFragment),
+	if
+		FrameSize < Len ->
+			ContFlags = Flags#{ end_headers => 0 },
+			ContFields = Fields#{ header_block_fragment => [] },
+			split_continuation(StreamID, iolist_to_binary(HeaderBlockFragment), ContFlags, ContFields, Flags, FrameSize, []);
+		true ->
+			frame_continuation(StreamID, Flags, Fields)
+	end.
+
+split_continuation(StreamID, Block, ContFlags, ContFields, Flags, FrameSize, Acc) when FrameSize < byte_size(Block) ->
+	<< Chunk:FrameSize/binary, Rest/binary >> = Block,
+	Frame = frame_continuation(StreamID, ContFlags, ContFields#{ header_block_fragment => Chunk }),
+	split_continuation(StreamID, Rest, ContFlags, ContFields, Flags, FrameSize, [Acc, Frame]);
+split_continuation(StreamID, Block, _ContFlags, Fields, Flags, _FrameSize, Acc) ->
+	Frame = frame_continuation(StreamID, Flags, Fields#{ header_block_fragment => Block }),
+	[Acc, Frame].
 
 split_data(StreamID, Flags, Fields) ->
 	split_data(StreamID, Flags, Fields, 16#4000).
@@ -425,7 +523,44 @@ split_data(StreamID, Data, _ContFlags, Fields, Flags, _FrameSize, Acc) ->
 	Frame = frame_data(StreamID, Flags, Fields#{ data => Data }),
 	[Acc, Frame].
 
+split_headers(StreamID, Flags, Fields) ->
+	split_headers(StreamID, Flags, Fields, 16#4000).
+
+split_headers(StreamID, Flags, Fields, FrameSize) when FrameSize > 0 ->
+	FlagPadded = maps:get(padded, Flags, 0),
+	PadLength = maps:get(pad_length, Fields, 0) band 16#ff,
+	FlagPriority = maps:get(priority, Flags, 0),
+	LenPadded = case FlagPadded of 1 -> 1 + PadLength; _ -> 0 end,
+	LenPriority = case FlagPriority of 1 -> 5; _ -> 0 end,
+	HeaderBlockFragment = maps:get(header_block_fragment, Fields, []),
+	Len = iolist_size(HeaderBlockFragment) + LenPadded + LenPriority,
+	if
+		FrameSize < Len ->
+			HeadersSize = max(FrameSize - LenPadded - LenPriority, 0),
+			<< Chunk:HeadersSize/binary, Rest/binary >> = iolist_to_binary(HeaderBlockFragment),
+			ContFlags = Flags#{ end_headers => 0 },
+			ContFields = Fields#{ header_block_fragment => [] },
+			HeadersFields = Fields#{ header_block_fragment => Chunk },
+			Headers = frame_headers(StreamID, ContFlags, HeadersFields),
+			split_continuation(StreamID, Rest, ContFlags, ContFields, Flags, FrameSize, Headers);
+		true ->
+			frame_headers(StreamID, Flags, Fields)
+	end.
+
 %% Framing.
+
+frame_continuation(StreamID, Flags, Fields) ->
+	FlagEndHeaders = maps:get(end_headers, Flags, 0),
+	HeaderBlockFragment = maps:get(header_block_fragment, Fields, []),
+	Len = iolist_size(HeaderBlockFragment),
+	[
+		<<
+			Len:24, 9:8,
+			0:5, FlagEndHeaders:1, 0:2,
+			0:1, StreamID:31
+		>>,
+		HeaderBlockFragment
+	].
 
 frame_data(StreamID, Flags, Fields) ->
 	FlagEndStream = maps:get(end_stream, Flags, 0),
@@ -442,6 +577,33 @@ frame_data(StreamID, Flags, Fields) ->
 			PadLength:(FlagPadded * 8)
 		>>,
 		Data,
+		<< 0:(FlagPadded * PadLength * 8) >>
+	].
+
+frame_headers(StreamID, Flags, Fields) ->
+	FlagEndStream = maps:get(end_stream, Flags, 0),
+	FlagEndHeaders = maps:get(end_headers, Flags, 0),
+	FlagPadded = maps:get(padded, Flags, 0),
+	PadLength = maps:get(pad_length, Fields, 0) band 16#ff,
+	FlagPriority = maps:get(priority, Flags, 0),
+	Exclusive = maps:get(exclusive, Fields, 0),
+	StreamDependency = maps:get(stream_dependency, Fields, 0),
+	Weight = (maps:get(weight, Fields, 0) - 1) band 16#ff,
+	HeaderBlockFragment = maps:get(header_block_fragment, Fields, []),
+	LenPadded = case FlagPadded of 1 -> 1 + PadLength; _ -> 0 end,
+	LenPriority = case FlagPriority of 1 -> 5; _ -> 0 end,
+	Len = iolist_size(HeaderBlockFragment) + LenPadded + LenPriority,
+	[
+		<<
+			Len:24, 1:8,
+			0:2, FlagPriority:1, 0:1, FlagPadded:1, FlagEndHeaders:1, 0:1, FlagEndStream:1,
+			0:1, StreamID:31,
+			PadLength:(FlagPadded * 8),
+			Exclusive:(FlagPriority * 1),
+			StreamDependency:(FlagPriority * 31),
+			Weight:(FlagPriority * 8)
+		>>,
+		HeaderBlockFragment,
 		<< 0:(FlagPadded * PadLength * 8) >>
 	].
 

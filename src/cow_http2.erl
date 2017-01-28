@@ -36,10 +36,13 @@
 -export([split_data/4]).
 -export([split_headers/3]).
 -export([split_headers/4]).
+-export([split_push_promise/3]).
+-export([split_push_promise/4]).
 %% Framing.
 -export([frame_continuation/3]).
 -export([frame_data/3]).
 -export([frame_headers/3]).
+-export([frame_push_promise/3]).
 
 -type streamid() :: pos_integer().
 -type fin() :: fin | nofin.
@@ -347,6 +350,29 @@ parse_ping_test() ->
 	{ok, {ping, 1234567890}, << 42 >>} = parse(<< Ping/binary, 42 >>),
 	ok.
 
+parse_push_promise_test() ->
+	%% No padding.
+	PushPromise = iolist_to_binary(push_promise(1, 3, <<>>)),
+	_ = [{more, _} = parse(binary:part(PushPromise, 0, I)) || I <- lists:seq(1, byte_size(PushPromise) - 1)],
+	{ok, {push_promise, 1, head_fin, 3, <<>>}, <<>>} = parse(PushPromise),
+	{ok, {push_promise, 1, head_fin, 3, <<>>}, << 42 >>} = parse(<< PushPromise/binary, 42 >>),
+	%% Padding.
+	PushPromise2 = iolist_to_binary(split_push_promise(3, #{
+		end_headers => 1,
+		padded => 1
+	}, #{
+		pad_length => 2,
+		promised_stream_id => 5,
+		header_block_fragment => <<"abc">>
+	}, 8)),
+	{ok, {push_promise, 3, head_nofin, 5, <<"a">>}, Rest0} = parse(PushPromise2),
+	{ok, {continuation, 3, head_fin, <<"bc">>}, <<>>} = parse(Rest0),
+	PushPromise3 = << 2:24, 5:8, 0:4, 1:1, 1:1, 0:2, 0:1, 3:31, 2:8, 0:1, 5:31, 0:16 >>,
+	{connection_error, protocol_error, 'Length of padding MUST be less than length of payload. (RFC7540 6.6)'} = parse(PushPromise3),
+	PushPromise4 = << 7:24, 5:8, 0:4, 1:1, 1:1, 0:2, 0:1, 3:31, 2:8, 0:1, 5:31, 1:16 >>,
+	{connection_error, protocol_error, 'Padding octets MUST be set to zero. (RFC7540 6.6)'} = parse(PushPromise4),
+	ok.
+
 parse_windows_update_test() ->
 	WindowUpdate = << 4:24, 8:8, 0:9, 0:31, 0:1, 12345:31 >>,
 	_ = [{more, _} = parse(binary:part(WindowUpdate, 0, I)) || I <- lists:seq(1, byte_size(WindowUpdate) - 1)],
@@ -454,11 +480,13 @@ settings_payload(#{}) ->
 settings_ack() ->
 	<< 0:24, 4:8, 1:8, 0:32 >>.
 
-%% @todo Check size of HeaderBlock and use CONTINUATION frames if needed.
-push_promise(StreamID, PromisedStreamID, HeaderBlock) ->
-	Len = iolist_size(HeaderBlock) + 4,
-	FlagEndHeaders = 1,
-	[<< Len:24, 5:8, 0:5, FlagEndHeaders:1, 0:3, StreamID:31, 0:1, PromisedStreamID:31 >>, HeaderBlock].
+push_promise(StreamID, PromisedStreamID, HeaderBlockFragment) ->
+	split_push_promise(StreamID, #{
+		end_headers => 1
+	}, #{
+		header_block_fragment => HeaderBlockFragment,
+		promised_stream_id => PromisedStreamID
+	}).
 
 ping(Opaque) ->
 	<< 8:24, 6:8, 0:40, Opaque:64 >>.
@@ -547,6 +575,28 @@ split_headers(StreamID, Flags, Fields, FrameSize) when FrameSize > 0 ->
 			frame_headers(StreamID, Flags, Fields)
 	end.
 
+split_push_promise(StreamID, Flags, Fields) ->
+	split_push_promise(StreamID, Flags, Fields, 16#4000).
+
+split_push_promise(StreamID, Flags, Fields, FrameSize) when FrameSize > 0 ->
+	FlagPadded = maps:get(padded, Flags, 0),
+	PadLength = maps:get(pad_length, Fields, 0) band 16#ff,
+	LenPadded = case FlagPadded of 1 -> 1 + PadLength; _ -> 0 end,
+	HeaderBlockFragment = maps:get(header_block_fragment, Fields, []),
+	Len = iolist_size(HeaderBlockFragment) + LenPadded + 4,
+	if
+		FrameSize < Len ->
+			PushPromiseSize = max(FrameSize - LenPadded - 4, 0),
+			<< Chunk:PushPromiseSize/binary, Rest/binary >> = iolist_to_binary(HeaderBlockFragment),
+			ContFlags = Flags#{ end_headers => 0 },
+			ContFields = Fields#{ header_block_fragment => [] },
+			PushPromiseFields = Fields#{ header_block_fragment => Chunk },
+			PushPromise = frame_push_promise(StreamID, ContFlags, PushPromiseFields),
+			split_continuation(StreamID, Rest, ContFlags, ContFields, Flags, FrameSize, PushPromise);
+		true ->
+			frame_push_promise(StreamID, Flags, Fields)
+	end.
+
 %% Framing.
 
 frame_continuation(StreamID, Flags, Fields) ->
@@ -602,6 +652,26 @@ frame_headers(StreamID, Flags, Fields) ->
 			Exclusive:(FlagPriority * 1),
 			StreamDependency:(FlagPriority * 31),
 			Weight:(FlagPriority * 8)
+		>>,
+		HeaderBlockFragment,
+		<< 0:(FlagPadded * PadLength * 8) >>
+	].
+
+frame_push_promise(StreamID, Flags, Fields) ->
+	FlagEndHeaders = maps:get(end_headers, Flags, 0),
+	FlagPadded = maps:get(padded, Flags, 0),
+	PadLength = maps:get(pad_length, Fields, 0) band 16#ff,
+	PromisedStreamID = maps:get(promised_stream_id, Fields, 0),
+	HeaderBlockFragment = maps:get(header_block_fragment, Fields, []),
+	LenPadded = case FlagPadded of 1 -> 1 + PadLength; _ -> 0 end,
+	Len = iolist_size(HeaderBlockFragment) + LenPadded + 4,
+	[
+		<<
+			Len:24, 5:8,
+			0:4, FlagPadded:1, FlagEndHeaders:1, 0:2,
+			0:1, StreamID:31,
+			PadLength:(FlagPadded * 8),
+			0:1, PromisedStreamID:31
 		>>,
 		HeaderBlockFragment,
 		<< 0:(FlagPadded * PadLength * 8) >>

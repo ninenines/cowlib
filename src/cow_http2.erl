@@ -48,6 +48,7 @@
 -export([frame_ping/3]).
 -export([frame_priority/2]).
 -export([frame_push_promise/3]).
+-export([frame_rst_stream/2]).
 -export([frame_settings/3]).
 
 -type streamid() :: pos_integer().
@@ -423,6 +424,36 @@ parse_push_promise_test() ->
 	{connection_error, protocol_error, 'Padding octets MUST be set to zero. (RFC7540 6.6)'} = parse(PushPromise4),
 	ok.
 
+parse_rst_stream_test() ->
+	RstStream = iolist_to_binary(rst_stream(1, no_error)),
+	_ = [{more, _} = parse(binary:part(RstStream, 0, I)) || I <- lists:seq(1, byte_size(RstStream) - 1)],
+	{ok, {rst_stream, 1, no_error}, <<>>} = parse(RstStream),
+	{ok, {rst_stream, 1, no_error}, << 42 >>} = parse(<< RstStream/binary, 42 >>),
+	ErrorCodes = [
+		no_error,
+		protocol_error,
+		internal_error,
+		flow_control_error,
+		settings_timeout,
+		stream_closed,
+		frame_size_error,
+		refused_stream,
+		cancel,
+		compression_error,
+		connect_error,
+		enhance_your_calm,
+		inadequate_security,
+		http_1_1_required
+	],
+	_ = [begin
+		{ok, {rst_stream, 2, ErrorCode}, <<>>} = parse(iolist_to_binary(rst_stream(2, ErrorCode)))
+	end || ErrorCode <- ErrorCodes],
+	RstStream2 = iolist_to_binary(frame_rst_stream(0, #{})),
+	{connection_error, protocol_error, 'RST_STREAM frames MUST be associated with a stream. (RFC7540 6.4)'} = parse(RstStream2),
+	RstStream3 = << 5:24, 3:8, 0:8, 0:1, 3:31, 0:40 >>,
+	{stream_error, 3, frame_size_error, 'RST_STREAM frames MUST be 4 bytes wide. (RFC7540 6.4)', <<>>} = parse(RstStream3),
+	ok.
+
 parse_settings_test() ->
 	Settings = iolist_to_binary(settings(#{ max_frame_size => 16#4000 })),
 	_ = [{more, _} = parse(binary:part(Settings, 0, I)) || I <- lists:seq(1, byte_size(Settings) - 1)],
@@ -591,7 +622,9 @@ push_promise(StreamID, PromisedStreamID, HeaderBlockFragment) ->
 
 rst_stream(StreamID, Reason) ->
 	ErrorCode = error_code(Reason),
-	<< 4:24, 3:8, 0:9, StreamID:31, ErrorCode:32 >>.
+	frame_rst_stream(StreamID, #{
+		error_code => ErrorCode
+	}).
 
 settings(Settings=#{}) ->
 	frame_settings(0, #{
@@ -864,6 +897,15 @@ frame_push_promise(StreamID, Flags, Fields) ->
 		HeaderBlockFragment,
 		<< 0:(FlagPadded * PadLength * 8) >>
 	].
+
+frame_rst_stream(StreamID, Fields) ->
+	ErrorCode = maps:get(error_code, Fields, 0),
+	<<
+		4:24, 3:8,
+		0:8,
+		0:1, StreamID:31,
+		ErrorCode:32
+	>>.
 
 frame_settings(StreamID, Flags, Fields) ->
 	FlagAck = maps:get(ack, Flags, 0),

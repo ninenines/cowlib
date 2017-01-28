@@ -232,20 +232,22 @@ parse(<< Len:24, 9:8, _:5, FlagEndHeaders:1, _:3, StreamID:31, HeaderBlockFragme
 %%
 %% Incomplete frames.
 %%
+parse(<< Len:24, _/bits >>) ->
+	{more, Len + 9};
 parse(_) ->
-	more.
+	{more, 9}.
 
 -ifdef(TEST).
 parse_ping_test() ->
 	Ping = ping(1234567890),
-	_ = [more = parse(binary:part(Ping, 0, I)) || I <- lists:seq(1, byte_size(Ping) - 1)],
+	_ = [{more, _} = parse(binary:part(Ping, 0, I)) || I <- lists:seq(1, byte_size(Ping) - 1)],
 	{ok, {ping, 1234567890}, <<>>} = parse(Ping),
 	{ok, {ping, 1234567890}, << 42 >>} = parse(<< Ping/binary, 42 >>),
 	ok.
 
 parse_windows_update_test() ->
 	WindowUpdate = << 4:24, 8:8, 0:9, 0:31, 0:1, 12345:31 >>,
-	_ = [more = parse(binary:part(WindowUpdate, 0, I)) || I <- lists:seq(1, byte_size(WindowUpdate) - 1)],
+	_ = [{more, _} = parse(binary:part(WindowUpdate, 0, I)) || I <- lists:seq(1, byte_size(WindowUpdate) - 1)],
 	{ok, {window_update, 12345}, <<>>} = parse(WindowUpdate),
 	{ok, {window_update, 12345}, << 42 >>} = parse(<< WindowUpdate/binary, 42 >>),
 	ok.

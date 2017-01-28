@@ -45,6 +45,7 @@
 -export([frame_data/3]).
 -export([frame_goaway/2]).
 -export([frame_headers/3]).
+-export([frame_ping/3]).
 -export([frame_priority/2]).
 -export([frame_push_promise/3]).
 -export([frame_settings/3]).
@@ -380,6 +381,10 @@ parse_ping_test() ->
 	_ = [{more, _} = parse(binary:part(Ping, 0, I)) || I <- lists:seq(1, byte_size(Ping) - 1)],
 	{ok, {ping, 1234567890}, <<>>} = parse(Ping),
 	{ok, {ping, 1234567890}, << 42 >>} = parse(<< Ping/binary, 42 >>),
+	PingAck = ping_ack(1234567890),
+	_ = [{more, _} = parse(binary:part(PingAck, 0, I)) || I <- lists:seq(1, byte_size(PingAck) - 1)],
+	{ok, {ping_ack, 1234567890}, <<>>} = parse(PingAck),
+	{ok, {ping_ack, 1234567890}, << 42 >>} = parse(<< PingAck/binary, 42 >>),
 	ok.
 
 parse_priority_test() ->
@@ -556,10 +561,18 @@ headers(StreamID, IsFin, HeaderBlockFragment) ->
 	}).
 
 ping(Opaque) ->
-	<< 8:24, 6:8, 0:40, Opaque:64 >>.
+	frame_ping(0, #{
+		ack => 0
+	}, #{
+		opaque => Opaque
+	}).
 
 ping_ack(Opaque) ->
-	<< 8:24, 6:8, 0:7, 1:1, 0:32, Opaque:64 >>.
+	frame_ping(0, #{
+		ack => 1
+	}, #{
+		opaque => Opaque
+	}).
 
 priority(StreamID, Exclusive, StreamDependency, Weight) ->
 	frame_priority(StreamID, #{
@@ -809,6 +822,16 @@ frame_headers(StreamID, Flags, Fields) ->
 		HeaderBlockFragment,
 		<< 0:(FlagPadded * PadLength * 8) >>
 	].
+
+frame_ping(StreamID, Flags, Fields) ->
+	FlagAck = maps:get(ack, Flags, 0),
+	Opaque = maps:get(opaque, Fields, 0),
+	<<
+		8:24, 6:8,
+		0:7, FlagAck:1,
+		0:1, StreamID:31,
+		Opaque:64
+	>>.
 
 frame_priority(StreamID, Fields) ->
 	Exclusive = maps:get(exclusive, Fields, 0),

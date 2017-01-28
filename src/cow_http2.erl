@@ -22,13 +22,13 @@
 -export([data/3]).
 -export([data_header/3]).
 -export([headers/3]).
+-export([ping/1]).
+-export([ping_ack/1]).
+-export([push_promise/3]).
 -export([rst_stream/2]).
 -export([settings/1]).
 -export([settings_payload/1]).
 -export([settings_ack/0]).
--export([push_promise/3]).
--export([ping/1]).
--export([ping_ack/1]).
 %% Splitting.
 -export([split_continuation/3]).
 -export([split_continuation/4]).
@@ -43,6 +43,7 @@
 -export([frame_data/3]).
 -export([frame_headers/3]).
 -export([frame_push_promise/3]).
+-export([frame_settings/3]).
 
 -type streamid() :: pos_integer().
 -type fin() :: fin | nofin.
@@ -373,6 +374,43 @@ parse_push_promise_test() ->
 	{connection_error, protocol_error, 'Padding octets MUST be set to zero. (RFC7540 6.6)'} = parse(PushPromise4),
 	ok.
 
+parse_settings_test() ->
+	Settings = iolist_to_binary(settings(#{ max_frame_size => 16#4000 })),
+	_ = [{more, _} = parse(binary:part(Settings, 0, I)) || I <- lists:seq(1, byte_size(Settings) - 1)],
+	{ok, {settings, #{ max_frame_size := 16#4000 }}, <<>>} = parse(Settings),
+	{ok, {settings, #{ max_frame_size := 16#4000 }}, << 42 >>} = parse(<< Settings/binary, 42 >>),
+	SettingsAck = iolist_to_binary(settings_ack()),
+	_ = [{more, _} = parse(binary:part(SettingsAck, 0, I)) || I <- lists:seq(1, byte_size(SettingsAck) - 1)],
+	{ok, settings_ack, <<>>} = parse(SettingsAck),
+	{ok, settings_ack, << 42 >>} = parse(<< SettingsAck/binary, 42 >>),
+	SettingsAck2 = << 1:24, 4:8, 0:7, 1:1, 0:1, 0:31, 0:8 >>,
+	{connection_error, frame_size_error, 'SETTINGS frames with the ACK flag set MUST have a length of 0. (RFC7540 6.5)'} = parse(SettingsAck2),
+	Settings3 = iolist_to_binary(settings(#{})),
+	{ok, {settings, #{}}, <<>>} = parse(Settings3),
+	Fields4 = #{
+		header_table_size => 4096,
+		enable_push => true,
+		max_concurrent_streams => 100,
+		initial_window_size => 65535,
+		max_frame_size => 16384,
+		max_header_list_size => 1
+	},
+	Settings4 = iolist_to_binary(settings(Fields4)),
+	{ok, {settings, Fields4}, <<>>} = parse(Settings4),
+	Settings5 = << 1:24, 4:8, 0:8, 0:1, 0:31, 0:8 >>,
+	{connection_error, frame_size_error, 'SETTINGS frames MUST have a length multiple of 6. (RFC7540 6.5)'} = parse(Settings5),
+	Settings6 = << 0:24, 4:8, 0:8, 0:1, 1:31 >>,
+	{connection_error, protocol_error, 'SETTINGS frames MUST NOT be associated with a stream. (RFC7540 6.5)'} = parse(Settings6),
+	Settings7 = << 6:24, 4:8, 0:8, 0:1, 0:31, 2:16, 2:32 >>,
+	{connection_error, protocol_error, 'The SETTINGS_ENABLE_PUSH value MUST be 0 or 1. (RFC7540 6.5.2)'} = parse(Settings7),
+	Settings8 = << 6:24, 4:8, 0:8, 0:1, 0:31, 4:16, 16#80000000:32 >>,
+	{connection_error, flow_control_error, 'The maximum SETTINGS_INITIAL_WINDOW_SIZE value is 0x7fffffff. (RFC7540 6.5.2)'} = parse(Settings8),
+	Settings9 = << 6:24, 4:8, 0:8, 0:1, 0:31, 5:16, 16#3fff:32 >>,
+	{connection_error, protocol_error, 'The SETTINGS_MAX_FRAME_SIZE value must be > 0x3fff. (RFC7540 6.5.2)'} = parse(Settings9),
+	Settings10 = << 6:24, 4:8, 0:8, 0:1, 0:31, 5:16, 16#1000000:32 >>,
+	{connection_error, protocol_error, 'The SETTINGS_MAX_FRAME_SIZE value must be =< 0xffffff. (RFC7540 6.5.2)'} = parse(Settings10),
+	ok.
+
 parse_windows_update_test() ->
 	WindowUpdate = << 4:24, 8:8, 0:9, 0:31, 0:1, 12345:31 >>,
 	_ = [{more, _} = parse(binary:part(WindowUpdate, 0, I)) || I <- lists:seq(1, byte_size(WindowUpdate) - 1)],
@@ -465,20 +503,11 @@ headers(StreamID, IsFin, HeaderBlockFragment) ->
 		header_block_fragment => HeaderBlockFragment
 	}).
 
-rst_stream(StreamID, Reason) ->
-	ErrorCode = error_code(Reason),
-	<< 4:24, 3:8, 0:9, StreamID:31, ErrorCode:32 >>.
+ping(Opaque) ->
+	<< 8:24, 6:8, 0:40, Opaque:64 >>.
 
-%% @todo Actually implement it. :-)
-settings(#{}) ->
-	<< 0:24, 4:8, 0:40 >>.
-
-%% @todo Actually implement it. :-)
-settings_payload(#{}) ->
-	<<>>.
-
-settings_ack() ->
-	<< 0:24, 4:8, 1:8, 0:32 >>.
+ping_ack(Opaque) ->
+	<< 8:24, 6:8, 0:7, 1:1, 0:32, Opaque:64 >>.
 
 push_promise(StreamID, PromisedStreamID, HeaderBlockFragment) ->
 	split_push_promise(StreamID, #{
@@ -488,11 +517,60 @@ push_promise(StreamID, PromisedStreamID, HeaderBlockFragment) ->
 		promised_stream_id => PromisedStreamID
 	}).
 
-ping(Opaque) ->
-	<< 8:24, 6:8, 0:40, Opaque:64 >>.
+rst_stream(StreamID, Reason) ->
+	ErrorCode = error_code(Reason),
+	<< 4:24, 3:8, 0:9, StreamID:31, ErrorCode:32 >>.
 
-ping_ack(Opaque) ->
-	<< 8:24, 6:8, 0:7, 1:1, 0:32, Opaque:64 >>.
+settings(Settings=#{}) ->
+	frame_settings(0, #{
+		ack => 0
+	}, Settings).
+
+settings_payload(Settings) when is_map(Settings) and map_size(Settings) == 0 ->
+	<<>>;
+settings_payload(Settings) when is_map(Settings) ->
+	settings_payload([
+		header_table_size,
+		enable_push,
+		max_concurrent_streams,
+		initial_window_size,
+		max_frame_size,
+		max_header_list_size
+	], Settings, []).
+
+settings_payload([header_table_size | Parameters], Settings=#{header_table_size := Value}, SettingsPayload)
+		when is_integer(Value), Value >= 0, Value =< 16#ffffffff ->
+	settings_payload(Parameters, Settings, [SettingsPayload, << 1:16, Value:32 >>]);
+settings_payload([enable_push | Parameters], Settings=#{enable_push := false}, SettingsPayload) ->
+	settings_payload(Parameters, Settings, [SettingsPayload, << 2:16, 0:32 >>]);
+settings_payload([enable_push | Parameters], Settings=#{enable_push := true}, SettingsPayload) ->
+	settings_payload(Parameters, Settings, [SettingsPayload, << 2:16, 1:32 >>]);
+settings_payload([max_concurrent_streams | Parameters], Settings=#{max_concurrent_streams := Value}, SettingsPayload)
+		when is_integer(Value), Value >= 0, Value =< 16#ffffffff  ->
+	settings_payload(Parameters, Settings, [SettingsPayload, << 3:16, Value:32 >>]);
+settings_payload([initial_window_size | Parameters], Settings=#{initial_window_size := Value}, SettingsPayload)
+		when is_integer(Value), Value >= 0, Value =< 16#7fffffff ->
+	settings_payload(Parameters, Settings, [SettingsPayload, << 4:16, Value:32 >>]);
+settings_payload([max_frame_size | Parameters], Settings=#{max_frame_size := Value}, SettingsPayload)
+		when is_integer(Value), Value > 16#3fff, Value =< 16#ffffff ->
+	settings_payload(Parameters, Settings, [SettingsPayload, << 5:16, Value:32 >>]);
+settings_payload([max_header_list_size | Parameters], Settings=#{max_header_list_size := Value}, SettingsPayload)
+		when is_integer(Value), Value >= 0, Value =< 16#ffffffff ->
+	settings_payload(Parameters, Settings, [SettingsPayload, << 6:16, Value:32 >>]);
+settings_payload([Key | Parameters], Settings, SettingsPayload) ->
+	case maps:find(Key, Settings) of
+		{ok, Value} ->
+			erlang:error({badarg, [Key, Value]});
+		error ->
+			settings_payload(Parameters, Settings, SettingsPayload)
+	end;
+settings_payload([], _Settings, SettingsPayload) ->
+	SettingsPayload.
+
+settings_ack() ->
+	frame_settings(0, #{
+		ack => 1
+	}, #{}).
 
 %% Splitting.
 
@@ -675,6 +753,19 @@ frame_push_promise(StreamID, Flags, Fields) ->
 		>>,
 		HeaderBlockFragment,
 		<< 0:(FlagPadded * PadLength * 8) >>
+	].
+
+frame_settings(StreamID, Flags, Fields) ->
+	FlagAck = maps:get(ack, Flags, 0),
+	SettingsPayload = case FlagAck of 1 -> []; 0 -> settings_payload(Fields) end,
+	Len = iolist_size(SettingsPayload),
+	[
+		<<
+			Len:24, 4:8,
+			0:7, FlagAck:1,
+			0:1, StreamID:31
+		>>,
+		SettingsPayload
 	].
 
 flag_fin(nofin) -> 0;

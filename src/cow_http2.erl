@@ -31,6 +31,8 @@
 -export([settings/1]).
 -export([settings_payload/1]).
 -export([settings_ack/0]).
+-export([window_update/2]).
+
 %% Splitting.
 -export([split_continuation/3]).
 -export([split_continuation/4]).
@@ -40,6 +42,7 @@
 -export([split_headers/4]).
 -export([split_push_promise/3]).
 -export([split_push_promise/4]).
+
 %% Framing.
 -export([frame_continuation/3]).
 -export([frame_data/3]).
@@ -50,6 +53,7 @@
 -export([frame_push_promise/3]).
 -export([frame_rst_stream/2]).
 -export([frame_settings/3]).
+-export([frame_window_update/2]).
 
 -type streamid() :: pos_integer().
 -type fin() :: fin | nofin.
@@ -492,10 +496,20 @@ parse_settings_test() ->
 	ok.
 
 parse_windows_update_test() ->
-	WindowUpdate = << 4:24, 8:8, 0:9, 0:31, 0:1, 12345:31 >>,
+	WindowUpdate = iolist_to_binary(window_update(0, 12345)),
 	_ = [{more, _} = parse(binary:part(WindowUpdate, 0, I)) || I <- lists:seq(1, byte_size(WindowUpdate) - 1)],
 	{ok, {window_update, 12345}, <<>>} = parse(WindowUpdate),
 	{ok, {window_update, 12345}, << 42 >>} = parse(<< WindowUpdate/binary, 42 >>),
+	WindowUpdate2 = iolist_to_binary(window_update(1, 12345)),
+	_ = [{more, _} = parse(binary:part(WindowUpdate2, 0, I)) || I <- lists:seq(1, byte_size(WindowUpdate2) - 1)],
+	{ok, {window_update, 1, 12345}, <<>>} = parse(WindowUpdate2),
+	{ok, {window_update, 1, 12345}, << 42 >>} = parse(<< WindowUpdate2/binary, 42 >>),
+	WindowUpdate3 = iolist_to_binary(window_update(0, 0)),
+	{connection_error, protocol_error, 'WINDOW_UPDATE frames MUST have a non-zero increment. (RFC7540 6.9)'} = parse(WindowUpdate3),
+	WindowUpdate4 = << 5:24, 8:8, 0:8, 0:1, 0:31, 0:40 >>,
+	{connection_error, frame_size_error, 'WINDOW_UPDATE frames MUST be 4 bytes wide. (RFC7540 6.9)'} = parse(WindowUpdate4),
+	WindowUpdate5 = iolist_to_binary(window_update(1, 0)),
+	{stream_error, 1, protocol_error, 'WINDOW_UPDATE frames MUST have a non-zero increment. (RFC7540 6.9)'} = parse(WindowUpdate5),
 	ok.
 -endif.
 
@@ -676,6 +690,11 @@ settings_ack() ->
 	frame_settings(0, #{
 		ack => 1
 	}, #{}).
+
+window_update(StreamID, WindowSizeIncrement) ->
+	frame_window_update(StreamID, #{
+		window_size_increment => WindowSizeIncrement
+	}).
 
 %% Splitting.
 
@@ -919,6 +938,15 @@ frame_settings(StreamID, Flags, Fields) ->
 		>>,
 		SettingsPayload
 	].
+
+frame_window_update(StreamID, Fields) ->
+	WindowSizeIncrement = maps:get(window_size_increment, Fields, 1),
+	<<
+		4:24, 8:8,
+		0:8,
+		0:1, StreamID:31,
+		0:1, WindowSizeIncrement:31
+	>>.
 
 flag_fin(nofin) -> 0;
 flag_fin(fin) -> 1.

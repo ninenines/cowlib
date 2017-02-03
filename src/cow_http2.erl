@@ -207,7 +207,7 @@ parse(<< Len0:24, 7:8, _:9, 0:31, _:1, LastStreamID:31, ErrorCode:32, Rest0/bits
 	Len = Len0 - 8,
 	<< DebugData:Len/binary, Rest/bits >> = Rest0,
 	{ok, {goaway, LastStreamID, parse_error_code(ErrorCode), DebugData}, Rest};
-parse(<< _:24, 7:8, _:40, _/bits >>) ->
+parse(<< Len0:24, 7:8, _:40, _:Len0/binary, _/bits >>) ->
 	{connection_error, protocol_error, 'GOAWAY frames MUST NOT be associated with a stream. (RFC7540 6.8)'};
 %%
 %% WINDOW_UPDATE frames.

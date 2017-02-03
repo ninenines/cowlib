@@ -85,7 +85,7 @@ parse(<< Len:24, 0:8, _:4, 0:1, _:2, FlagEndStream:1, _:1, StreamID:31, Data:Len
 %% Padding.
 parse(<< Len0:24, 0:8, _:4, 1:1, _:2, FlagEndStream:1, _:1, StreamID:31, PadLen:8, Rest0/bits >>)
 		when byte_size(Rest0) >= Len0 - 1 ->
-	Len = Len0 - PadLen,
+	Len = Len0 - PadLen - 1,
 	case Rest0 of
 		<< Data:Len/binary, 0:PadLen/unit:8, Rest/bits >> ->
 			{ok, {data, StreamID, parse_fin(FlagEndStream), Data}, Rest};

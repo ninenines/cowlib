@@ -166,7 +166,7 @@ parse(<< Len:24, 4:8, _:7, 0:1, _:1, 0:31, _/bits >>) when Len rem 6 =/= 0 ->
 	{connection_error, frame_size_error, 'SETTINGS frames MUST have a length multiple of 6. (RFC7540 6.5)'};
 parse(<< Len:24, 4:8, _:7, 0:1, _:1, 0:31, Rest/bits >>) when byte_size(Rest) >= Len ->
 	parse_settings_payload(Rest, Len, #{});
-parse(<< _:24, 4:8, _/bits >>) ->
+parse(<< _:24, 4:8, _:7, 0:1, _:1, BadStreamID:31, _/bits >>) when BadStreamID =/= 0 ->
 	{connection_error, protocol_error, 'SETTINGS frames MUST NOT be associated with a stream. (RFC7540 6.5)'};
 %%
 %% PUSH_PROMISE frames.

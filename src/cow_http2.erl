@@ -173,6 +173,8 @@ parse(<< _:24, 4:8, _:7, 0:1, _:1, BadStreamID:31, _/bits >>) when BadStreamID =
 %%
 parse(<< _:24, 5:8, _:9, 0:31, _/bits >>) ->
 	{connection_error, protocol_error, 'PUSH_PROMISE frames MUST be associated with a stream. (RFC7540 6.6)'};
+parse(<< Len0:24, 5:8, _:4, 1:1, _:35, PadLen:8, _/bits >>) when PadLen >= Len0 ->
+	{connection_error, protocol_error, 'Length of padding MUST be less than length of payload. (RFC7540 6.6)'};
 parse(<< Len0:24, 5:8, _:4, 0:1, FlagEndHeaders:1, _:3, StreamID:31, _:1, PromisedStreamID:31, Rest0/bits >>)
 		when byte_size(Rest0) >= Len0 - 4 ->
 	Len = Len0 - 4,

@@ -138,7 +138,8 @@ init_permessage_deflate(InflateWindowBits, DeflateWindowBits, Opts) ->
 	Inflate = zlib:open(),
 	ok = zlib:inflateInit(Inflate, -InflateWindowBits),
 	Deflate = zlib:open(),
-	%% @todo Remove this case .. of for OTP 18+ if PR https://github.com/erlang/otp/pull/633 gets merged.
+	%% zlib 1.2.11+ now rejects -8. It used to transform it to -9.
+	%% We need to use 9 when 8 is requested for interoperability.
 	DeflateWindowBits2 = case DeflateWindowBits of
 		8 -> 9;
 		_ -> DeflateWindowBits

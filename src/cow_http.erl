@@ -150,6 +150,9 @@ parse_hd_value(<< $\r, Rest/bits >>, Acc, Name, SoFar) ->
 parse_hd_value(<< C, Rest/bits >>, Acc, Name, SoFar) ->
 	parse_hd_value(Rest, Acc, Name, << SoFar/binary, C >>).
 
+%% The function below was lifted from:
+%% https://github.com/ninenines/cowboy/blob/master/src/cowboy_http.erl#L506
+
 clean_value_ws_end(_, -1) ->
 	<<>>;
 clean_value_ws_end(Value, N) ->

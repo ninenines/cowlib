@@ -145,16 +145,32 @@ parse_hd_value(<< $\r, Rest/bits >>, Acc, Name, SoFar) ->
 		<< $\n, C, Rest2/bits >> when C =:= $\s; C =:= $\t ->
 			parse_hd_value(Rest2, Acc, Name, << SoFar/binary, C >>);
 		<< $\n, Rest2/bits >> ->
-			parse_header(Rest2, [{Name, SoFar}|Acc])
+			Value = clean_value_ws_end(SoFar, byte_size(SoFar) - 1),
+			parse_header(Rest2, [{Name, Value}|Acc])
 	end;
 parse_hd_value(<< C, Rest/bits >>, Acc, Name, SoFar) ->
 	parse_hd_value(Rest, Acc, Name, << SoFar/binary, C >>).
+
+%% This function has been copied from cowboy_http.
+clean_value_ws_end(_, -1) ->
+	<<>>;
+clean_value_ws_end(Value, N) ->
+	case binary:at(Value, N) of
+		$\s -> clean_value_ws_end(Value, N - 1);
+		$\t -> clean_value_ws_end(Value, N - 1);
+		_ ->
+			S = N + 1,
+			<< Value2:S/binary, _/bits >> = Value,
+			Value2
+	end.
 
 -ifdef(TEST).
 parse_headers_test_() ->
 	Tests = [
 		{<<"\r\nRest">>,
 			{[], <<"Rest">>}},
+		{<<"Server: Erlang/R17  \r\n\r\n">>,
+			{[{<<"server">>, <<"Erlang/R17">>}], <<>>}},
 		{<<"Server: Erlang/R17\r\n"
 			"Date: Sun, 23 Feb 2014 09:30:39 GMT\r\n"
 			"Multiline-Header: why hello!\r\n"

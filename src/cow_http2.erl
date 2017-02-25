@@ -16,6 +16,7 @@
 
 %% Parsing.
 -export([parse/1]).
+-export([parse/2]).
 -export([parse_settings_payload/1]).
 
 %% Building.
@@ -73,11 +74,18 @@
 
 %% Parsing.
 
+parse(<< Len:24, _/bits >>, MaxFrameSize) when Len > MaxFrameSize ->
+	{connection_error, frame_size_error, 'The frame size exceeded SETTINGS_MAX_FRAME_SIZE. (RFC7540 4.2)'};
+parse(Data, _) ->
+	parse(Data).
+
 %%
 %% DATA frames.
 %%
 parse(<< _:24, 0:8, _:9, 0:31, _/bits >>) ->
 	{connection_error, protocol_error, 'DATA frames MUST be associated with a stream. (RFC7540 6.1)'};
+parse(<< 0:24, 0:8, _:4, 1:1, _:35, _/bits >>) ->
+	{connection_error, frame_size_error, 'DATA frames with padding flag MUST have a length > 0. (RFC7540 6.1)'};
 parse(<< Len0:24, 0:8, _:4, 1:1, _:35, PadLen:8, _/bits >>) when PadLen >= Len0 ->
 	{connection_error, protocol_error, 'Length of padding MUST be less than length of payload. (RFC7540 6.1)'};
 %% No padding.
@@ -98,6 +106,12 @@ parse(<< Len0:24, 0:8, _:4, 1:1, _:2, FlagEndStream:1, _:1, StreamID:31, PadLen:
 %%
 parse(<< _:24, 1:8, _:9, 0:31, _/bits >>) ->
 	{connection_error, protocol_error, 'HEADERS frames MUST be associated with a stream. (RFC7540 6.2)'};
+parse(<< 0:24, 1:8, _:4, 1:1, _:35, _/bits >>) ->
+	{connection_error, frame_size_error, 'HEADERS frames with padding flag MUST have a length > 0. (RFC7540 6.1)'};
+parse(<< Len:24, 1:8, _:2, 1:1, _:37, _/bits >>) when Len < 5 ->
+	{connection_error, frame_size_error, 'HEADERS frames with priority flag MUST have a length >= 5. (RFC7540 6.1)'};
+parse(<< Len:24, 1:8, _:2, 1:1, _:37, _/bits >>) when Len < 6 ->
+	{connection_error, frame_size_error, 'HEADERS frames with padding and priority flags MUST have a length >= 6. (RFC7540 6.1)'};
 parse(<< Len0:24, 1:8, _:4, 1:1, _:35, PadLen:8, _/bits >>) when PadLen >= Len0 ->
 	{connection_error, protocol_error, 'Length of padding MUST be less than length of payload. (RFC7540 6.2)'};
 parse(<< Len0:24, 1:8, _:2, 1:1, _:1, 1:1, _:35, PadLen:8, _/bits >>) when PadLen >= Len0 - 5 ->
@@ -154,8 +168,8 @@ parse(<< 4:24, 3:8, _:9, 0:31, _/bits >>) ->
 parse(<< 4:24, 3:8, _:9, StreamID:31, ErrorCode:32, Rest/bits >>) ->
 	{ok, {rst_stream, StreamID, parse_error_code(ErrorCode)}, Rest};
 %% @todo same as priority
-parse(<< BadLen:24, 3:8, _:9, StreamID:31, _:BadLen/binary, Rest/bits >>) ->
-	{stream_error, StreamID, frame_size_error, 'RST_STREAM frames MUST be 4 bytes wide. (RFC7540 6.4)', Rest};
+parse(<< _:24, 3:8, _:9, _:31, _/bits >>) ->
+	{connection_error, frame_size_error, 'RST_STREAM frames MUST be 4 bytes wide. (RFC7540 6.4)'};
 %%
 %% SETTINGS frames.
 %%
@@ -172,8 +186,14 @@ parse(<< _:24, 4:8, _/bits >>) ->
 %%
 %% PUSH_PROMISE frames.
 %%
+parse(<< Len:24, 5:8, _:40, _/bits >>) when Len < 4 ->
+	{connection_error, frame_size_error, 'PUSH_PROMISE frames MUST have a length >= 4. (RFC7540 4.2, RFC7540 6.6)'};
+parse(<< Len:24, 5:8, _:4, 1:1, _:35, _/bits >>) when Len < 5 ->
+	{connection_error, frame_size_error, 'PUSH_PROMISE frames with padding flag MUST have a length >= 5. (RFC7540 4.2, RFC7540 6.6)'};
 parse(<< _:24, 5:8, _:9, 0:31, _/bits >>) ->
 	{connection_error, protocol_error, 'PUSH_PROMISE frames MUST be associated with a stream. (RFC7540 6.6)'};
+parse(<< Len0:24, 5:8, _:4, 1:1, _:35, PadLen:8, _/bits >>) when PadLen >= Len0 - 4 ->
+	{connection_error, protocol_error, 'Length of padding MUST be less than length of payload. (RFC7540 6.6)'};
 parse(<< Len0:24, 5:8, _:4, 0:1, FlagEndHeaders:1, _:3, StreamID:31, _:1, PromisedStreamID:31, Rest0/bits >>)
 		when byte_size(Rest0) >= Len0 - 4 ->
 	Len = Len0 - 4,
@@ -206,6 +226,8 @@ parse(<< Len0:24, 7:8, _:9, 0:31, _:1, LastStreamID:31, ErrorCode:32, Rest0/bits
 	Len = Len0 - 8,
 	<< DebugData:Len/binary, Rest/bits >> = Rest0,
 	{ok, {goaway, LastStreamID, parse_error_code(ErrorCode), DebugData}, Rest};
+parse(<< Len:24, 7:8, _:40, _/bits >>) when Len < 8 ->
+	{connection_error, frame_size_error, 'GOAWAY frames MUST have a length >= 8. (RFC7540 4.2, RFC7540 6.8)'};
 parse(<< _:24, 7:8, _:40, _/bits >>) ->
 	{connection_error, protocol_error, 'GOAWAY frames MUST NOT be associated with a stream. (RFC7540 6.8)'};
 %%

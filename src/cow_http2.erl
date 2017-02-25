@@ -29,6 +29,7 @@
 -export([push_promise/3]).
 -export([ping/1]).
 -export([ping_ack/1]).
+-export([goaway/3]).
 
 -type streamid() :: pos_integer().
 -type fin() :: fin | nofin.
@@ -355,6 +356,11 @@ ping(Opaque) ->
 
 ping_ack(Opaque) ->
 	<< 8:24, 6:8, 0:7, 1:1, 0:32, Opaque:64 >>.
+
+goaway(LastStreamID, Reason, DebugData) ->
+	ErrorCode = error_code(Reason),
+	Len = iolist_size(DebugData) + 8,
+	[<< Len:24, 7:8, 0:41, LastStreamID:31, ErrorCode:32 >>, DebugData].
 
 flag_fin(nofin) -> 0;
 flag_fin(fin) -> 1.

@@ -251,6 +251,11 @@ parse(<< _:24, 9:8, _:9, 0:31, _/bits >>) ->
 parse(<< Len:24, 9:8, _:5, FlagEndHeaders:1, _:3, StreamID:31, HeaderBlockFragment:Len/binary, Rest/bits >>) ->
 	{ok, {continuation, StreamID, parse_head_fin(FlagEndHeaders), HeaderBlockFragment}, Rest};
 %%
+%% Unknown frames are ignored.
+%%
+parse(<< Len:24, Type:8, _:40, _:Len/binary, Rest/bits >>) when Type > 9 ->
+	{ignore, Rest};
+%%
 %% Incomplete frames.
 %%
 parse(_) ->

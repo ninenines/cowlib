@@ -31,6 +31,8 @@
 -export([ping/1]).
 -export([ping_ack/1]).
 -export([goaway/3]).
+-export([window_update/1]).
+-export([window_update/2]).
 
 -type streamid() :: pos_integer().
 -type fin() :: fin | nofin.
@@ -388,6 +390,12 @@ goaway(LastStreamID, Reason, DebugData) ->
 	ErrorCode = error_code(Reason),
 	Len = iolist_size(DebugData) + 8,
 	[<< Len:24, 7:8, 0:41, LastStreamID:31, ErrorCode:32 >>, DebugData].
+
+window_update(Increment) ->
+	window_update(0, Increment).
+
+window_update(StreamID, Increment) when Increment =< 16#7fffffff ->
+	<< 4:24, 8:8, 0:8, StreamID:32, 0:1, Increment:31 >>.
 
 flag_fin(nofin) -> 0;
 flag_fin(fin) -> 1.

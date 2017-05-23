@@ -23,6 +23,7 @@
 -export([data/3]).
 -export([data_header/3]).
 -export([headers/3]).
+-export([priority/4]).
 -export([rst_stream/2]).
 -export([settings/1]).
 -export([settings_payload/1]).
@@ -359,6 +360,10 @@ headers(StreamID, IsFin, HeaderBlock) ->
 	FlagEndHeaders = 1,
 	[<< Len:24, 1:8, 0:5, FlagEndHeaders:1, 0:1, FlagEndStream:1, 0:1, StreamID:31 >>, HeaderBlock].
 
+priority(StreamID, E, DepStreamID, Weight) ->
+	FlagExclusive = exclusive(E),
+	<< 5:24, 2:8, 0:9, StreamID:31, FlagExclusive:1, DepStreamID:31, Weight:8 >>.
+
 rst_stream(StreamID, Reason) ->
 	ErrorCode = error_code(Reason),
 	<< 4:24, 3:8, 0:9, StreamID:31, ErrorCode:32 >>.
@@ -399,6 +404,9 @@ window_update(StreamID, Increment) when Increment =< 16#7fffffff ->
 
 flag_fin(nofin) -> 0;
 flag_fin(fin) -> 1.
+
+exclusive(shared) -> 0;
+exclusive(exclusive) -> 1.
 
 error_code(no_error) -> 0;
 error_code(protocol_error) -> 1;

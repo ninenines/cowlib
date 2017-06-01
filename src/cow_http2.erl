@@ -386,10 +386,10 @@ push_promise(StreamID, PromisedStreamID, HeaderBlock) ->
 	[<< Len:24, 5:8, 0:5, FlagEndHeaders:1, 0:3, StreamID:31, 0:1, PromisedStreamID:31 >>, HeaderBlock].
 
 ping(Opaque) ->
-	<< 8:24, 6:8, 0:40, Opaque:64 >>.
+	<< 8:24, 6:8, 0:40, Opaque:64/bits >>.
 
 ping_ack(Opaque) ->
-	<< 8:24, 6:8, 0:7, 1:1, 0:32, Opaque:64 >>.
+	<< 8:24, 6:8, 0:7, 1:1, 0:32, Opaque:64/bits >>.
 
 goaway(LastStreamID, Reason, DebugData) ->
 	ErrorCode = error_code(Reason),

@@ -525,7 +525,7 @@ horse_build() ->
 
 -spec form_data(headers())
 	-> {data, binary()}
-	| {file, binary(), binary(), binary(), binary()}.
+	| {file, binary(), binary(), binary()}.
 form_data(Headers) ->
 	{_, DispositionBin} = lists:keyfind(<<"content-disposition">>, 1, Headers),
 	{<<"form-data">>, Params} = parse_content_disposition(DispositionBin),
@@ -538,13 +538,7 @@ form_data(Headers) ->
 				false -> <<"text/plain">>;
 				{_, T} -> T
 			end,
-			%% @todo Turns out this is unnecessary per RFC7578 4.7.
-			TransferEncoding = case lists:keyfind(
-					<<"content-transfer-encoding">>, 1, Headers) of
-				false -> <<"7bit">>;
-				{_, TE} -> TE
-			end,
-			{file, FieldName, Filename, Type, TransferEncoding}
+			{file, FieldName, Filename, Type}
 	end.
 
 -ifdef(TEST).
@@ -555,8 +549,7 @@ form_data_test_() ->
 		{[{<<"content-disposition">>,
 				<<"form-data; name=\"files\"; filename=\"file1.txt\"">>},
 			{<<"content-type">>, <<"text/x-plain">>}],
-			{file, <<"files">>, <<"file1.txt">>,
-				<<"text/x-plain">>, <<"7bit">>}}
+			{file, <<"files">>, <<"file1.txt">>, <<"text/x-plain">>}}
 	],
 	[{lists:flatten(io_lib:format("~p", [V])),
 		fun() -> R = form_data(V) end} || {V, R} <- Tests].

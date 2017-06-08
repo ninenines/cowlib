@@ -523,9 +523,11 @@ horse_build() ->
 %% @doc Convenience function for extracting information from headers
 %% when parsing a multipart/form-data stream.
 
--spec form_data(headers())
+-spec form_data(headers() | #{binary() => binary()})
 	-> {data, binary()}
 	| {file, binary(), binary(), binary()}.
+form_data(Headers) when is_map(Headers) ->
+	form_data(maps:to_list(Headers));
 form_data(Headers) ->
 	{_, DispositionBin} = lists:keyfind(<<"content-disposition">>, 1, Headers),
 	{<<"form-data">>, Params} = parse_content_disposition(DispositionBin),

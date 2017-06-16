@@ -64,14 +64,14 @@ parse(Data0, State=#state{state_name=bom, buffer=Buffer}) ->
 parse(<<>>, State=#state{buffer=Buffer}) ->
 	parse_event(Buffer, State#state{buffer= <<>>});
 %% Otherwise process the input data as-is.
-parse(Data, State) ->
-	parse_event(Data, State).
-
-parse_event(Data0, State0=#state{buffer=Buffer}) ->
+parse(Data0, State=#state{buffer=Buffer}) ->
 	Data = case Buffer of
 		<<>> -> Data0;
 		_ -> << Buffer/binary, Data0/binary >>
 	end,
+	parse_event(Data, State).
+
+parse_event(Data, State0) ->
 	case binary:split(Data, [<<"\r\n">>, <<"\r">>, <<"\n">>]) of
 		[Line, Rest] ->
 			case parse_line(Line, State0) of
@@ -209,6 +209,14 @@ parse_example4_test() ->
 		"\n">>, init()),
 	{event, Event, State} = parse(<<>>, State0),
 	{more, _} = parse(<<>>, State),
+	ok.
+
+parse_split_event_test() ->
+	{more, State} = parse(<<
+		"data: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA">>, init()),
+	{event, _, _} = parse(<<"==\n\n">>, State),
 	ok.
 
 -endif.

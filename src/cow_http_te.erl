@@ -192,6 +192,12 @@ chunked_len(<< $c, R/bits >>, S, A, Len) -> chunked_len(R, S, A, Len * 16 + 12);
 chunked_len(<< $d, R/bits >>, S, A, Len) -> chunked_len(R, S, A, Len * 16 + 13);
 chunked_len(<< $e, R/bits >>, S, A, Len) -> chunked_len(R, S, A, Len * 16 + 14);
 chunked_len(<< $f, R/bits >>, S, A, Len) -> chunked_len(R, S, A, Len * 16 + 15);
+%% Chunk extensions.
+%%
+%% Note that we currently skip the first character we encounter here,
+%% and not in the skip_chunk_ext function. If we latter implement
+%% chunk extensions (unlikely) we will need to change this clause too.
+chunked_len(<< C, R/bits >>, S, A, Len) when C =/= $\r -> skip_chunk_ext(R, S, A, Len);
 %% Final chunk.
 chunked_len(<< "\r\n\r\n", R/bits >>, S, <<>>, 0) -> {done, S, R};
 chunked_len(<< "\r\n\r\n", R/bits >>, S, A, 0) -> {done, A, S, R};
@@ -202,6 +208,11 @@ chunked_len(<<"\r">>, _, <<>>, _) -> more;
 chunked_len(<<"\r">>, S, A, _) -> {more, {0, S}, A};
 chunked_len(<<>>, _, <<>>, _) -> more;
 chunked_len(<<>>, S, A, _) -> {more, {0, S}, A}.
+
+%% @todo We should probably limit how much we skip.
+skip_chunk_ext(R = << "\r", _/bits >>, S, A, Len) -> chunked_len(R, S, A, Len);
+skip_chunk_ext(R = <<>>, S, A, Len) -> chunked_len(R, S, A, Len);
+skip_chunk_ext(<< _, R/bits >>, S, A, Len) -> skip_chunk_ext(R, S, A, Len).
 
 %% @doc Encode a chunk.
 
@@ -238,6 +249,17 @@ stream_chunked_one_pass_test() ->
 			"e\r\n"
 			" in\r\n\r\nchunks.\r\n"
 			"0\r\n"
+			"\r\n">>, {0, 0}),
+	%% Same but with extra spaces or chunk extensions.
+	{done, <<"Wikipedia in\r\n\r\nchunks.">>, 23, <<>>}
+		= stream_chunked(<<
+			"4 \r\n"
+			"Wiki\r\n"
+			"5 ; ext = abc\r\n"
+			"pedia\r\n"
+			"e;ext=abc\r\n"
+			" in\r\n\r\nchunks.\r\n"
+			"0;ext\r\n"
 			"\r\n">>, {0, 0}),
 	ok.
 

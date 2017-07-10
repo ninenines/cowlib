@@ -54,8 +54,5 @@ ifeq ($(MAKECMDGOALS),perfs)
 .NOTPARALLEL:
 endif
 
-ci-extra:: perfs
-
 perfs: test-build
-	$(gen_verbose) erl -noshell -pa ebin deps/horse/ebin \
-		-eval 'horse:app_perf($(PROJECT)), erlang:halt().'
+	$(gen_verbose) erl -noshell -pa ebin -eval 'horse:app_perf($(PROJECT)), erlang:halt().'

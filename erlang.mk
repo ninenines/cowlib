@@ -6023,7 +6023,7 @@ ci_verbose = $(ci_verbose_$(V))
 
 define ci_target
 ci-$1: $(CI_INSTALL_DIR)/$2
-	$(verbose) $(MAKE) --no-print-directory clean
+	$(verbose) $(MAKE) --no-print-directory distclean
 	$(ci_verbose) \
 		PATH="$(CI_INSTALL_DIR)/$2/bin:$(PATH)" \
 		CI_OTP_RELEASE="$1" \

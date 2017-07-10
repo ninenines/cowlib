@@ -424,7 +424,7 @@ horse_parse() ->
 
 -spec boundary() -> binary().
 boundary() ->
-	base64:encode(crypto:strong_rand_bytes(48)).
+	cow_base64url:encode(crypto:strong_rand_bytes(48), #{padding => false}).
 
 %% @doc Return the first part's head.
 %%

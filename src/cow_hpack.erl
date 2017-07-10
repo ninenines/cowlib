@@ -42,7 +42,7 @@
 -export_type([opts/0]).
 
 -ifdef(TEST).
--include_lib("triq/include/triq.hrl").
+-include_lib("proper/include/proper.hrl").
 -endif.
 
 %% State initialization.

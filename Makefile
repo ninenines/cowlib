@@ -18,9 +18,8 @@ CI_HIPE ?= $(lastword $(CI_OTP))
 CI_ERLLVM ?= $(CI_HIPE)
 
 TEST_ERLC_OPTS += +'{parse_transform, eunit_autoexport}' +'{parse_transform, horse_autoexport}'
-TEST_DEPS = horse triq
+TEST_DEPS = horse proper
 dep_horse = git https://github.com/extend/horse master
-dep_triq = git https://github.com/krestenkrab/triq master
 
 include erlang.mk
 

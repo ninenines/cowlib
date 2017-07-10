@@ -1,6 +1,7 @@
 .cowlib.plt
 .erlang.mk
 _rel
+cowlib.d
 deps
 doc/man3
 doc/man7

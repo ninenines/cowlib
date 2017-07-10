@@ -17,7 +17,7 @@
 ERLANG_MK_FILENAME := $(realpath $(lastword $(MAKEFILE_LIST)))
 export ERLANG_MK_FILENAME
 
-ERLANG_MK_VERSION = 2017.05.18
+ERLANG_MK_VERSION = 2017.07.06-1-gff27159
 ERLANG_MK_WITHOUT = 
 
 # Make 3.81 and 3.82 are deprecated.
@@ -2023,6 +2023,14 @@ pkg_ibrowse_fetch = git
 pkg_ibrowse_repo = https://github.com/cmullaparthi/ibrowse
 pkg_ibrowse_commit = master
 
+PACKAGES += idna
+pkg_idna_name = idna
+pkg_idna_description = Erlang IDNA lib
+pkg_idna_homepage = https://github.com/benoitc/erlang-idna
+pkg_idna_fetch = git
+pkg_idna_repo = https://github.com/benoitc/erlang-idna
+pkg_idna_commit = master
+
 PACKAGES += ierlang
 pkg_ierlang_name = ierlang
 pkg_ierlang_description = An Erlang language kernel for IPython.
@@ -2298,9 +2306,9 @@ pkg_kvs_commit = master
 PACKAGES += lager
 pkg_lager_name = lager
 pkg_lager_description = A logging framework for Erlang/OTP.
-pkg_lager_homepage = https://github.com/basho/lager
+pkg_lager_homepage = https://github.com/erlang-lager/lager
 pkg_lager_fetch = git
-pkg_lager_repo = https://github.com/basho/lager
+pkg_lager_repo = https://github.com/erlang-lager/lager
 pkg_lager_commit = master
 
 PACKAGES += lager_amqp_backend
@@ -2314,9 +2322,9 @@ pkg_lager_amqp_backend_commit = master
 PACKAGES += lager_syslog
 pkg_lager_syslog_name = lager_syslog
 pkg_lager_syslog_description = Syslog backend for lager
-pkg_lager_syslog_homepage = https://github.com/basho/lager_syslog
+pkg_lager_syslog_homepage = https://github.com/erlang-lager/lager_syslog
 pkg_lager_syslog_fetch = git
-pkg_lager_syslog_repo = https://github.com/basho/lager_syslog
+pkg_lager_syslog_repo = https://github.com/erlang-lager/lager_syslog
 pkg_lager_syslog_commit = master
 
 PACKAGES += lambdapad
@@ -4579,7 +4587,7 @@ define dep_autopatch_appsrc_script.erl
 	AppSrc = "$(call core_native_path,$(DEPS_DIR)/$1/src/$1.app.src)",
 	AppSrcScript = AppSrc ++ ".script",
 	Bindings = erl_eval:new_bindings(),
-	{ok, Conf} = file:script(AppSrcScript, Bindings),
+	{ok, [Conf]} = file:script(AppSrcScript, Bindings),
 	ok = file:write_file(AppSrc, io_lib:format("~p.~n", [Conf])),
 	halt()
 endef
@@ -6433,6 +6441,60 @@ apps-eunit:
 endif
 endif
 
+# Copyright (c) 2015-2017, Loïc Hoguin <essen@ninenines.eu>
+# This file is part of erlang.mk and subject to the terms of the ISC License.
+
+ifeq ($(filter proper,$(DEPS) $(TEST_DEPS)),proper)
+.PHONY: proper
+
+# Targets.
+
+tests:: proper
+
+define proper_check.erl
+	code:add_pathsa(["$(call core_native_path,$(CURDIR)/ebin)", "$(call core_native_path,$(DEPS_DIR)/*/ebin)"]),
+	Module = fun(M) ->
+		[true] =:= lists:usort([
+			case atom_to_list(F) of
+				"prop_" ++ _ ->
+					io:format("Testing ~p:~p/0~n", [M, F]),
+					proper:quickcheck(M:F());
+				_ ->
+					true
+			end
+		|| {F, 0} <- M:module_info(exports)])
+	end,
+	try
+		case $(1) of
+			all -> [true] =:= lists:usort([Module(M) || M <- [$(call comma_list,$(3))]]);
+			module -> Module($(2));
+			function -> proper:quickcheck($(2))
+		end
+	of
+		true -> halt(0);
+		_ -> halt(1)
+	catch error:undef ->
+		io:format("Undefined property or module?~n~p~n", [erlang:get_stacktrace()]),
+		halt(0)
+	end.
+endef
+
+ifdef t
+ifeq (,$(findstring :,$(t)))
+proper: test-build
+	$(verbose) $(call erlang,$(call proper_check.erl,module,$(t)))
+else
+proper: test-build
+	$(verbose) echo Testing $(t)/0
+	$(verbose) $(call erlang,$(call proper_check.erl,function,$(t)()))
+endif
+else
+proper: test-build
+	$(eval MODULES := $(patsubst %,'%',$(sort $(notdir $(basename $(wildcard ebin/*.beam))))))
+	$(gen_verbose) $(call erlang,$(call proper_check.erl,all,undefined,$(MODULES)))
+endif
+endif
+
 # Copyright (c) 2013-2016, Loïc Hoguin <essen@ninenines.eu>
 # This file is part of erlang.mk and subject to the terms of the ISC License.
 
@@ -6443,7 +6505,7 @@ endif
 RELX ?= $(ERLANG_MK_TMP)/relx
 RELX_CONFIG ?= $(CURDIR)/relx.config
 
-RELX_URL ?= https://github.com/erlware/relx/releases/download/v3.19.0/relx
+RELX_URL ?= https://github.com/erlware/relx/releases/download/v3.23.0/relx
 RELX_OPTS ?=
 RELX_OUTPUT_DIR ?= _rel
 RELX_REL_EXT ?=
@@ -6590,7 +6652,7 @@ define triq_check.erl
 		true -> halt(0);
 		_ -> halt(1)
 	catch error:undef ->
-		io:format("Undefined property or module~n"),
+		io:format("Undefined property or module?~n~p~n", [erlang:get_stacktrace()]),
 		halt(0)
 	end.
 endef

@@ -20,7 +20,7 @@
 -export([rfc7231/1]).
 
 -ifdef(TEST).
--include_lib("triq/include/triq.hrl").
+-include_lib("proper/include/proper.hrl").
 -endif.
 
 %% @doc Parse the HTTP date (IMF-fixdate, rfc850, asctime).
@@ -143,12 +143,12 @@ asctime_day(D1, D2) -> (D1 - $0) * 10 + (D2 - $0).
 -ifdef(TEST).
 day_name() -> oneof(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]).
 day_name_l() -> oneof(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]).
-year() -> int(1951, 2050).
-month() -> int(1, 12).
-day() -> int(1, 31).
-hour() -> int(23).
-minute() -> int(59).
-second() -> int(60).
+year() -> integer(1951, 2050).
+month() -> integer(1, 12).
+day() -> integer(1, 31).
+hour() -> integer(0, 23).
+minute() -> integer(0, 59).
+second() -> integer(0, 60).
 
 fixdate_gen() ->
 	?LET({DayName, Y, Mo, D, H, Mi, S},

@@ -13,4 +13,4 @@ is ignored, they are all returned.
 == Support
 
 * Official IRC Channel: #ninenines on irc.freenode.net
-* http://ninenines.eu/services[Commercial Support]
+* https://ninenines.eu/services[Commercial Support]

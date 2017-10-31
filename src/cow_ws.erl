@@ -151,12 +151,27 @@ init_permessage_deflate(InflateWindowBits, DeflateWindowBits, Opts) ->
 		maps:get(mem_level, Opts, 8),
 		maps:get(strategy, Opts, default)),
 	%% Set the owner pid of the zlib contexts if requested.
+	%%
+	%% The zlib port became a reference in OTP 20.1+. There
+	%% was however no way to change the controlling process
+	%% until the OTP 20.1.3 patch version. Since we can't
+	%% enable compression for 20.1, 20.1.1 and 20.1.2 we
+	%% explicitly crash. The caller should ignore this extension.
 	_ = case Opts of
-		#{owner := Pid} ->
+		#{owner := Pid} when is_port(Inflate) ->
 			true = erlang:port_connect(Inflate, Pid),
 			true = unlink(Inflate),
 			true = erlang:port_connect(Deflate, Pid),
 			unlink(Deflate);
+		#{owner := Pid} ->
+			case erlang:function_exported(zlib, set_controlling_process, 2) of
+				true ->
+					zlib:set_controlling_process(Inflate, Pid),
+					zlib:set_controlling_process(Deflate, Pid);
+				false ->
+					exit({error, incompatible_zlib_version,
+						'OTP 20.1, 20.1.1 and 20.1.2 are missing required functionality.'})
+			end;
 		_ ->
 			true
 	end,

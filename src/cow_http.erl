@@ -23,6 +23,7 @@
 
 -export([request/4]).
 -export([response/3]).
+-export([headers/1]).
 -export([version/1]).
 
 -type version() :: 'HTTP/1.0' | 'HTTP/1.1'.
@@ -254,8 +255,11 @@ request(Method, Path, Version, Headers) ->
 -spec response(status() | binary(), version(), headers()) -> iodata().
 response(Status, Version, Headers) ->
 	[version(Version), <<" ">>, status(Status), <<"\r\n">>,
-		[[N, <<": ">>, V, <<"\r\n">>] || {N, V} <- Headers],
-		<<"\r\n">>].
+		headers(Headers), <<"\r\n">>].
+
+-spec headers(headers()) -> iodata().
+headers(Headers) ->
+	[[N, <<": ">>, V, <<"\r\n">>] || {N, V} <- Headers].
 
 %% @doc Return the version as a binary.
 

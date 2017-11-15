@@ -199,8 +199,15 @@ chunked_len(<< $f, R/bits >>, S, A, Len) -> chunked_len(R, S, A, Len * 16 + 15);
 %% chunk extensions (unlikely) we will need to change this clause too.
 chunked_len(<< C, R/bits >>, S, A, Len) when C =/= $\r -> skip_chunk_ext(R, S, A, Len);
 %% Final chunk.
-chunked_len(<< "\r\n\r\n", R/bits >>, S, <<>>, 0) -> {done, S, R};
-chunked_len(<< "\r\n\r\n", R/bits >>, S, A, 0) -> {done, A, S, R};
+%%
+%% When trailers are following we simply return them as the Rest.
+%% Then the user code can decide to call the stream_trailers function
+%% to parse them. The user can therefore ignore trailers as necessary
+%% if they do not wish to handle them.
+chunked_len(<< "\r\n\r\n", R/bits >>, _, <<>>, 0) -> {done, no_trailers, R};
+chunked_len(<< "\r\n\r\n", R/bits >>, _, A, 0) -> {done, A, no_trailers, R};
+chunked_len(<< "\r\n", R/bits >>, _, <<>>, 0) when byte_size(R) > 2 -> {done, trailers, R};
+chunked_len(<< "\r\n", R/bits >>, _, A, 0) when byte_size(R) > 2 -> {done, A, trailers, R};
 chunked_len(_, _, _, 0) -> more;
 %% Normal chunk. Add 2 to Len for the trailing \r\n.
 chunked_len(<< "\r\n", R/bits >>, S, A, Len) -> {next, R, {Len + 2, S}, A};
@@ -229,7 +236,7 @@ last_chunk() ->
 
 -ifdef(TEST).
 stream_chunked_identity_test() ->
-	{done, <<"Wikipedia in\r\n\r\nchunks.">>, 23, <<>>}
+	{done, <<"Wikipedia in\r\n\r\nchunks.">>, no_trailers, <<>>}
 		= stream_chunked(iolist_to_binary([
 			chunk("Wiki"),
 			chunk("pedia"),
@@ -239,8 +246,8 @@ stream_chunked_identity_test() ->
 	ok.
 
 stream_chunked_one_pass_test() ->
-	{done, 0, <<>>} = stream_chunked(<<"0\r\n\r\n">>, {0, 0}),
-	{done, <<"Wikipedia in\r\n\r\nchunks.">>, 23, <<>>}
+	{done, no_trailers, <<>>} = stream_chunked(<<"0\r\n\r\n">>, {0, 0}),
+	{done, <<"Wikipedia in\r\n\r\nchunks.">>, no_trailers, <<>>}
 		= stream_chunked(<<
 			"4\r\n"
 			"Wiki\r\n"
@@ -251,7 +258,7 @@ stream_chunked_one_pass_test() ->
 			"0\r\n"
 			"\r\n">>, {0, 0}),
 	%% Same but with extra spaces or chunk extensions.
-	{done, <<"Wikipedia in\r\n\r\nchunks.">>, 23, <<>>}
+	{done, <<"Wikipedia in\r\n\r\nchunks.">>, no_trailers, <<>>}
 		= stream_chunked(<<
 			"4 \r\n"
 			"Wiki\r\n"
@@ -261,6 +268,19 @@ stream_chunked_one_pass_test() ->
 			" in\r\n\r\nchunks.\r\n"
 			"0;ext\r\n"
 			"\r\n">>, {0, 0}),
+	%% Same but with trailers.
+	{done, <<"Wikipedia in\r\n\r\nchunks.">>, trailers, Rest}
+		= stream_chunked(<<
+			"4\r\n"
+			"Wiki\r\n"
+			"5\r\n"
+			"pedia\r\n"
+			"e\r\n"
+			" in\r\n\r\nchunks.\r\n"
+			"0\r\n"
+			"x-foo-bar: bar foo\r\n"
+			"\r\n">>, {0, 0}),
+	{[{<<"x-foo-bar">>, <<"bar foo">>}], <<>>} = cow_http:parse_headers(Rest),
 	ok.
 
 stream_chunked_n_passes_test() ->
@@ -270,7 +290,7 @@ stream_chunked_n_passes_test() ->
 	{more, <<"Wiki">>, 0, S2} = stream_chunked(<<"Wiki\r\n">>, S1),
 	{more, <<"pedia">>, <<"e\r">>, S3} = stream_chunked(<<"5\r\npedia\r\ne\r">>, S2),
 	{more, <<" in\r\n\r\nchunks.">>, 2, S4} = stream_chunked(<<"e\r\n in\r\n\r\nchunks.">>, S3),
-	{done, 23, <<>>} = stream_chunked(<<"\r\n0\r\n\r\n">>, S4),
+	{done, no_trailers, <<>>} = stream_chunked(<<"\r\n0\r\n\r\n">>, S4),
 	%% A few extra for coverage purposes.
 	more = stream_chunked(<<"\n3">>, {1, 0}),
 	{more, <<"abc">>, 2, {2, 3}} = stream_chunked(<<"\n3\r\nabc">>, {1, 0}),

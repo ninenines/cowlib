@@ -18,12 +18,11 @@ DIALYZER_OPTS = -Werror_handling -Wunmatched_returns
 
 LOCAL_DEPS = crypto
 
-TEST_DEPS = horse proper
+TEST_DEPS = ci.erlang.mk horse proper
 dep_horse = git https://github.com/ninenines/horse.git master
 
 # CI configuration.
 
-BUILD_DEPS = ci.erlang.mk
 dep_ci.erlang.mk = git https://github.com/ninenines/ci.erlang.mk master
 DEP_EARLY_PLUGINS = ci.erlang.mk
 

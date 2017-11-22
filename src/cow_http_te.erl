@@ -34,6 +34,8 @@
 	| {done, Data::binary(), TotalLen::non_neg_integer(), Rest::binary()}.
 -export_type([decode_ret/0]).
 
+-include("cow_parse.hrl").
+
 -ifdef(TEST).
 dripfeed(<< C, Rest/bits >>, Acc, State, F) ->
 	case F(<< Acc/binary, C >>, State) of
@@ -164,8 +166,9 @@ stream_chunked(Data, {Rem, Streamed}, Acc) when Rem > 2 ->
 			stream_chunked(Rest, {0, Streamed + RemSize}, << Acc/binary, Chunk/binary >>);
 		<< Chunk:RemSize/binary, "\r" >> ->
 			{more, << Acc/binary, Chunk/binary >>, {1, Streamed + RemSize}};
-		%% Everything in Data is part of the chunk.
-		_ ->
+		%% Everything in Data is part of the chunk. If we have more
+		%% data than the chunk accepts, then this is an error and we crash.
+		_ when DataSize =< RemSize ->
 			Rem2 = Rem - DataSize,
 			{more, << Acc/binary, Data/binary >>, Rem2, {Rem2, Streamed + DataSize}}
 	end.
@@ -197,7 +200,7 @@ chunked_len(<< $f, R/bits >>, S, A, Len) -> chunked_len(R, S, A, Len * 16 + 15);
 %% Note that we currently skip the first character we encounter here,
 %% and not in the skip_chunk_ext function. If we latter implement
 %% chunk extensions (unlikely) we will need to change this clause too.
-chunked_len(<< C, R/bits >>, S, A, Len) when C =/= $\r -> skip_chunk_ext(R, S, A, Len);
+chunked_len(<< C, R/bits >>, S, A, Len) when ?IS_WS(C); C =:= $; -> skip_chunk_ext(R, S, A, Len, 0);
 %% Final chunk.
 %%
 %% When trailers are following we simply return them as the Rest.
@@ -216,10 +219,15 @@ chunked_len(<<"\r">>, S, A, _) -> {more, {0, S}, A};
 chunked_len(<<>>, _, <<>>, _) -> more;
 chunked_len(<<>>, S, A, _) -> {more, {0, S}, A}.
 
-%% @todo We should probably limit how much we skip.
-skip_chunk_ext(R = << "\r", _/bits >>, S, A, Len) -> chunked_len(R, S, A, Len);
-skip_chunk_ext(R = <<>>, S, A, Len) -> chunked_len(R, S, A, Len);
-skip_chunk_ext(<< _, R/bits >>, S, A, Len) -> skip_chunk_ext(R, S, A, Len).
+skip_chunk_ext(R = << "\r", _/bits >>, S, A, Len, _) -> chunked_len(R, S, A, Len);
+skip_chunk_ext(R = <<>>, S, A, Len, _) -> chunked_len(R, S, A, Len);
+%% We skip up to 128 characters of chunk extensions. The value
+%% is hardcoded: chunk extensions are very rarely seen in the
+%% wild and Cowboy doesn't do anything with them anyway.
+%%
+%% Line breaks are not allowed in the middle of chunk extensions.
+skip_chunk_ext(<< C, R/bits >>, S, A, Len, Skipped) when C =/= $\n, Skipped < 128 ->
+	skip_chunk_ext(R, S, A, Len, Skipped + 1).
 
 %% @doc Encode a chunk.
 

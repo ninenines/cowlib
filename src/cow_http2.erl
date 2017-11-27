@@ -240,8 +240,8 @@ parse(<< 4:24, 8:8, _:9, 0:31, _:1, 0:31, _/bits >>) ->
 	{connection_error, protocol_error, 'WINDOW_UPDATE frames MUST have a non-zero increment. (RFC7540 6.9)'};
 parse(<< 4:24, 8:8, _:9, 0:31, _:1, Increment:31, Rest/bits >>) ->
 	{ok, {window_update, Increment}, Rest};
-parse(<< 4:24, 8:8, _:9, StreamID:31, _:1, 0:31, _/bits >>) ->
-	{stream_error, StreamID, protocol_error, 'WINDOW_UPDATE frames MUST have a non-zero increment. (RFC7540 6.9)'};
+parse(<< 4:24, 8:8, _:9, StreamID:31, _:1, 0:31, Rest/bits >>) ->
+	{stream_error, StreamID, protocol_error, 'WINDOW_UPDATE frames MUST have a non-zero increment. (RFC7540 6.9)', Rest};
 parse(<< 4:24, 8:8, _:9, StreamID:31, _:1, Increment:31, Rest/bits >>) ->
 	{ok, {window_update, StreamID, Increment}, Rest};
 parse(<< Len:24, 8:8, _/bits >>) when Len =/= 4->
@@ -345,7 +345,6 @@ parse_settings_payload(<< _:48, Rest/bits >>, Len, Settings) ->
 
 %% Building.
 
-%% @todo Check size and create multiple frames if needed.
 data(StreamID, IsFin, Data) ->
 	[data_header(StreamID, IsFin, iolist_size(Data)), Data].
 

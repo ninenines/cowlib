@@ -367,13 +367,21 @@ rst_stream(StreamID, Reason) ->
 	ErrorCode = error_code(Reason),
 	<< 4:24, 3:8, 0:9, StreamID:31, ErrorCode:32 >>.
 
-%% @todo Actually implement it. :-)
-settings(#{}) ->
-	<< 0:24, 4:8, 0:40 >>.
+settings(Settings) ->
+	Payload = settings_payload(Settings),
+	Len = iolist_size(Payload),
+	[<< Len:24, 4:8, 0:40 >>, Payload].
 
-%% @todo Actually implement it. :-)
-settings_payload(#{}) ->
-	<<>>.
+settings_payload(Settings) ->
+	[case Key of
+		header_table_size -> <<1:16, Value:32>>;
+		enable_push when Value -> <<2:16, 1:32>>;
+		enable_push -> <<2:16, 0:32>>;
+		max_concurrent_streams -> <<3:16, Value:32>>;
+		initial_window_size -> <<4:16, Value:32>>;
+		max_frame_size -> <<5:16, Value:32>>;
+		max_header_list_size -> <<6:16, Value:32>>
+	end || {Key, Value} <- maps:to_list(Settings)].
 
 settings_ack() ->
 	<< 0:24, 4:8, 1:8, 0:32 >>.

@@ -317,6 +317,7 @@ status(415) -> <<"415 Unsupported Media Type">>;
 status(416) -> <<"416 Requested Range Not Satisfiable">>;
 status(417) -> <<"417 Expectation Failed">>;
 status(418) -> <<"418 I'm a teapot">>;
+status(421) -> <<"421 Misdirected Request">>;
 status(422) -> <<"422 Unprocessable Entity">>;
 status(423) -> <<"423 Locked">>;
 status(424) -> <<"424 Failed Dependency">>;

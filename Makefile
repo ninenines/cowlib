@@ -18,7 +18,7 @@ DIALYZER_OPTS = -Werror_handling -Wunmatched_returns
 
 LOCAL_DEPS = crypto
 
-TEST_DEPS = ci.erlang.mk horse proper
+TEST_DEPS = $(if $(CI_ERLANG_MK),ci.erlang.mk) horse proper
 dep_horse = git https://github.com/ninenines/horse.git master
 
 # CI configuration.

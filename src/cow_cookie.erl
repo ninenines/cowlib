@@ -53,16 +53,16 @@ skip_cookie(<< $;, Rest/binary >>, Acc) ->
 skip_cookie(<< _, Rest/binary >>, Acc) ->
 	skip_cookie(Rest, Acc).
 
-parse_cookie_name(<<>>, _, _) ->
-	error(badarg);
+parse_cookie_name(<<>>, Acc, Name) ->
+	lists:reverse([{Name, <<>>}|Acc]);
 parse_cookie_name(<< $=, _/binary >>, _, <<>>) ->
 	error(badarg);
 parse_cookie_name(<< $=, Rest/binary >>, Acc, Name) ->
 	parse_cookie_value(Rest, Acc, Name, <<>>);
 parse_cookie_name(<< $,, _/binary >>, _, _) ->
 	error(badarg);
-parse_cookie_name(<< $;, _/binary >>, _, _) ->
-	error(badarg);
+parse_cookie_name(<< $;, Rest/binary >>, Acc, Name) ->
+	parse_cookie(Rest, [{Name, <<>>}|Acc]);
 parse_cookie_name(<< $\s, _/binary >>, _, _) ->
 	error(badarg);
 parse_cookie_name(<< $\t, _/binary >>, _, _) ->
@@ -152,7 +152,10 @@ parse_cookie_test_() ->
 		{<<"foo=\\\";;bar=good ">>,
 			[{<<"foo">>, <<"\\\"">>}, {<<"bar">>, <<"good">>}]},
 		{<<>>, []}, %% Flash player.
-		{<<"foo=bar , baz=wibble ">>, [{<<"foo">>, <<"bar , baz=wibble">>}]}
+		{<<"foo=bar , baz=wibble ">>, [{<<"foo">>, <<"bar , baz=wibble">>}]},
+		%% Technically invalid, but seen in the wild
+		{<<"foo">>, [{<<"foo">>, <<"">>}]},
+		{<<"bar;foo=1">>, [{<<"bar">>, <<"">>}, {<<"foo">>, <<"1">>}]}
 	],
 	[{V, fun() -> R = parse_cookie(V) end} || {V, R} <- Tests].
 
@@ -160,9 +163,7 @@ parse_cookie_error_test_() ->
 	%% Value.
 	Tests = [
 		<<"=">>,
-		<<"  foo ; bar  ">>,
-		<<"foo=\\\";;bar ">>,
-		<<"foo=\"\\\";bar">>
+		<<"foo ">>
 	],
 	[{V, fun() -> {'EXIT', {badarg, _}} = (catch parse_cookie(V)) end} || V <- Tests].
 -endif.

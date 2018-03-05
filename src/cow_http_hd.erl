@@ -2624,12 +2624,13 @@ parse_sec_websocket_key(SecWebSocketKey) ->
 
 -spec parse_sec_websocket_protocol_req(binary()) -> [binary()].
 parse_sec_websocket_protocol_req(SecWebSocketProtocol) ->
-	nonempty(token_ci_list(SecWebSocketProtocol, [])).
+	nonempty(token_list(SecWebSocketProtocol, [])).
 
 -ifdef(TEST).
 parse_sec_websocket_protocol_req_test_() ->
 	Tests = [
-		{<<"chat, superchat">>, [<<"chat">>, <<"superchat">>]}
+		{<<"chat, superchat">>, [<<"chat">>, <<"superchat">>]},
+		{<<"Chat, SuperChat">>, [<<"Chat">>, <<"SuperChat">>]}
 	],
 	[{V, fun() -> R = parse_sec_websocket_protocol_req(V) end} || {V, R} <- Tests].
 
@@ -2649,23 +2650,21 @@ horse_parse_sec_websocket_protocol_req() ->
 %% @doc Parse the Sec-Websocket-Protocol response header.
 
 -spec parse_sec_websocket_protocol_resp(binary()) -> binary().
-parse_sec_websocket_protocol_resp(<< C, R/bits >>) when ?IS_TOKEN(C) ->
-	?LOWER(token_ci, R, <<>>).
-
-token_ci(<<>>, T) -> T;
-token_ci(<< C, R/bits >>, T) when ?IS_TOKEN(C) ->
-	?LOWER(token_ci, R, T).
+parse_sec_websocket_protocol_resp(Protocol) ->
+	true = <<>> =/= Protocol,
+	ok = validate_token(Protocol),
+	Protocol.
 
 -ifdef(TEST).
 prop_parse_sec_websocket_protocol_resp() ->
 	?FORALL(T,
 		token(),
-		?LOWER(T) =:= parse_sec_websocket_protocol_resp(T)).
+		T =:= parse_sec_websocket_protocol_resp(T)).
 
 parse_sec_websocket_protocol_resp_test_() ->
 	Tests = [
 		{<<"chat">>, <<"chat">>},
-		{<<"CHAT">>, <<"chat">>}
+		{<<"CHAT">>, <<"CHAT">>}
 	],
 	[{V, fun() -> R = parse_sec_websocket_protocol_resp(V) end} || {V, R} <- Tests].
 

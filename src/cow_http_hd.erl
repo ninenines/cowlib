@@ -3201,13 +3201,53 @@ horse_parse_www_authenticate() ->
 
 -spec parse_x_forwarded_for(binary()) -> [binary()].
 parse_x_forwarded_for(XForwardedFor) ->
-	nonempty(token_list(XForwardedFor, [])).
+	nonempty(nodeid_list(XForwardedFor, [])).
+
+-define(IS_NODEID_TOKEN(C),
+	?IS_ALPHA(C) or ?IS_DIGIT(C)
+		or (C =:= $:) or (C =:= $.) or (C =:= $_)
+		or (C =:= $-) or (C =:= $[) or (C =:= $])).
+
+nodeid_list(<<>>, Acc) -> lists:reverse(Acc);
+nodeid_list(<<C, R/bits>>, Acc) when ?IS_WS_COMMA(C) -> nodeid_list(R, Acc);
+nodeid_list(<<C, R/bits>>, Acc) when ?IS_NODEID_TOKEN(C) -> nodeid(R, Acc, <<C>>).
+
+nodeid(<<C, R/bits>>, Acc, T) when ?IS_NODEID_TOKEN(C) -> nodeid(R, Acc, <<T/binary, C>>);
+nodeid(R, Acc, T) -> nodeid_list_sep(R, [T|Acc]).
+
+nodeid_list_sep(<<>>, Acc) -> lists:reverse(Acc);
+nodeid_list_sep(<<C, R/bits>>, Acc) when ?IS_WS(C) -> nodeid_list_sep(R, Acc);
+nodeid_list_sep(<<$,, R/bits>>, Acc) -> nodeid_list(R, Acc).
 
 -ifdef(TEST).
 parse_x_forwarded_for_test_() ->
 	Tests = [
-		{<<"client, proxy1, proxy2">>, [<<"client">>, <<"proxy1">>, <<"proxy2">>]},
-		{<<"128.138.243.150, unknown, 192.52.106.30">>, [<<"128.138.243.150">>, <<"unknown">>, <<"192.52.106.30">>]}
+		{<<"client, proxy1, proxy2">>,
+			[<<"client">>, <<"proxy1">>, <<"proxy2">>]},
+		{<<"128.138.243.150, unknown, 192.52.106.30">>,
+			[<<"128.138.243.150">>, <<"unknown">>, <<"192.52.106.30">>]},
+		%% Examples from Mozilla DN.
+		{<<"2001:db8:85a3:8d3:1319:8a2e:370:7348">>,
+			[<<"2001:db8:85a3:8d3:1319:8a2e:370:7348">>]},
+		{<<"203.0.113.195">>,
+			[<<"203.0.113.195">>]},
+		{<<"203.0.113.195, 70.41.3.18, 150.172.238.178">>,
+			[<<"203.0.113.195">>, <<"70.41.3.18">>, <<"150.172.238.178">>]},
+		%% Examples from RFC7239 modified for x-forwarded-for.
+		{<<"[2001:db8:cafe::17]:4711">>,
+			[<<"[2001:db8:cafe::17]:4711">>]},
+		{<<"192.0.2.43, 198.51.100.17">>,
+			[<<"192.0.2.43">>, <<"198.51.100.17">>]},
+		{<<"_hidden">>,
+			[<<"_hidden">>]},
+		{<<"192.0.2.43,[2001:db8:cafe::17],unknown">>,
+			[<<"192.0.2.43">>, <<"[2001:db8:cafe::17]">>, <<"unknown">>]},
+		{<<"192.0.2.43, [2001:db8:cafe::17], unknown">>,
+			[<<"192.0.2.43">>, <<"[2001:db8:cafe::17]">>, <<"unknown">>]},
+		{<<"192.0.2.43, 2001:db8:cafe::17">>,
+			[<<"192.0.2.43">>, <<"2001:db8:cafe::17">>]},
+		{<<"192.0.2.43, [2001:db8:cafe::17]">>,
+			[<<"192.0.2.43">>, <<"[2001:db8:cafe::17]">>]}
 	],
 	[{V, fun() -> R = parse_x_forwarded_for(V) end} || {V, R} <- Tests].
 

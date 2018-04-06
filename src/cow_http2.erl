@@ -340,6 +340,14 @@ parse_settings_payload(<< 5:16, _:32, _/bits >>, _, _) ->
 %% SETTINGS_MAX_HEADER_LIST_SIZE.
 parse_settings_payload(<< 6:16, Value:32, Rest/bits >>, Len, Settings) ->
 	parse_settings_payload(Rest, Len - 6, Settings#{max_header_list_size => Value});
+%% SETTINGS_ENABLE_CONNECT_PROTOCOL.
+parse_settings_payload(<< 8:16, 0:32, Rest/bits >>, Len, Settings) ->
+	parse_settings_payload(Rest, Len - 6, Settings#{enable_connect_protocol => false});
+parse_settings_payload(<< 8:16, 1:32, Rest/bits >>, Len, Settings) ->
+	parse_settings_payload(Rest, Len - 6, Settings#{enable_connect_protocol => true});
+parse_settings_payload(<< 8:16, _:32, _/bits >>, _, _) ->
+	{connection_error, protocol_error, 'The SETTINGS_ENABLE_CONNECT_PROTOCOL value MUST be 0 or 1. (draft-h2-websockets-01 3)'};
+%% Ignore unknown settings.
 parse_settings_payload(<< _:48, Rest/bits >>, Len, Settings) ->
 	parse_settings_payload(Rest, Len - 6, Settings).
 
@@ -380,7 +388,9 @@ settings_payload(Settings) ->
 		max_concurrent_streams -> <<3:16, Value:32>>;
 		initial_window_size -> <<4:16, Value:32>>;
 		max_frame_size -> <<5:16, Value:32>>;
-		max_header_list_size -> <<6:16, Value:32>>
+		max_header_list_size -> <<6:16, Value:32>>;
+		enable_connect_protocol when Value -> <<8:16, 1:32>>;
+		enable_connect_protocol -> <<8:16, 0:32>>
 	end || {Key, Value} <- maps:to_list(Settings)].
 
 settings_ack() ->

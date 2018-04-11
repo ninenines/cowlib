@@ -184,7 +184,7 @@ parse(<< Len:24, 4:8, _:7, 0:1, _:1, 0:31, _/bits >>) when Len rem 6 =/= 0 ->
 	{connection_error, frame_size_error, 'SETTINGS frames MUST have a length multiple of 6. (RFC7540 6.5)'};
 parse(<< Len:24, 4:8, _:7, 0:1, _:1, 0:31, Rest/bits >>) when byte_size(Rest) >= Len ->
 	parse_settings_payload(Rest, Len, #{});
-parse(<< _:24, 4:8, _/bits >>) ->
+parse(<< _:24, 4:8, _:8, _:1, StreamID:31, _/bits >>) when StreamID =/= 0 ->
 	{connection_error, protocol_error, 'SETTINGS frames MUST NOT be associated with a stream. (RFC7540 6.5)'};
 %%
 %% PUSH_PROMISE frames.
@@ -277,6 +277,14 @@ parse_windows_update_test() ->
 	_ = [more = parse(binary:part(WindowUpdate, 0, I)) || I <- lists:seq(1, byte_size(WindowUpdate) - 1)],
 	{ok, {window_update, 12345}, <<>>} = parse(WindowUpdate),
 	{ok, {window_update, 12345}, << 42 >>} = parse(<< WindowUpdate/binary, 42 >>),
+	ok.
+
+parse_settings_test() ->
+	Settings = << 0:24, 4:8, 1:8, 0:8 >>,
+	more = parse(Settings),
+	{ok, settings_ack, <<>>} = parse(<< Settings/binary, 0:24 >>),
+	{connection_error, protocol_error,
+		'SETTINGS frames MUST NOT be associated with a stream. (RFC7540 6.5)'} = parse(<< 0:24, 4:8, 1:8, 0:1, 1:31 >>),
 	ok.
 -endif.
 

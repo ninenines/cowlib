@@ -575,7 +575,7 @@ table_update_decode_test() ->
 		{<<"date">>, <<"Mon, 21 Oct 2013 20:13:21 GMT">>},
 		{<<"location">>, <<"https://www.example.com">>}
 	],
-	#state{size=222, dyn_table=[
+	#state{size=222, configured_max_size=256, dyn_table=[
 		{63,{<<"location">>, <<"https://www.example.com">>}},
 		{65,{<<"date">>, <<"Mon, 21 Oct 2013 20:13:21 GMT">>}},
 		{52,{<<"cache-control">>, <<"private">>}},
@@ -596,7 +596,7 @@ table_update_decode_test() ->
 		{<<"date">>, <<"Mon, 21 Oct 2013 20:13:21 GMT">>},
 		{<<"location">>, <<"https://www.example.com">>}
 	],
-	#state{size=264, dyn_table=[
+	#state{size=264, configured_max_size=512, dyn_table=[
 		{42,{<<":status">>, <<"307">>}},
 		{63,{<<"location">>, <<"https://www.example.com">>}},
 		{65,{<<"date">>, <<"Mon, 21 Oct 2013 20:13:21 GMT">>}},
@@ -617,7 +617,7 @@ table_update_decode_smaller_test() ->
 		{<<"date">>, <<"Mon, 21 Oct 2013 20:13:21 GMT">>},
 		{<<"location">>, <<"https://www.example.com">>}
 	],
-	#state{size=222, dyn_table=[
+	#state{size=222, configured_max_size=256, dyn_table=[
 		{63,{<<"location">>, <<"https://www.example.com">>}},
 		{65,{<<"date">>, <<"Mon, 21 Oct 2013 20:13:21 GMT">>}},
 		{52,{<<"cache-control">>, <<"private">>}},
@@ -638,7 +638,7 @@ table_update_decode_smaller_test() ->
 		{<<"date">>, <<"Mon, 21 Oct 2013 20:13:21 GMT">>},
 		{<<"location">>, <<"https://www.example.com">>}
 	],
-	#state{size=264, dyn_table=[
+	#state{size=264, configured_max_size=512, dyn_table=[
 		{42,{<<":status">>, <<"307">>}},
 		{63,{<<"location">>, <<"https://www.example.com">>}},
 		{65,{<<"date">>, <<"Mon, 21 Oct 2013 20:13:21 GMT">>}},
@@ -659,7 +659,7 @@ table_update_decode_too_large_test() ->
 		{<<"date">>, <<"Mon, 21 Oct 2013 20:13:21 GMT">>},
 		{<<"location">>, <<"https://www.example.com">>}
 	],
-	#state{size=222, dyn_table=[
+	#state{size=222, configured_max_size=256, dyn_table=[
 		{63,{<<"location">>, <<"https://www.example.com">>}},
 		{65,{<<"date">>, <<"Mon, 21 Oct 2013 20:13:21 GMT">>}},
 		{52,{<<"cache-control">>, <<"private">>}},
@@ -687,7 +687,7 @@ table_update_decode_zero_test() ->
 		{<<"date">>, <<"Mon, 21 Oct 2013 20:13:21 GMT">>},
 		{<<"location">>, <<"https://www.example.com">>}
 	],
-	#state{size=222, dyn_table=[
+	#state{size=222, configured_max_size=256, dyn_table=[
 		{63,{<<"location">>, <<"https://www.example.com">>}},
 		{65,{<<"date">>, <<"Mon, 21 Oct 2013 20:13:21 GMT">>}},
 		{52,{<<"cache-control">>, <<"private">>}},
@@ -706,7 +706,7 @@ table_update_decode_zero_test() ->
 		<<2#00100000, 2#00111111>>, MaxSize,
 		<<16#488264025885aec3771a4b6196d07abe941054d444a8200595040b8166e082a62d1bff6e919d29ad171863c78f0b97c8e9ae82ae43d3:432>>]),
 		State2),
-	#state{size=222, dyn_table=[
+	#state{size=222, configured_max_size=512, dyn_table=[
 		{63,{<<"location">>, <<"https://www.example.com">>}},
 		{65,{<<"date">>, <<"Mon, 21 Oct 2013 20:13:21 GMT">>}},
 		{52,{<<"cache-control">>, <<"private">>}},
@@ -1170,12 +1170,12 @@ table_update_encode_test() ->
 	],
 	{Encoded1, EncState1} = encode(Headers1, EncState0),
 	{Headers1, DecState1} = decode(iolist_to_binary(Encoded1), DecState0),
-	#state{size=222, dyn_table=[
+	#state{size=222, configured_max_size=256, dyn_table=[
 		{63,{<<"location">>, <<"https://www.example.com">>}},
 		{65,{<<"date">>, <<"Mon, 21 Oct 2013 20:13:21 GMT">>}},
 		{52,{<<"cache-control">>, <<"private">>}},
 		{42,{<<":status">>, <<"302">>}}]} = DecState1,
-	#state{size=222, dyn_table=[
+	#state{size=222, configured_max_size=256, dyn_table=[
 		{63,{<<"location">>, <<"https://www.example.com">>}},
 		{65,{<<"date">>, <<"Mon, 21 Oct 2013 20:13:21 GMT">>}},
 		{52,{<<"cache-control">>, <<"private">>}},
@@ -1512,9 +1512,9 @@ table_update_size(0, State) ->
 	State#state{size=0, max_size=0, dyn_table=[]};
 table_update_size(MaxSize, State=#state{max_size=MaxSize}) ->
 	State;
-table_update_size(MaxSize, #state{dyn_table=DynTable}) ->
+table_update_size(MaxSize, State=#state{dyn_table=DynTable}) ->
 	{DynTable2, Size} = table_resize(DynTable, MaxSize, 0, []),
-	#state{size=Size, max_size=MaxSize, dyn_table=DynTable2}.
+	State#state{size=Size, max_size=MaxSize, dyn_table=DynTable2}.
 
 -ifdef(TEST).
 prop_str_raw() ->

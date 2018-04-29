@@ -113,7 +113,7 @@ parse(<< 0:24, 1:8, _:4, 1:1, _:35, _/bits >>) ->
 	{connection_error, frame_size_error, 'HEADERS frames with padding flag MUST have a length > 0. (RFC7540 6.1)'};
 parse(<< Len:24, 1:8, _:2, 1:1, _:37, _/bits >>) when Len < 5 ->
 	{connection_error, frame_size_error, 'HEADERS frames with priority flag MUST have a length >= 5. (RFC7540 6.1)'};
-parse(<< Len:24, 1:8, _:2, 1:1, _:37, _/bits >>) when Len < 6 ->
+parse(<< Len:24, 1:8, _:2, 1:1, _:1, 1:1, _:35, _/bits >>) when Len < 6 ->
 	{connection_error, frame_size_error, 'HEADERS frames with padding and priority flags MUST have a length >= 6. (RFC7540 6.1)'};
 parse(<< Len0:24, 1:8, _:4, 1:1, _:35, PadLen:8, _/bits >>) when PadLen >= Len0 ->
 	{connection_error, protocol_error, 'Length of padding MUST be less than length of payload. (RFC7540 6.2)'};
@@ -134,6 +134,9 @@ parse(<< Len0:24, 1:8, _:2, 0:1, _:1, 1:1, FlagEndHeaders:1, _:1, FlagEndStream:
 			{connection_error, protocol_error, 'Padding octets MUST be set to zero. (RFC7540 6.2)'}
 	end;
 %% No padding, priority.
+parse(<< _:24, 1:8, _:2, 1:1, _:1, 0:1, _:4, StreamID:31, _:1, StreamID:31, _/bits >>) ->
+	{connection_error, protocol_error,
+		'HEADERS frames cannot define a stream that depends on itself. (RFC7540 5.3.1)'};
 parse(<< Len0:24, 1:8, _:2, 1:1, _:1, 0:1, FlagEndHeaders:1, _:1, FlagEndStream:1, _:1, StreamID:31,
 		E:1, DepStreamID:31, Weight:8, Rest0/bits >>) when byte_size(Rest0) >= Len0 - 5 ->
 	Len = Len0 - 5,
@@ -141,6 +144,9 @@ parse(<< Len0:24, 1:8, _:2, 1:1, _:1, 0:1, FlagEndHeaders:1, _:1, FlagEndStream:
 	{ok, {headers, StreamID, parse_fin(FlagEndStream), parse_head_fin(FlagEndHeaders),
 		parse_exclusive(E), DepStreamID, Weight + 1, HeaderBlockFragment}, Rest};
 %% Padding, priority.
+parse(<< _:24, 1:8, _:2, 1:1, _:1, 1:1, _:4, StreamID:31, _:9, StreamID:31, _/bits >>) ->
+	{connection_error, protocol_error,
+		'HEADERS frames cannot define a stream that depends on itself. (RFC7540 5.3.1)'};
 parse(<< Len0:24, 1:8, _:2, 1:1, _:1, 1:1, FlagEndHeaders:1, _:1, FlagEndStream:1, _:1, StreamID:31,
 		PadLen:8, E:1, DepStreamID:31, Weight:8, Rest0/bits >>) when byte_size(Rest0) >= Len0 - 6 ->
 	Len = Len0 - PadLen - 6,
@@ -156,6 +162,9 @@ parse(<< Len0:24, 1:8, _:2, 1:1, _:1, 1:1, FlagEndHeaders:1, _:1, FlagEndStream:
 %%
 parse(<< 5:24, 2:8, _:9, 0:31, _/bits >>) ->
 	{connection_error, protocol_error, 'PRIORITY frames MUST be associated with a stream. (RFC7540 6.3)'};
+parse(<< 5:24, 2:8, _:9, StreamID:31, _:1, StreamID:31, _:8, Rest/bits >>) ->
+	{stream_error, StreamID, protocol_error,
+		'PRIORITY frames cannot make a stream depend on itself. (RFC7540 5.3.1)', Rest};
 parse(<< 5:24, 2:8, _:9, StreamID:31, E:1, DepStreamID:31, Weight:8, Rest/bits >>) ->
 	{ok, {priority, StreamID, parse_exclusive(E), DepStreamID, Weight + 1}, Rest};
 %% @todo figure out how to best deal with frame size errors; if we have everything fine

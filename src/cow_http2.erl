@@ -391,9 +391,11 @@ settings_payload(Settings) ->
 		header_table_size -> <<1:16, Value:32>>;
 		enable_push when Value -> <<2:16, 1:32>>;
 		enable_push -> <<2:16, 0:32>>;
+		max_concurrent_streams when Value =:= infinity -> <<>>;
 		max_concurrent_streams -> <<3:16, Value:32>>;
 		initial_window_size -> <<4:16, Value:32>>;
 		max_frame_size -> <<5:16, Value:32>>;
+		max_header_list_size when Value =:= infinity -> <<>>;
 		max_header_list_size -> <<6:16, Value:32>>;
 		enable_connect_protocol when Value -> <<8:16, 1:32>>;
 		enable_connect_protocol -> <<8:16, 0:32>>

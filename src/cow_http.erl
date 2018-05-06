@@ -297,6 +297,7 @@ version_test() ->
 status(100) -> <<"100 Continue">>;
 status(101) -> <<"101 Switching Protocols">>;
 status(102) -> <<"102 Processing">>;
+status(103) -> <<"103 Early Hints">>;
 status(200) -> <<"200 OK">>;
 status(201) -> <<"201 Created">>;
 status(202) -> <<"202 Accepted">>;

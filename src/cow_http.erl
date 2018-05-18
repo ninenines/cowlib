@@ -16,6 +16,7 @@
 
 %% @todo parse_request_line
 -export([parse_status_line/1]).
+-export([status_to_integer/1]).
 -export([parse_headers/1]).
 
 -export([parse_fullpath/1]).
@@ -47,12 +48,26 @@ parse_status_line(<< "HTTP/1.1 ", Status/bits >>) ->
 parse_status_line(<< "HTTP/1.0 ", Status/bits >>) ->
 	parse_status_line(Status, 'HTTP/1.0').
 
-parse_status_line(<< H, T, U, " ", Rest/bits >>, Version)
-		when $0 =< H, H =< $9, $0 =< T, T =< $9, $0 =< U, U =< $9 ->
-	Status = (H - $0) * 100 + (T - $0) * 10 + (U - $0),
+parse_status_line(<<H, T, U, " ", Rest/bits>>, Version) ->
+	Status = status_to_integer(H, T, U),
 	{Pos, _} = binary:match(Rest, <<"\r">>),
 	<< StatusStr:Pos/binary, "\r\n", Rest2/bits >> = Rest,
 	{Version, Status, StatusStr, Rest2}.
+
+-spec status_to_integer(status() | binary()) -> status().
+status_to_integer(Status) when is_integer(Status) ->
+	Status;
+status_to_integer(Status) ->
+	case Status of
+		<<H, T, U>> ->
+			status_to_integer(H, T, U);
+		<<H, T, U, " ", _/bits>> ->
+			status_to_integer(H, T, U)
+	end.
+
+status_to_integer(H, T, U)
+		when $0 =< H, H =< $9, $0 =< T, T =< $9, $0 =< U, U =< $9 ->
+	(H - $0) * 100 + (T - $0) * 10 + (U - $0).
 
 -ifdef(TEST).
 parse_status_line_test_() ->

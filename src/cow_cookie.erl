@@ -19,7 +19,8 @@
 
 -type cookie_option() :: {max_age, non_neg_integer()}
 	| {domain, binary()} | {path, binary()}
-	| {secure, boolean()} | {http_only, boolean()}.
+	| {secure, boolean()} | {http_only, boolean()}
+	| {same_site, lax | strict}.
 -type cookie_opts() :: [cookie_option()].
 -export_type([cookie_opts/0]).
 
@@ -215,8 +216,13 @@ setcookie(Name, Value, Opts) ->
 		{_, false} -> <<>>;
 		{_, true} -> <<"; HttpOnly">>
 	end,
+	SameSiteBin = case lists:keyfind(same_site, 1, Opts) of
+		false -> <<>>;
+		{_, lax} -> <<"; SameSite=Lax">>;
+		{_, strict} -> <<"; SameSite=Strict">>
+	end,
 	[Name, <<"=">>, Value, <<"; Version=1">>,
-		MaxAgeBin, DomainBin, PathBin, SecureBin, HttpOnlyBin].
+		MaxAgeBin, DomainBin, PathBin, SecureBin, HttpOnlyBin, SameSiteBin].
 
 -ifdef(TEST).
 setcookie_test_() ->
@@ -235,6 +241,12 @@ setcookie_test_() ->
 		{<<"Customer">>, <<"WILE_E_COYOTE">>,
 			[{secure, false}, {http_only, false}],
 			<<"Customer=WILE_E_COYOTE; Version=1">>},
+		{<<"Customer">>, <<"WILE_E_COYOTE">>,
+			[{same_site, lax}],
+			<<"Customer=WILE_E_COYOTE; Version=1; SameSite=Lax">>},
+		{<<"Customer">>, <<"WILE_E_COYOTE">>,
+			[{same_site, strict}],
+			<<"Customer=WILE_E_COYOTE; Version=1; SameSite=Strict">>},
 		{<<"Customer">>, <<"WILE_E_COYOTE">>,
 			[{path, <<"/acme">>}, {badoption, <<"negatory">>}],
 			<<"Customer=WILE_E_COYOTE; Version=1; Path=/acme">>}

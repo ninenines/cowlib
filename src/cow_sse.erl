@@ -23,6 +23,7 @@
 	state_name = bom :: bom | events,
 	buffer = <<>> :: binary(),
 	last_event_id = <<>> :: binary(),
+	last_event_id_set = false :: boolean(),
 	event_type = <<>> :: binary(),
 	data = [] :: iolist(),
 	retry = undefined :: undefined | non_neg_integer()
@@ -115,7 +116,7 @@ process_field(<<"event">>, Value, State) ->
 process_field(<<"data">>, Value, State=#state{data=Data}) ->
 	{ok, State#state{data=[<<$\n>>, Value|Data]}};
 process_field(<<"id">>, Value, State) ->
-	{ok, State#state{last_event_id=Value}};
+	{ok, State#state{last_event_id=Value, last_event_id_set=true}};
 process_field(<<"retry">>, Value, State) ->
 	try
 		{ok, State#state{retry=binary_to_integer(Value)}}
@@ -126,8 +127,15 @@ process_field(_, _, State) ->
 	{ok, State}.
 
 %% Data is an empty string; abort.
-dispatch_event(State=#state{data=[]}) ->
+dispatch_event(State=#state{last_event_id_set=false, data=[]}) ->
 	{ok, State#state{event_type= <<>>}};
+%% Data is an empty string but we have a last_event_id:
+%% propagate it on its own so that the caller knows the
+%% most recent ID.
+dispatch_event(State=#state{last_event_id=LastEventID, data=[]}) ->
+	{event, #{
+		last_event_id => LastEventID
+	}, State#state{last_event_id_set=false, event_type= <<>>}};
 %% Dispatch the event.
 %%
 %% Always remove the last linebreak from the data.
@@ -140,10 +148,9 @@ dispatch_event(State=#state{last_event_id=LastEventID,
 			_ -> EventType
 		end,
 		data => lists:reverse(Data)
-	}, State#state{event_type= <<>>, data=[]}}.
+	}, State#state{last_event_id_set=false, event_type= <<>>, data=[]}}.
 
 -ifdef(TEST).
-
 parse_example1_test() ->
 	{event, #{
 		event_type := <<"message">>,
@@ -222,6 +229,47 @@ parse_example4_test() ->
 	{more, _} = parse(<<>>, State),
 	ok.
 
+parse_id_without_data_test() ->
+	{event, Event1, State0} = parse(<<
+		"id: 1\n"
+		"\n"
+		"data: data\n"
+		"\n"
+		"id: 2\n"
+		"\n">>, init()),
+	1 = maps:size(Event1),
+	#{last_event_id := <<"1">>} = Event1,
+	{event, #{
+		event_type := <<"message">>,
+		last_event_id := <<"1">>,
+		data := Data
+	}, State1} = parse(<<>>, State0),
+	<<"data">> = iolist_to_binary(Data),
+	{event, Event2, State} = parse(<<>>, State1),
+	1 = maps:size(Event2),
+	#{last_event_id := <<"2">>} = Event2,
+	{more, _} = parse(<<>>, State),
+	ok.
+
+parse_repeated_id_without_data_test() ->
+	{event, Event1, State0} = parse(<<
+		"id: 1\n"
+		"\n"
+		"event: message\n" %% This will be ignored since there's no data.
+		"\n"
+		"id: 1\n"
+		"\n"
+		"id: 2\n"
+		"\n">>, init()),
+	{event, Event1, State1} = parse(<<>>, State0),
+	1 = maps:size(Event1),
+	#{last_event_id := <<"1">>} = Event1,
+	{event, Event2, State} = parse(<<>>, State1),
+	1 = maps:size(Event2),
+	#{last_event_id := <<"2">>} = Event2,
+	{more, _} = parse(<<>>, State),
+	ok.
+
 parse_split_event_test() ->
 	{more, State} = parse(<<
 		"data: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
@@ -229,7 +277,6 @@ parse_split_event_test() ->
 		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA">>, init()),
 	{event, _, _} = parse(<<"==\n\n">>, State),
 	ok.
-
 -endif.
 
 -spec events([event()]) -> iolist().

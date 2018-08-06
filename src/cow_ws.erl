@@ -349,7 +349,11 @@ frag_state(_, 1, _, FragState) -> FragState.
 
 -spec parse_payload(binary(), mask_key(), utf8_state(), non_neg_integer(),
 		frame_type(), non_neg_integer(), frag_state(), extensions(), rsv())
-	-> {ok, binary(), utf8_state(), binary()} | {more, binary(), utf8_state()} | error.
+	-> {ok, binary(), utf8_state(), binary()}
+	| {ok, close_code(), binary(), utf8_state(), binary()}
+	| {more, binary(), utf8_state()}
+	| {more, close_code(), binary(), utf8_state()}
+	| {error, badframe | badencoding}.
 %% Empty last frame of compressed message.
 parse_payload(Data, _, Utf8State, _, _, 0, {fin, _, << 1:1, 0:2 >>},
 		#{inflate := Inflate, inflate_takeover := TakeOver}, _) ->

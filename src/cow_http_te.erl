@@ -128,10 +128,10 @@ horse_stream_identity_dripfeed() ->
 %% @doc Decode a chunked stream.
 
 -spec stream_chunked(Data, State)
-	-> more | {more, Data, State} | {more, Data, Len, State}
+	-> more | {more, Data, State} | {more, Data, non_neg_integer(), State}
 	| {more, Data, Data, State}
-	| {done, Len, Data} | {done, Data, Len, Data}
-	when Data::binary(), State::state(), Len::non_neg_integer().
+	| {done, HasTrailers, Data} | {done, Data, HasTrailers, Data}
+	when Data::binary(), State::state(), HasTrailers::trailers | no_trailers.
 stream_chunked(Data, State) ->
 	stream_chunked(Data, State, <<>>).
 

@@ -28,7 +28,11 @@
 -export([version/1]).
 
 -type version() :: 'HTTP/1.0' | 'HTTP/1.1'.
+-export_type([version/0]).
+
 -type status() :: 100..999.
+-export_type([status/0]).
+
 -type headers() :: [{binary(), iodata()}].
 -export_type([headers/0]).
 

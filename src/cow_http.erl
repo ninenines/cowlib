@@ -14,7 +14,7 @@
 
 -module(cow_http).
 
-%% @todo parse_request_line
+-export([parse_request_line/1]).
 -export([parse_status_line/1]).
 -export([status_to_integer/1]).
 -export([parse_headers/1]).
@@ -37,6 +37,53 @@
 -export_type([headers/0]).
 
 -include("cow_inline.hrl").
+
+%% @doc Parse the request line.
+
+-spec parse_request_line(binary()) -> {binary(), binary(), version(), binary()}.
+parse_request_line(Data) ->
+	{Pos, _} = binary:match(Data, <<"\r">>),
+	<<RequestLine:Pos/binary, "\r\n", Rest/bits>> = Data,
+	[Method, Target, Version0] = binary:split(RequestLine, <<$\s>>, [trim_all, global]),
+	Version = case Version0 of
+		<<"HTTP/1.1">> -> 'HTTP/1.1';
+		<<"HTTP/1.0">> -> 'HTTP/1.0'
+	end,
+	{Method, Target, Version, Rest}.
+
+-ifdef(TEST).
+parse_request_line_test_() ->
+	Tests = [
+		{<<"GET /path HTTP/1.0\r\nRest">>,
+			{<<"GET">>, <<"/path">>, 'HTTP/1.0', <<"Rest">>}},
+		{<<"GET /path HTTP/1.1\r\nRest">>,
+			{<<"GET">>, <<"/path">>, 'HTTP/1.1', <<"Rest">>}},
+		{<<"CONNECT proxy.example.org:1080 HTTP/1.1\r\nRest">>,
+			{<<"CONNECT">>, <<"proxy.example.org:1080">>, 'HTTP/1.1', <<"Rest">>}}
+	],
+	[{V, fun() -> R = parse_request_line(V) end}
+		|| {V, R} <- Tests].
+
+parse_request_line_error_test_() ->
+	Tests = [
+		<<>>,
+		<<"GET">>,
+		<<"GET /path\r\n">>,
+		<<"GET /path HTTP/1.1">>,
+		<<"GET /path HTTP/1.1\r">>,
+		<<"GET /path HTTP/1.1\n">>,
+		<<"GET /path HTTP/0.9\r\n">>,
+		<<"content-type: text/plain\r\n">>,
+		<<0:80, "\r\n">>
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_request_line(V)) end}
+		|| V <- Tests].
+
+horse_parse_request_line_get_path() ->
+	horse:repeat(200000,
+		parse_request_line(<<"GET /path HTTP/1.1\r\n">>)
+	).
+-endif.
 
 %% @doc Parse the status line.
 

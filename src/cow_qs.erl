@@ -16,10 +16,12 @@
 
 -export([parse_qs/1]).
 -export([qs/1]).
+-export([qs/2]).
 -export([urldecode/1]).
 -export([urlencode/1]).
 
 -type qs_vals() :: [{binary(), binary() | true}].
+-type qs_sep() :: binary().
 
 %% @doc Parse an application/x-www-form-urlencoded string.
 %%
@@ -43,6 +45,11 @@ parse_qs_name(<< $&, Rest/bits >>, Acc, Name) ->
 		<<>> -> parse_qs_name(Rest, Acc, <<>>);
 		_ -> parse_qs_name(Rest, [{Name, true}|Acc], <<>>)
 	end;
+parse_qs_name(<< $;, Rest/bits >>, Acc, Name) ->
+	case Name of
+		<<>> -> parse_qs_name(Rest, Acc, <<>>);
+		_ -> parse_qs_name(Rest, [{Name, true}|Acc], <<>>)
+	end;
 parse_qs_name(<< C, Rest/bits >>, Acc, Name) when C =/= $%, C =/= $= ->
 	parse_qs_name(Rest, Acc, << Name/bits, C >>);
 parse_qs_name(<<>>, Acc, Name) ->
@@ -58,6 +65,8 @@ parse_qs_value(<< $+, Rest/bits >>, Acc, Name, Value) ->
 	parse_qs_value(Rest, Acc, Name, << Value/bits, " " >>);
 parse_qs_value(<< $&, Rest/bits >>, Acc, Name, Value) ->
 	parse_qs_name(Rest, [{Name, Value}|Acc], <<>>);
+parse_qs_value(<< $;, Rest/bits >>, Acc, Name, Value) ->
+	parse_qs_name(Rest, [{Name, Value}|Acc], <<>>);
 parse_qs_value(<< C, Rest/bits >>, Acc, Name, Value) when C =/= $% ->
 	parse_qs_value(Rest, Acc, Name, << Value/bits, C >>);
 parse_qs_value(<<>>, Acc, Name, Value) ->
@@ -70,18 +79,28 @@ parse_qs_test_() ->
 		{<<"&">>, []},
 		{<<"a">>, [{<<"a">>, true}]},
 		{<<"a&">>, [{<<"a">>, true}]},
+		{<<"a;">>, [{<<"a">>, true}]},
 		{<<"&a">>, [{<<"a">>, true}]},
+		{<<";a">>, [{<<"a">>, true}]},
 		{<<"a&b">>, [{<<"a">>, true}, {<<"b">>, true}]},
+		{<<"a;b">>, [{<<"a">>, true}, {<<"b">>, true}]},
 		{<<"a&&b">>, [{<<"a">>, true}, {<<"b">>, true}]},
+		{<<"a;;b">>, [{<<"a">>, true}, {<<"b">>, true}]},
 		{<<"a&b&">>, [{<<"a">>, true}, {<<"b">>, true}]},
+		{<<"a;b;">>, [{<<"a">>, true}, {<<"b">>, true}]},
 		{<<"=">>, error},
 		{<<"=b">>, error},
 		{<<"a=">>, [{<<"a">>, <<>>}]},
 		{<<"a=b">>, [{<<"a">>, <<"b">>}]},
 		{<<"a=&b=">>, [{<<"a">>, <<>>}, {<<"b">>, <<>>}]},
+		{<<"a=;b=">>, [{<<"a">>, <<>>}, {<<"b">>, <<>>}]},
 		{<<"a=b&c&d=e">>, [{<<"a">>, <<"b">>},
 			{<<"c">>, true}, {<<"d">>, <<"e">>}]},
+		{<<"a=b;c;d=e">>, [{<<"a">>, <<"b">>},
+			{<<"c">>, true}, {<<"d">>, <<"e">>}]},
 		{<<"a=b=c&d=e=f&g=h=i">>, [{<<"a">>, <<"b=c">>},
+			{<<"d">>, <<"e=f">>}, {<<"g">>, <<"h=i">>}]},
+		{<<"a=b=c;d=e=f;g=h=i">>, [{<<"a">>, <<"b=c">>},
 			{<<"d">>, <<"e=f">>}, {<<"g">>, <<"h=i">>}]},
 		{<<"+">>, [{<<" ">>, true}]},
 		{<<"+=+">>, [{<<" ">>, <<" ">>}]},
@@ -170,18 +189,27 @@ horse_parse_qs_longer() ->
 qs([]) ->
 	<<>>;
 qs(L) ->
-	qs(L, <<>>).
+	qs(L, << $& >>, <<>>).
 
-qs([], Acc) ->
+-spec qs(qs_vals(), qs_sep()) -> binary().
+qs([], _Sep) ->
+	<<>>;
+qs(L, Sep) when Sep =:= << $& >> orelse Sep =:= << $; >> ->
+	qs(L, Sep, <<>>).
+
+qs([], << $& >>, Acc) ->
 	<< $&, Qs/bits >> = Acc,
 	Qs;
-qs([{Name, true}|Tail], Acc) ->
-	Acc2 = urlencode(Name, << Acc/bits, $& >>),
-	qs(Tail, Acc2);
-qs([{Name, Value}|Tail], Acc) ->
-	Acc2 = urlencode(Name, << Acc/bits, $& >>),
+qs([], << $; >>, Acc) ->
+	<< $;, Qs/bits >> = Acc,
+	Qs;
+qs([{Name, true}|Tail], Sep, Acc) ->
+	Acc2 = urlencode(Name, << Acc/bits, Sep/bits >>),
+	qs(Tail, Sep, Acc2);
+qs([{Name, Value}|Tail], Sep, Acc) ->
+	Acc2 = urlencode(Name, << Acc/bits, Sep/bits >>),
 	Acc3 = urlencode(Value, << Acc2/bits, $= >>),
-	qs(Tail, Acc3).
+	qs(Tail, Sep, Acc3).
 
 -define(QS_SHORTER, [
 	{<<"hl">>, <<"en">>},
@@ -307,6 +335,9 @@ qs_identity_test_() ->
 	],
 	[{lists:flatten(io_lib:format("~p", [V])), fun() ->
 		V = parse_qs(qs(V))
+	end} || V <- Tests] ++
+	[{lists:flatten(io_lib:format("~p", [V])), fun() ->
+		V = parse_qs(qs(V, <<";">>))
 	end} || V <- Tests].
 
 horse_qs_shorter() ->

@@ -151,31 +151,43 @@ init_permessage_deflate(InflateWindowBits, DeflateWindowBits, Opts) ->
 		maps:get(mem_level, Opts, 8),
 		maps:get(strategy, Opts, default)),
 	%% Set the owner pid of the zlib contexts if requested.
-	%%
-	%% The zlib port became a reference in OTP 20.1+. There
-	%% was however no way to change the controlling process
-	%% until the OTP 20.1.3 patch version. Since we can't
-	%% enable compression for 20.1, 20.1.1 and 20.1.2 we
-	%% explicitly crash. The caller should ignore this extension.
-	_ = case Opts of
-		#{owner := Pid} when is_port(Inflate) ->
-			true = erlang:port_connect(Inflate, Pid),
-			true = unlink(Inflate),
-			true = erlang:port_connect(Deflate, Pid),
-			unlink(Deflate);
-		#{owner := Pid} ->
-			case erlang:function_exported(zlib, set_controlling_process, 2) of
-				true ->
-					zlib:set_controlling_process(Inflate, Pid),
-					zlib:set_controlling_process(Deflate, Pid);
-				false ->
-					exit({error, incompatible_zlib_version,
-						'OTP 20.1, 20.1.1 and 20.1.2 are missing required functionality.'})
-			end;
-		_ ->
-			true
+	case Opts of
+		#{owner := Pid} -> set_owner(Pid, Inflate, Deflate);
+		_ -> ok
 	end,
 	{Inflate, Deflate}.
+
+-ifdef(OTP_RELEASE).
+%% Using is_port/1 on a zlib context results in a Dialyzer warning in OTP 21.
+%% This function helps silence that warning while staying compatible
+%% with all supported versions.
+
+set_owner(Pid, Inflate, Deflate) ->
+	zlib:set_controlling_process(Inflate, Pid),
+	zlib:set_controlling_process(Deflate, Pid).
+-else.
+%% The zlib port became a reference in OTP 20.1+. There
+%% was however no way to change the controlling process
+%% until the OTP 20.1.3 patch version. Since we can't
+%% enable compression for 20.1, 20.1.1 and 20.1.2 we
+%% explicitly crash. The caller should ignore this extension.
+
+set_owner(Pid, Inflate, Deflate) when is_port(Inflate) ->
+	true = erlang:port_connect(Inflate, Pid),
+	true = unlink(Inflate),
+	true = erlang:port_connect(Deflate, Pid),
+	true = unlink(Deflate),
+	ok;
+set_owner(Pid, Inflate, Deflate) ->
+	case erlang:function_exported(zlib, set_controlling_process, 2) of
+		true ->
+			zlib:set_controlling_process(Inflate, Pid),
+			zlib:set_controlling_process(Deflate, Pid);
+		false ->
+			exit({error, incompatible_zlib_version,
+				'OTP 20.1, 20.1.1 and 20.1.2 are missing required functionality.'})
+	end.
+-endif.
 
 %% @doc Negotiate the x-webkit-deflate-frame extension.
 %%
@@ -337,7 +349,11 @@ frag_state(_, 1, _, FragState) -> FragState.
 
 -spec parse_payload(binary(), mask_key(), utf8_state(), non_neg_integer(),
 		frame_type(), non_neg_integer(), frag_state(), extensions(), rsv())
-	-> {ok, binary(), utf8_state(), binary()} | {more, binary(), utf8_state()} | error.
+	-> {ok, binary(), utf8_state(), binary()}
+	| {ok, close_code(), binary(), utf8_state(), binary()}
+	| {more, binary(), utf8_state()}
+	| {more, close_code(), binary(), utf8_state()}
+	| {error, badframe | badencoding}.
 %% Empty last frame of compressed message.
 parse_payload(Data, _, Utf8State, _, _, 0, {fin, _, << 1:1, 0:2 >>},
 		#{inflate := Inflate, inflate_takeover := TakeOver}, _) ->

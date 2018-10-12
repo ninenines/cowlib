@@ -858,6 +858,7 @@ horse_parse_allow() ->
 	-> {basic, binary(), binary()}
 	| {bearer, binary()}
 	| {digest, [{binary(), binary()}]}.
+%% @todo The token is case-insensitive. https://tools.ietf.org/html/rfc7235#section-2.1
 parse_authorization(<<"Basic ", R/bits >>) ->
 	auth_basic(base64:decode(R), <<>>);
 parse_authorization(<<"Bearer ", R/bits >>) when R =/= <<>> ->

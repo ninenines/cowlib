@@ -15,6 +15,7 @@
 -module(cow_http2).
 
 %% Parsing.
+-export([parse_sequence/1]).
 -export([parse/1]).
 -export([parse/2]).
 -export([parse_settings_payload/1]).
@@ -82,6 +83,24 @@
 -export_type([frame/0]).
 
 %% Parsing.
+
+-spec parse_sequence(binary())
+	-> {ok, binary()} | more | {connection_error, error(), atom()}.
+parse_sequence(<<"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n", Rest/bits>>) ->
+	{ok, Rest};
+parse_sequence(Data) when byte_size(Data) >= 24 ->
+	{connection_error, protocol_error,
+		'The connection preface was invalid. (RFC7540 3.5)'};
+parse_sequence(Data) ->
+	Len = byte_size(Data),
+	<<Preface:Len/binary, _/bits>> = <<"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n">>,
+	case Data of
+		Preface ->
+			more;
+		_ ->
+			{connection_error, protocol_error,
+				'The connection preface was invalid. (RFC7540 3.5)'}
+	end.
 
 parse(<< Len:24, _/bits >>, MaxFrameSize) when Len > MaxFrameSize ->
 	{connection_error, frame_size_error, 'The frame size exceeded SETTINGS_MAX_FRAME_SIZE. (RFC7540 4.2)'};

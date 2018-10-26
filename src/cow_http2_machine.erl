@@ -18,6 +18,7 @@
 -export([init_upgrade_stream/2]).
 -export([frame/2]).
 -export([ignored_frame/1]).
+-export([timeout/3]).
 -export([prepare_headers/5]).
 -export([prepare_push_promise/4]).
 -export([prepare_trailers/3]).
@@ -37,7 +38,9 @@
 	max_decode_table_size => non_neg_integer(),
 	max_encode_table_size => non_neg_integer(),
 	max_frame_size_received => 16384..16777215,
-	max_frame_size_sent => 16384..16777215 | infinity
+	max_frame_size_sent => 16384..16777215 | infinity,
+	preface_timeout => timeout(),
+	settings_timeout => timeout()
 }.
 -export_type([opts/0]).
 
@@ -96,6 +99,12 @@
 	%% Connection-wide frame processing state.
 	state = settings :: settings | normal
 		| {continuation, request | response | trailers | push_promise, continued_frame()},
+
+	%% Timer for the connection preface.
+	preface_timer = undefined :: undefined | reference(),
+
+	%% Timer for the ack for a SETTINGS frame we sent.
+	settings_timer = undefined :: undefined | reference(),
 
 	%% Settings are separate for each endpoint. In addition, settings
 	%% must be acknowledged before they can be expected to be applied.
@@ -171,6 +180,8 @@ init(client, Opts) ->
 	client_preface(#http2_machine{
 		mode=client,
 		opts=only_keep_relevant_opts(Opts),
+		preface_timer=start_timer(preface_timeout, Opts),
+		settings_timer=start_timer(settings_timeout, Opts),
 		next_settings=NextSettings,
 		local_streamid=1
 	});
@@ -179,6 +190,8 @@ init(server, Opts) ->
 	common_preface(#http2_machine{
 		mode=server,
 		opts=only_keep_relevant_opts(Opts),
+		preface_timer=start_timer(preface_timeout, Opts),
+		settings_timer=start_timer(settings_timeout, Opts),
 		next_settings=NextSettings,
 		local_streamid=2
 	}).
@@ -188,8 +201,15 @@ only_keep_relevant_opts(Opts) ->
 	maps:with([
 		initial_connection_window_size,
 		max_encode_table_size,
-		max_frame_size_sent
+		max_frame_size_sent,
+		settings_timeout
 	], Opts).
+
+start_timer(Name, Opts) ->
+	case maps:get(Name, Opts, 5000) of
+		infinity -> undefined;
+		Timeout -> erlang:start_timer(Timeout, self(), {?MODULE, Name})
+	end.
 
 client_preface(State0) ->
 	{ok, CommonPreface, State} = common_preface(State0),
@@ -257,8 +277,12 @@ init_upgrade_stream(Method, State=#http2_machine{mode=server, remote_streamid=0,
 	| {error, {stream_error, cow_http2:streamid(), cow_http2:error(), atom()}, State}
 	| {error, {connection_error, cow_http2:error(), atom()}, State}
 	when State::http2_machine().
-frame(Frame, State=#http2_machine{state=settings}) ->
-	settings_frame(Frame, State#http2_machine{state=normal});
+frame(Frame, State=#http2_machine{state=settings, preface_timer=TRef}) ->
+	ok = case TRef of
+		undefined -> ok;
+		_ -> erlang:cancel_timer(TRef, [{async, true}, {info, false}])
+	end,
+	settings_frame(Frame, State#http2_machine{state=normal, preface_timer=undefined});
 frame(Frame, State=#http2_machine{state={continuation, _, _}}) ->
 	continuation_frame(Frame, State);
 frame(settings_ack, State=#http2_machine{state=normal}) ->
@@ -803,9 +827,15 @@ streams_update_local_window(State=#http2_machine{streams=Streams0}, Increment) -
 
 %% Ack for a previously sent SETTINGS frame.
 
-settings_ack_frame(State0=#http2_machine{local_settings=Local0, next_settings=NextSettings}) ->
+settings_ack_frame(State0=#http2_machine{settings_timer=TRef,
+		local_settings=Local0, next_settings=NextSettings}) ->
+	ok = case TRef of
+		undefined -> ok;
+		_ -> erlang:cancel_timer(TRef, [{async, true}, {info, false}])
+	end,
 	Local = maps:merge(Local0, NextSettings),
-	State1 = State0#http2_machine{local_settings=Local, next_settings=#{}},
+	State1 = State0#http2_machine{settings_timer=undefined,
+		local_settings=Local, next_settings=#{}},
 	{ok, maps:fold(fun
 		(header_table_size, MaxSize, State=#http2_machine{decode_state=DecodeState0}) ->
 			DecodeState = cow_hpack:set_max_size(MaxSize, DecodeState0),
@@ -990,6 +1020,23 @@ ignored_frame(State=#http2_machine{state={continuation, _, _}}) ->
 %% @todo It might be useful to error out when we receive
 %% too many unknown frames. (RFC7540 10.5)
 ignored_frame(State) ->
+	{ok, State}.
+
+%% Timeouts.
+
+-spec timeout(preface_timeout | settings_timeout, reference(), State)
+	-> {ok, State}
+	| {error, {connection_error, cow_http2:error(), atom()}, State}
+	when State::http2_machine().
+timeout(preface_timeout, TRef, State=#http2_machine{preface_timer=TRef}) ->
+	{error, {connection_error, protocol_error,
+		'The preface was not received in a reasonable amount of time.'},
+		State};
+timeout(settings_timeout, TRef, State=#http2_machine{settings_timer=TRef}) ->
+	{error, {connection_error, settings_timeout,
+		'The SETTINGS ack was not received within the configured time. (RFC7540 6.5.3)'},
+		State};
+timeout(_, _, State) ->
 	{ok, State}.
 
 %% Functions for sending a message header or body. Note that

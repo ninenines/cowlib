@@ -36,8 +36,14 @@
 -export([window_update/2]).
 
 -type streamid() :: pos_integer().
+-export_type([streamid/0]).
+
 -type fin() :: fin | nofin.
+-export_type([fin/0]).
+
 -type head_fin() :: head_fin | head_nofin.
+-export_type([head_fin/0]).
+
 -type exclusive() :: exclusive | shared.
 -type weight() :: 1..256.
 -type settings() :: map().

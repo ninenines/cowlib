@@ -35,6 +35,22 @@
 -type extensions() :: map().
 -export_type([extensions/0]).
 
+-type deflate_opts() :: #{
+	%% Compression parameters.
+	level => zlib:zlevel(),
+	mem_level => zlib:zmemlevel(),
+	strategy => zlib:zstrategy(),
+
+	%% Whether the compression context will carry over between frames.
+	server_context_takeover => takeover | no_takeover,
+	client_context_takeover => takeover | no_takeover,
+
+	%% LZ77 sliding window size limits.
+	server_max_window_bits => 8..15,
+	client_max_window_bits => 8..15
+}.
+-export_type([deflate_opts/0]).
+
 -type frag_state() :: undefined | {fin | nofin, text | binary, rsv()}.
 -export_type([frag_state/0]).
 
@@ -70,6 +86,9 @@ encode_key(Key) ->
 
 %% @doc Negotiate the permessage-deflate extension.
 
+-spec negotiate_permessage_deflate(
+	[binary() | {binary(), binary()}], Exts, deflate_opts())
+	-> ignore | {ok, iolist(), Exts} when Exts::extensions().
 %% Ignore if deflate already negotiated.
 negotiate_permessage_deflate(_, #{deflate := _}, _) ->
 	ignore;
@@ -79,48 +98,117 @@ negotiate_permessage_deflate(Params, Extensions, Opts) ->
 		Params2 when length(Params) =/= length(Params2) ->
 			ignore;
 		Params2 ->
-			%% @todo Might want to make these configurable defaults.
-			case parse_request_permessage_deflate_params(Params2, 15, takeover, 15, takeover, []) of
-				ignore ->
-					ignore;
-				{ClientWindowBits, ClientTakeOver, ServerWindowBits, ServerTakeOver, RespParams} ->
-					{Inflate, Deflate} = init_permessage_deflate(ClientWindowBits, ServerWindowBits, Opts),
-					{ok, [<<"permessage-deflate">>, RespParams],
-						Extensions#{
-							deflate => Deflate,
-							deflate_takeover => ServerTakeOver,
-							inflate => Inflate,
-							inflate_takeover => ClientTakeOver}}
-			end
+			negotiate_permessage_deflate1(Params2, Extensions, Opts)
 	end.
 
-parse_request_permessage_deflate_params([], CB, CTO, SB, STO, RespParams) ->
-	{CB, CTO, SB, STO, RespParams};
-parse_request_permessage_deflate_params([<<"client_max_window_bits">>|Tail], CB, CTO, SB, STO, RespParams) ->
-	parse_request_permessage_deflate_params(Tail, CB, CTO, SB, STO,
-		[<<"; ">>, <<"client_max_window_bits=">>, integer_to_binary(CB)|RespParams]);
-parse_request_permessage_deflate_params([{<<"client_max_window_bits">>, Max}|Tail], _, CTO, SB, STO, RespParams) ->
+negotiate_permessage_deflate1(Params, Extensions, Opts) ->
+	%% We are allowed to send back no_takeover even if the client
+	%% accepts takeover. Therefore we use no_takeover if any of
+	%% the inputs have it.
+	ServerTakeover = maps:get(server_context_takeover, Opts, takeover),
+	ClientTakeover = maps:get(client_context_takeover, Opts, takeover),
+	%% We can send back window bits smaller than or equal to what
+	%% the client sends us.
+	ServerMaxWindowBits = maps:get(server_max_window_bits, Opts, 15),
+	ClientMaxWindowBits = maps:get(client_max_window_bits, Opts, 15),
+	%% We may need to send back no_context_takeover depending on configuration.
+	RespParams0 = case ServerTakeover of
+		takeover -> [];
+		no_takeover -> [<<"; server_no_context_takeover">>]
+	end,
+	RespParams1 = case ClientTakeover of
+		takeover -> RespParams0;
+		no_takeover -> [<<"; client_no_context_takeover">>|RespParams0]
+	end,
+	Negotiated0 = #{
+		server_context_takeover => ServerTakeover,
+		client_context_takeover => ClientTakeover,
+		server_max_window_bits => ServerMaxWindowBits,
+		client_max_window_bits => ClientMaxWindowBits
+	},
+	case negotiate_params(Params, Negotiated0, RespParams1) of
+		ignore ->
+			ignore;
+		{#{server_max_window_bits := SB}, _} when SB > ServerMaxWindowBits ->
+			ignore;
+		{#{client_max_window_bits := CB}, _} when CB > ClientMaxWindowBits ->
+			ignore;
+		{Negotiated, RespParams2} ->
+			%% We add the configured max window bits if necessary.
+			RespParams = case Negotiated of
+				#{server_max_window_bits_set := true} -> RespParams2;
+				_ when ServerMaxWindowBits =:= 15 -> RespParams2;
+				_ -> [<<"; server_max_window_bits=">>,
+					integer_to_binary(ServerMaxWindowBits)|RespParams2]
+			end,
+			{Inflate, Deflate} = init_permessage_deflate(
+				maps:get(client_max_window_bits, Negotiated),
+				maps:get(server_max_window_bits, Negotiated), Opts),
+			{ok, [<<"permessage-deflate">>, RespParams], Extensions#{
+				deflate => Deflate,
+				deflate_takeover => maps:get(server_context_takeover, Negotiated),
+				inflate => Inflate,
+				inflate_takeover => maps:get(client_context_takeover, Negotiated)}}
+	end.
+
+negotiate_params([], Negotiated, RespParams) ->
+	{Negotiated, RespParams};
+%% We must only send the client_max_window_bits parameter if the
+%% request explicitly indicated the client supports it.
+negotiate_params([<<"client_max_window_bits">>|Tail], Negotiated, RespParams) ->
+	CB = maps:get(client_max_window_bits, Negotiated),
+	negotiate_params(Tail, Negotiated#{client_max_window_bits_set => true},
+		[<<"; client_max_window_bits=">>, integer_to_binary(CB)|RespParams]);
+negotiate_params([{<<"client_max_window_bits">>, Max}|Tail], Negotiated, RespParams) ->
+	CB0 = maps:get(client_max_window_bits, Negotiated, undefined),
 	case parse_max_window_bits(Max) of
 		error ->
 			ignore;
-		CB ->
-			parse_request_permessage_deflate_params(Tail, CB, CTO, SB, STO,
-				[<<"; ">>, <<"client_max_window_bits=">>, Max|RespParams])
+		CB when CB =< CB0 ->
+			negotiate_params(Tail, Negotiated#{client_max_window_bits => CB},
+				[<<"; client_max_window_bits=">>, Max|RespParams]);
+		%% When the client sends window bits larger than the server wants
+		%% to use, we use what the server defined.
+		_ ->
+			negotiate_params(Tail, Negotiated,
+				[<<"; client_max_window_bits=">>, integer_to_binary(CB0)|RespParams])
 	end;
-parse_request_permessage_deflate_params([<<"client_no_context_takeover">>|Tail], CB, _, SB, STO, RespParams) ->
-	parse_request_permessage_deflate_params(Tail, CB, no_takeover, SB, STO, [<<"; ">>, <<"client_no_context_takeover">>|RespParams]);
-parse_request_permessage_deflate_params([{<<"server_max_window_bits">>, Max}|Tail], CB, CTO, _, STO, RespParams) ->
+negotiate_params([{<<"server_max_window_bits">>, Max}|Tail], Negotiated, RespParams) ->
+	SB0 = maps:get(server_max_window_bits, Negotiated, undefined),
 	case parse_max_window_bits(Max) of
 		error ->
 			ignore;
-		SB ->
-			parse_request_permessage_deflate_params(Tail, CB, CTO, SB, STO,
-				[<<"; ">>, <<"server_max_window_bits=">>, Max|RespParams])
+		SB when SB =< SB0 ->
+			negotiate_params(Tail, Negotiated#{
+				server_max_window_bits => SB,
+				server_max_window_bits_set => true},
+				[<<"; server_max_window_bits=">>, Max|RespParams]);
+		%% When the client sends window bits larger than the server wants
+		%% to use, we use what the server defined. The parameter will be
+		%% set only when this function returns.
+		_ ->
+			negotiate_params(Tail, Negotiated, RespParams)
 	end;
-parse_request_permessage_deflate_params([<<"server_no_context_takeover">>|Tail], CB, CTO, SB, _, RespParams) ->
-	parse_request_permessage_deflate_params(Tail, CB, CTO, SB, no_takeover, [<<"; ">>, <<"server_no_context_takeover">>|RespParams]);
+%% We only need to send the no_context_takeover parameter back
+%% here if we didn't already define it via configuration.
+negotiate_params([<<"client_no_context_takeover">>|Tail], Negotiated, RespParams) ->
+	case maps:get(client_context_takeover, Negotiated) of
+		no_takeover ->
+			negotiate_params(Tail, Negotiated, RespParams);
+		takeover ->
+			negotiate_params(Tail, Negotiated#{client_context_takeover => no_takeover},
+				[<<"; client_no_context_takeover">>|RespParams])
+	end;
+negotiate_params([<<"server_no_context_takeover">>|Tail], Negotiated, RespParams) ->
+	case maps:get(server_context_takeover, Negotiated) of
+		no_takeover ->
+			negotiate_params(Tail, Negotiated, RespParams);
+		takeover ->
+			negotiate_params(Tail, Negotiated#{server_context_takeover => no_takeover},
+				[<<"; server_no_context_takeover">>|RespParams])
+	end;
 %% Ignore if unknown parameter; ignore if parameter with invalid or missing value.
-parse_request_permessage_deflate_params(_, _, _, _, _, _) ->
+negotiate_params(_, _, _) ->
 	ignore.
 
 parse_max_window_bits(<<"8">>) -> 8;
@@ -133,7 +221,7 @@ parse_max_window_bits(<<"14">>) -> 14;
 parse_max_window_bits(<<"15">>) -> 15;
 parse_max_window_bits(_) -> error.
 
-% A negative WindowBits value indicates that zlib headers are not used.
+%% A negative WindowBits value indicates that zlib headers are not used.
 init_permessage_deflate(InflateWindowBits, DeflateWindowBits, Opts) ->
 	Inflate = zlib:open(),
 	ok = zlib:inflateInit(Inflate, -InflateWindowBits),
@@ -194,6 +282,9 @@ set_owner(Pid, Inflate, Deflate) ->
 %% The implementation is very basic and none of the parameters
 %% are currently supported.
 
+-spec negotiate_x_webkit_deflate_frame(
+	[binary() | {binary(), binary()}], Exts, deflate_opts())
+	-> ignore | {ok, binary(), Exts} when Exts::extensions().
 negotiate_x_webkit_deflate_frame(_, #{deflate := _}, _) ->
 	ignore;
 negotiate_x_webkit_deflate_frame(_Params, Extensions, Opts) ->
@@ -219,7 +310,6 @@ validate_permessage_deflate(Params, Extensions, Opts) ->
 		Params2 when length(Params) =/= length(Params2) ->
 			error;
 		Params2 ->
-			%% @todo Might want to make some of these configurable defaults if at all possible.
 			case parse_response_permessage_deflate_params(Params2, 15, takeover, 15, takeover) of
 				error ->
 					error;

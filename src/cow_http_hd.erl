@@ -241,7 +241,21 @@ media_range_param_sep(<< C, R/bits >>, Acc, T, S, P) when ?IS_WS(C) -> media_ran
 
 media_range_before_param(<< C, R/bits >>, Acc, T, S, P) when ?IS_WS(C) -> media_range_before_param(R, Acc, T, S, P);
 media_range_before_param(<< $q, $=, R/bits >>, Acc, T, S, P) -> media_range_weight(R, Acc, T, S, P);
+media_range_before_param(<< "charset=", $", R/bits >>, Acc, T, S, P) -> media_range_charset_quoted(R, Acc, T, S, P, <<>>);
+media_range_before_param(<< "charset=", R/bits >>, Acc, T, S, P) -> media_range_charset(R, Acc, T, S, P, <<>>);
 media_range_before_param(<< C, R/bits >>, Acc, T, S, P) when ?IS_TOKEN(C) -> ?LOWER(media_range_param, R, Acc, T, S, P, <<>>).
+
+media_range_charset_quoted(<< $", R/bits >>, Acc, T, S, P, V) ->
+	media_range_param_sep(R, Acc, T, S, [{<<"charset">>, V}|P]);
+media_range_charset_quoted(<< $\\, C, R/bits >>, Acc, T, S, P, V) when ?IS_VCHAR_OBS(C) ->
+	?LOWER(media_range_charset_quoted, R, Acc, T, S, P, V);
+media_range_charset_quoted(<< C, R/bits >>, Acc, T, S, P, V) when ?IS_VCHAR_OBS(C) ->
+	?LOWER(media_range_charset_quoted, R, Acc, T, S, P, V).
+
+media_range_charset(<< C, R/bits >>, Acc, T, S, P, V) when ?IS_TOKEN(C) ->
+	?LOWER(media_range_charset, R, Acc, T, S, P, V);
+media_range_charset(R, Acc, T, S, P, V) ->
+	media_range_param_sep(R, Acc, T, S, [{<<"charset">>, V}|P]).
 
 media_range_param(<< $=, $", R/bits >>, Acc, T, S, P, K) -> media_range_quoted(R, Acc, T, S, P, K, <<>>);
 media_range_param(<< $=, C, R/bits >>, Acc, T, S, P, K) when ?IS_TOKEN(C) -> media_range_value(R, Acc, T, S, P, K, << C >>);
@@ -299,15 +313,24 @@ accept_value(R, Acc, T, S, P, Q, E, K, V) -> accept_ext_sep(R, Acc, T, S, P, Q, 
 accept_ext() ->
 	oneof([token(), parameter()]).
 
-accept_params() ->
+accept_exts() ->
 	frequency([
 		{90, []},
 		{10, small_list(accept_ext())}
 	]).
 
+accept_param() ->
+	frequency([
+		{90, parameter()},
+		{10, {<<"charset">>, oneof([token(), quoted_string()]), <<>>, <<>>}}
+	]).
+
+accept_params() ->
+	small_list(accept_param()).
+
 accept() ->
 	?LET({T, S, P, W, E},
-		{token(), token(), small_list(parameter()), weight(), accept_params()},
+		{token(), token(), accept_params(), weight(), accept_exts()},
 		{T, S, P, W, E, iolist_to_binary([T, $/, S,
 			[[OWS1, $;, OWS2, K, $=, V] || {K, V, OWS1, OWS2} <- P],
 			case W of
@@ -328,7 +351,10 @@ prop_parse_accept() ->
 			<< _, Accept/binary >> = iolist_to_binary([[$,, A] || {_, _, _, _, _, A} <- L]),
 			ResL = parse_accept(Accept),
 			CheckedL = [begin
-				ExpectedP = [{?LOWER(K), unquote(V)} || {K, V, _, _} <- P],
+				ExpectedP = [case ?LOWER(K) of
+					<<"charset">> -> {<<"charset">>, ?LOWER(unquote(V))};
+					LowK -> {LowK, unquote(V)}
+				end || {K, V, _, _} <- P],
 				ExpectedE = [case Ext of
 					{K, V, _, _} -> {?LOWER(K), unquote(V)};
 					K -> ?LOWER(K)
@@ -385,6 +411,9 @@ parse_accept_test_() ->
 			{{<<"image">>, <<"jpeg">>, []}, 1000, []},
 			{{<<"*">>, <<"*">>, []}, 200, []},
 			{{<<"*">>, <<"*">>, []}, 200, []}
+		]},
+		{<<"text/plain; charset=UTF-8">>, [
+			{{<<"text">>, <<"plain">>, [{<<"charset">>, <<"utf-8">>}]}, 1000, []}
 		]}
 	],
 	[{V, fun() -> R = parse_accept(V) end} || {V, R} <- Tests].

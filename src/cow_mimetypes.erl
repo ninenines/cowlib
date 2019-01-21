@@ -24,7 +24,7 @@ all(Path) ->
 	case filename:extension(Path) of
 		<<>> -> {<<"application">>, <<"octet-stream">>, []};
 		<< $., Ext/binary >> -> 
-			LowercaseExt = string:lowercase(Ext),
+			LowercaseExt = lowercase(Ext),
 			all_ext(LowercaseExt)
 	end.
 
@@ -35,11 +35,46 @@ web(Path) ->
 	case filename:extension(Path) of
 		<<>> -> {<<"application">>, <<"octet-stream">>, []};
 		<< $., Ext/binary >> -> 
-			LowercaseExt = string:lowercase(Ext),
+			LowercaseExt = lowercase(Ext),
 			web_ext(LowercaseExt)
 	end.
 
 %% Internal.
+lowercase(Ext)->
+	OTPRelease = erlang:list_to_integer(erlang:system_info(otp_release)),
+	if 
+		OTPRelease >= 20 -> string:lowercase(Ext);
+		true -> << << (char_to_lower(C)) >> || << C >> <= Ext >>
+	end.
+
+-spec char_to_lower(char()) -> char().
+char_to_lower($A) -> $a;
+char_to_lower($B) -> $b;
+char_to_lower($C) -> $c;
+char_to_lower($D) -> $d;
+char_to_lower($E) -> $e;
+char_to_lower($F) -> $f;
+char_to_lower($G) -> $g;
+char_to_lower($H) -> $h;
+char_to_lower($I) -> $i;
+char_to_lower($J) -> $j;
+char_to_lower($K) -> $k;
+char_to_lower($L) -> $l;
+char_to_lower($M) -> $m;
+char_to_lower($N) -> $n;
+char_to_lower($O) -> $o;
+char_to_lower($P) -> $p;
+char_to_lower($Q) -> $q;
+char_to_lower($R) -> $r;
+char_to_lower($S) -> $s;
+char_to_lower($T) -> $t;
+char_to_lower($U) -> $u;
+char_to_lower($V) -> $v;
+char_to_lower($W) -> $w;
+char_to_lower($X) -> $x;
+char_to_lower($Y) -> $y;
+char_to_lower($Z) -> $z;
+char_to_lower(Ch) -> Ch.
 
 %% GENERATED
 all_ext(<<"123">>) -> {<<"application">>, <<"vnd.lotus-1-2-3">>, []};

@@ -23,7 +23,7 @@
 all(Path) ->
 	case filename:extension(Path) of
 		<<>> -> {<<"application">>, <<"octet-stream">>, []};
-		<< $., Ext/binary >> -> all_ext(Ext)
+		<< $., Ext/binary >> -> all_ext(string:lowercase(Ext))
 	end.
 
 %% @doc Return the mimetype for a Web related file by looking at its extension.
@@ -32,7 +32,7 @@ all(Path) ->
 web(Path) ->
 	case filename:extension(Path) of
 		<<>> -> {<<"application">>, <<"octet-stream">>, []};
-		<< $., Ext/binary >> -> web_ext(Ext)
+		<< $., Ext/binary >> -> web_ext(string:lowercase(Ext))
 	end.
 
 %% Internal.

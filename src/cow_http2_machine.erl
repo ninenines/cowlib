@@ -551,7 +551,7 @@ headers_pseudo_headers(Frame, State=#http2_machine{local_settings=LocalSettings}
 			headers_malformed(Frame, State,
 				'CONNECT requests only use the :method and :authority pseudo-headers. (RFC7540 8.3)');
 		%% Other requests.
-		{ok, PseudoHeaders=#{method := _, scheme := _, authority := _, path := _}, Headers} ->
+		{ok, PseudoHeaders=#{method := _, scheme := _, path := _}, Headers} ->
 			headers_regular_headers(Frame, State, Type, Stream, PseudoHeaders, Headers);
 		{ok, _, _} ->
 			headers_malformed(Frame, State,

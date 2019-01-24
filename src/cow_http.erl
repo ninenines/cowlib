@@ -181,6 +181,8 @@ parse_headers(Data) ->
 
 parse_header(<< $\r, $\n, Rest/bits >>, Acc) ->
 	{lists:reverse(Acc), Rest};
+parse_header(<< $\n, Rest/bits >>, Acc) ->
+	{lists:reverse(Acc), Rest};
 parse_header(Data, Acc) ->
 	parse_hd_name(Data, Acc, <<>>).
 
@@ -214,6 +216,8 @@ parse_hd_value(<< $\r, Rest/bits >>, Acc, Name, SoFar) ->
 			Value = clean_value_ws_end(SoFar, byte_size(SoFar) - 1),
 			parse_header(Rest2, [{Name, Value}|Acc])
 	end;
+parse_hd_value(<< $\n, Rest/bits >>, Acc, Name, SoFar) ->
+    parse_hd_value(<< $\r,$\n, Rest/bits >>, Acc, Name, SoFar);
 parse_hd_value(<< C, Rest/bits >>, Acc, Name, SoFar) ->
 	parse_hd_value(Rest, Acc, Name, << SoFar/binary, C >>).
 
@@ -242,6 +246,7 @@ parse_headers_test_() ->
 			"Multiline-Header: why hello!\r\n"
 				" I didn't see you all the way over there!\r\n"
 			"Content-Length: 12\r\n"
+			"Non-CRLF-Header: 10\n"
 			"Content-Type: text/plain\r\n"
 			"\r\nRest">>,
 			{[{<<"server">>, <<"Erlang/R17">>},
@@ -249,6 +254,7 @@ parse_headers_test_() ->
 				{<<"multiline-header">>,
 					<<"why hello! I didn't see you all the way over there!">>},
 				{<<"content-length">>, <<"12">>},
+				{<<"non-crlf-header">>, <<"10">>},
 				{<<"content-type">>, <<"text/plain">>}],
 				<<"Rest">>}}
 	],

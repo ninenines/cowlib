@@ -34,7 +34,7 @@ split(0, Rest, Acc) ->
 split(N, [], Acc) ->
 	{more, N, Acc};
 split(N, Binary, Acc) when byte_size(Binary) =< N ->
-	{ok, lists:reverse([Binary|Acc]), <<>>};
+	{more, N - byte_size(Binary), [Binary|Acc]};
 split(N, Binary, Acc) when is_binary(Binary) ->
 	<< Before:N/binary, After/bits >> = Binary,
 	{ok, lists:reverse([Before|Acc]), After};
@@ -48,13 +48,7 @@ split(N, [Char|Tail], Acc) when is_integer(Char) ->
 split(N, [List|Tail], Acc0) ->
 	case split(N, List, Acc0) of
 		{ok, Before, After} ->
-			IolistSize = iolist_size(Before),
-			if
-				IolistSize < N ->
-					split(N - IolistSize, [After|Tail], lists:reverse(Before));
-				true ->
-					{ok, Before, [After|Tail]}
-			end;
+			{ok, Before, [After|Tail]};
 		{more, More, Acc} ->
 			split(More, Tail, Acc)
 	end.
@@ -72,7 +66,8 @@ split_test_() ->
 		{10, ["He", [<<"ll">>], $o, [["!"]]], "Hello!", ""},
 		{10, ["Hel"|<<"lo!">>], "Hello!", ""},
 		{10, [[<<>>|<<>>], [], <<"Hello world!">>], "Hello worl", "d!"},
-		{10, [[<<"He">>|<<"llo">>], [$\s], <<"world!">>], "Hello worl", "d!"}
+		{10, [[<<"He">>|<<"llo">>], [$\s], <<"world!">>], "Hello worl", "d!"},
+		{10, [[[]|<<"He">>], [[]|<<"llo wor">>]|<<"ld!">>], "Hello worl", "d!"}
 	],
 	[{iolist_to_binary(V), fun() ->
 		{B, A} = split(N, V),

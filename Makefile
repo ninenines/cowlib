@@ -74,3 +74,18 @@ endif
 
 perfs: test-build
 	$(gen_verbose) erl -noshell -pa ebin -eval 'horse:app_perf($(PROJECT)), erlang:halt().'
+
+# Prepare for the release.
+
+prepare_tag:
+	$(verbose) echo -n "Most recent tag:            "
+	$(verbose) git tag | tail -n1
+	$(verbose) git verify-tag `git tag | tail -n1`
+	$(verbose) echo -n "MAKEFILE: "
+	$(verbose) grep -m1 PROJECT_VERSION Makefile
+	$(verbose) echo -n "APP:                 "
+	$(verbose) grep -m1 vsn ebin/$(PROJECT).app | sed 's/	//g'
+	$(verbose) echo
+	$(verbose) echo "Dependencies:"
+	$(verbose) grep ^DEPS Makefile || echo "DEPS ="
+	$(verbose) grep ^dep_ Makefile || true

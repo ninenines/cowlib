@@ -372,6 +372,7 @@ status(204) -> <<"204 No Content">>;
 status(205) -> <<"205 Reset Content">>;
 status(206) -> <<"206 Partial Content">>;
 status(207) -> <<"207 Multi-Status">>;
+status(208) -> <<"208 Already Reported">>;
 status(226) -> <<"226 IM Used">>;
 status(300) -> <<"300 Multiple Choices">>;
 status(301) -> <<"301 Moved Permanently">>;

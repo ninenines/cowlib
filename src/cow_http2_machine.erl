@@ -27,6 +27,8 @@
 -export([update_window/2]).
 -export([update_window/3]).
 -export([reset_stream/2]).
+-export([get_window/1]).
+-export([get_window/2]).
 -export([get_local_setting/2]).
 -export([get_last_streamid/1]).
 -export([get_stream_local_state/2]).
@@ -1289,6 +1291,17 @@ update_window(StreamID, Size, State)
 		when Size > 0 ->
 	Stream = #stream{remote_window=RemoteWindow} = stream_get(StreamID, State),
 	stream_store(Stream#stream{remote_window=RemoteWindow + Size}, State).
+
+-spec get_window(http2_machine())
+	-> 65535..16#7fffffff.
+get_window(#http2_machine{remote_window=RemoteWindow}) ->
+	RemoteWindow.
+
+-spec get_window(cow_http2:streamid(), http2_machine())
+	-> 0..16#7fffffff.
+get_window(StreamID, State) ->
+	#stream{remote_window=RemoteWindow} = stream_get(StreamID, State),
+	RemoteWindow.
 
 %% Public interface to reset streams.
 

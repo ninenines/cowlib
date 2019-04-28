@@ -353,7 +353,7 @@ data_frame(Frame={data, StreamID, _, Data}, State0=#http2_machine{
 			%% DATA frames received for such lingering streams.
 			case lists:member(StreamID, Lingering) of
 				true ->
-					{ok, State0};
+					{ok, {lingering_data, StreamID, DataLen}, State};
 				false ->
 					{error, {connection_error, stream_closed,
 						'DATA frame received for a closed stream. (RFC7540 5.1)'},

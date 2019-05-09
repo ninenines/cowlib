@@ -888,7 +888,10 @@ horse_parse_allow() ->
 	| {bearer, binary()}
 	| {digest, [{binary(), binary()}]}.
 %% @todo The token is case-insensitive. https://tools.ietf.org/html/rfc7235#section-2.1
-parse_authorization(<<"Basic ", R/bits >>) ->
+parse_authorization(<<B, A, S, I, C, " ", R/bits >>)
+		when ((B =:= $B) or (B =:= $b)), ((A =:= $A) or (A =:= $a)),
+			((S =:= $S) or (S =:= $s)), ((I =:= $I) or (I =:= $i)),
+			((C =:= $C) or (C =:= $c)) ->
 	auth_basic(base64:decode(R), <<>>);
 parse_authorization(<<"Bearer ", R/bits >>) when R =/= <<>> ->
 	validate_auth_bearer(R),
@@ -944,6 +947,7 @@ auth_digest_list_sep(<< C, R/bits >>, Acc) when ?IS_WS(C) -> auth_digest_list_se
 parse_authorization_test_() ->
 	Tests = [
 		{<<"Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==">>, {basic, <<"Aladdin">>, <<"open sesame">>}},
+		{<<"bAsIc QWxhZGRpbjpvcGVuIHNlc2FtZQ==">>, {basic, <<"Aladdin">>, <<"open sesame">>}},
 		{<<"Bearer mF_9.B5f-4.1JqM">>, {bearer, <<"mF_9.B5f-4.1JqM">>}},
 		{<<"Digest username=\"Mufasa\","
 				"realm=\"testrealm@host.com\","

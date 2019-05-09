@@ -893,10 +893,17 @@ parse_authorization(<<B, A, S, I, C, " ", R/bits >>)
 			((S =:= $S) or (S =:= $s)), ((I =:= $I) or (I =:= $i)),
 			((C =:= $C) or (C =:= $c)) ->
 	auth_basic(base64:decode(R), <<>>);
-parse_authorization(<<"Bearer ", R/bits >>) when R =/= <<>> ->
+parse_authorization(<<B, E1, A, R1, E2, R2, " ", R/bits >>)
+		when (R =/= <<>>), ((B =:= $B) or (B =:= $b)),
+			((E1 =:= $E) or (E1 =:= $e)), ((A =:= $A) or (A =:= $a)),
+			((R1 =:= $R) or (R1 =:= $r)), ((E2 =:= $E) or (E2 =:= $e)),
+			((R2 =:= $R) or (R2 =:= $r)) ->
 	validate_auth_bearer(R),
 	{bearer, R};
-parse_authorization(<<"Digest ", R/bits >>) ->
+parse_authorization(<<D, I, G, E, S, T, " ", R/bits >>)
+		when ((D =:= $D) or (D =:= $d)), ((I =:= $I) or (I =:= $i)),
+			((G =:= $G) or (G =:= $g)), ((E =:= $E) or (E =:= $e)),
+			((S =:= $S) or (S =:= $s)), ((T =:= $T) or (T =:= $t)) ->
 	{digest, nonempty(auth_digest_list(R, []))}.
 
 auth_basic(<< $:, Password/bits >>, UserID) -> {basic, UserID, Password};
@@ -949,6 +956,7 @@ parse_authorization_test_() ->
 		{<<"Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==">>, {basic, <<"Aladdin">>, <<"open sesame">>}},
 		{<<"bAsIc QWxhZGRpbjpvcGVuIHNlc2FtZQ==">>, {basic, <<"Aladdin">>, <<"open sesame">>}},
 		{<<"Bearer mF_9.B5f-4.1JqM">>, {bearer, <<"mF_9.B5f-4.1JqM">>}},
+		{<<"bEaRer mF_9.B5f-4.1JqM">>, {bearer, <<"mF_9.B5f-4.1JqM">>}},
 		{<<"Digest username=\"Mufasa\","
 				"realm=\"testrealm@host.com\","
 				"nonce=\"dcd98b7102dd2f0e8b11d0f600bfb0c093\","

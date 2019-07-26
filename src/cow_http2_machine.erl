@@ -349,9 +349,11 @@ data_frame(Frame={data, StreamID, _, Data}, State0=#http2_machine{
 		undefined ->
 			%% After we send an RST_STREAM frame and terminate a stream,
 			%% the remote endpoint still might be sending us some more frames
-			%% until it can process this RST_STREAM. We therefore ignore
-			%% DATA frames received for such lingering streams.
+			%% until it can process this RST_STREAM. We cannot use those
+			%% DATA frames, however we still might want to update the window.
 			case lists:member(StreamID, Lingering) of
+				true when DataLen =:= 0 ->
+					{ok, State};
 				true ->
 					{ok, {lingering_data, StreamID, DataLen}, State};
 				false ->

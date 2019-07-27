@@ -278,6 +278,7 @@ init_upgrade_stream(Method, State=#http2_machine{mode=server, remote_streamid=0,
 -spec frame(cow_http2:frame(), State)
 	-> {ok, State}
 	| {ok, {data, cow_http2:streamid(), cow_http2:fin(), binary()}, State}
+	| {ok, {lingering_data, cow_http2:streamid(), pos_integer()}, State}
 	| {ok, {headers, cow_http2:streamid(), cow_http2:fin(),
 		cow_http:headers(), pseudo_headers(), non_neg_integer() | undefined}, State}
 	| {ok, {trailers, cow_http2:streamid(), cow_http:headers()}, State}

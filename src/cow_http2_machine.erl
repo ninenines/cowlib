@@ -26,6 +26,8 @@
 -export([send_or_queue_data/4]).
 -export([update_window/2]).
 -export([update_window/3]).
+-export([cal_increasing_window/1]).
+-export([cal_increasing_window/2]).
 -export([reset_stream/2]).
 -export([get_local_setting/2]).
 -export([get_last_streamid/1]).
@@ -1292,6 +1294,25 @@ update_window(StreamID, Size, State)
 		when Size > 0 ->
 	Stream = #stream{remote_window=RemoteWindow} = stream_get(StreamID, State),
 	stream_store(Stream#stream{remote_window=RemoteWindow + Size}, State).
+
+cal_increasing_window(#http2_machine{remote_window=RemoteWindow, local_settings=#{initial_window_size := WindowMaxSize}})
+		when RemoteWindow =< (WindowMaxSize / 2) ->
+	WindowMaxSize - RemoteWindow;
+cal_increasing_window(_) ->
+	0.
+
+cal_increasing_window(StreamID, State=#http2_machine{local_settings=#{initial_window_size := WindowMaxSize}}) ->
+	case stream_get(StreamID, State) of
+		#stream{remote_window=RemoteWindow} ->
+			if
+				RemoteWindow =< (WindowMaxSize / 2) ->
+					WindowMaxSize - RemoteWindow;
+				true ->
+					0
+			end;
+		_ ->
+			0
+	end.
 
 %% Public interface to reset streams.
 

@@ -24,6 +24,8 @@
 -export([prepare_push_promise/4]).
 -export([prepare_trailers/3]).
 -export([send_or_queue_data/4]).
+-export([ensure_window/2]).
+-export([ensure_window/3]).
 -export([update_window/2]).
 -export([update_window/3]).
 -export([reset_stream/2]).
@@ -33,16 +35,22 @@
 -export([get_stream_remote_state/2]).
 
 -type opts() :: #{
+	connection_window_margin_size => 0..16#7fffffff,
+	connection_window_update_threshold => 0..16#7fffffff,
 	enable_connect_protocol => boolean(),
 	initial_connection_window_size => 65535..16#7fffffff,
 	initial_stream_window_size => 0..16#7fffffff,
+	max_connection_window_size => 0..16#7fffffff,
 	max_concurrent_streams => non_neg_integer() | infinity,
 	max_decode_table_size => non_neg_integer(),
 	max_encode_table_size => non_neg_integer(),
 	max_frame_size_received => 16384..16777215,
 	max_frame_size_sent => 16384..16777215 | infinity,
+	max_stream_window_size => 0..16#7fffffff,
 	preface_timeout => timeout(),
-	settings_timeout => timeout()
+	settings_timeout => timeout(),
+	stream_window_margin_size => 0..16#7fffffff,
+	stream_window_update_threshold => 0..16#7fffffff
 }.
 -export_type([opts/0]).
 
@@ -1279,6 +1287,86 @@ queue_data(Stream=#stream{local_buffer=Q0, local_buffer_size=Size0}, IsFin, Data
 	Stream#stream{local_buffer=Q, local_buffer_size=Size0 + DataSize}.
 
 %% Public interface to update the flow control window.
+%%
+%% The ensure_window function applies heuristics to avoid updating the
+%% window when it is not necessary. The update_window function updates
+%% the window unconditionally.
+%%
+%% The ensure_window function should be called when requesting more
+%% data (for example when reading a request or response body) as well
+%% as when receiving new data. Failure to do so may result in the
+%% window being depleted.
+%%
+%% The heuristics dictating whether the window must be updated and
+%% what the window size is depends on three options (margin, max
+%% and threshold) along with the Size argument. The window increment
+%% returned by this function may therefore be smaller than the Size
+%% argument. On the other hand the total window allocated over many
+%% calls may end up being larger than the initial Size argument. As
+%% a result, it is the responsibility of the caller to ensure that
+%% the Size argument is never lower than 0.
+
+ensure_window(Size, State=#http2_machine{opts=Opts, remote_window=RemoteWindow}) ->
+	case ensure_window(Size, RemoteWindow, connection, Opts) of
+		ok ->
+			ok;
+		{ok, Increment} ->
+			{ok, Increment, State#http2_machine{remote_window=RemoteWindow + Increment}}
+	end.
+
+ensure_window(StreamID, Size, State=#http2_machine{opts=Opts}) ->
+	Stream = #stream{remote_window=RemoteWindow} = stream_get(StreamID, State),
+	case ensure_window(Size, RemoteWindow, stream, Opts) of
+		ok ->
+			ok;
+		{ok, Increment} ->
+			{ok, Increment, stream_store(Stream#stream{remote_window=RemoteWindow + Increment}, State)}
+	end.
+
+%% No need to update the window when we are not expecting data.
+ensure_window(0, _, _, _) ->
+	ok;
+%% No need to update the window when it is already high enough.
+ensure_window(Size, Window, _, _) when Size =< Window ->
+	ok;
+ensure_window(Size0, Window, Type, Opts) ->
+	Threshold = ensure_window_threshold(Type, Opts),
+	if
+		%% We do not update the window when it is higher than the threshold.
+		Window > Threshold ->
+			ok;
+		true ->
+			Margin = ensure_window_margin(Type, Opts),
+			Size = Size0 + Margin,
+			MaxWindow = ensure_window_max(Type, Opts),
+			Increment = if
+				%% We cannot go above the maximum window size.
+				Size > MaxWindow -> MaxWindow - Window;
+				true -> Size - Window
+			end,
+			case Increment of
+				0 -> ok;
+				_ -> {ok, Increment}
+			end
+	end.
+
+%% Margin defaults to the default initial window size.
+ensure_window_margin(connection, Opts) ->
+	maps:get(connection_window_margin_size, Opts, 65535);
+ensure_window_margin(stream, Opts) ->
+	maps:get(stream_window_margin_size, Opts, 65535).
+
+%% Max window defaults to the max value allowed by the protocol.
+ensure_window_max(connection, Opts) ->
+	maps:get(max_connection_window_size, Opts, 16#7fffffff);
+ensure_window_max(stream, Opts) ->
+	maps:get(max_stream_window_size, Opts, 16#7fffffff).
+
+%% Threshold defaults to 10 times the default frame size.
+ensure_window_threshold(connection, Opts) ->
+	maps:get(connection_window_update_threshold, Opts, 163840);
+ensure_window_threshold(stream, Opts) ->
+	maps:get(stream_window_update_threshold, Opts, 163840).
 
 -spec update_window(1..16#7fffffff, State)
 	-> State when State::http2_machine().

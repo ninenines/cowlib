@@ -372,6 +372,7 @@ status(204) -> <<"204 No Content">>;
 status(205) -> <<"205 Reset Content">>;
 status(206) -> <<"206 Partial Content">>;
 status(207) -> <<"207 Multi-Status">>;
+status(208) -> <<"208 Already Reported">>;
 status(226) -> <<"226 IM Used">>;
 status(300) -> <<"300 Multiple Choices">>;
 status(301) -> <<"301 Moved Permanently">>;
@@ -419,6 +420,7 @@ status(504) -> <<"504 Gateway Timeout">>;
 status(505) -> <<"505 HTTP Version Not Supported">>;
 status(506) -> <<"506 Variant Also Negotiates">>;
 status(507) -> <<"507 Insufficient Storage">>;
+status(508) -> <<"508 Loop Detected">>;
 status(510) -> <<"510 Not Extended">>;
 status(511) -> <<"511 Network Authentication Required">>;
 status(B) when is_binary(B) -> B.

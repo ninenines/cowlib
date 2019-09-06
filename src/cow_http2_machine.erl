@@ -1306,6 +1306,8 @@ queue_data(Stream=#stream{local_buffer=Q0, local_buffer_size=Size0}, IsFin, Data
 %% a result, it is the responsibility of the caller to ensure that
 %% the Size argument is never lower than 0.
 
+-spec ensure_window(non_neg_integer(), State)
+	-> ok | {ok, pos_integer(), State} when State::http2_machine().
 ensure_window(Size, State=#http2_machine{opts=Opts, remote_window=RemoteWindow}) ->
 	case ensure_window(Size, RemoteWindow, connection, Opts) of
 		ok ->
@@ -1314,6 +1316,8 @@ ensure_window(Size, State=#http2_machine{opts=Opts, remote_window=RemoteWindow})
 			{ok, Increment, State#http2_machine{remote_window=RemoteWindow + Increment}}
 	end.
 
+-spec ensure_window(cow_http2:streamid(), non_neg_integer(), State)
+	-> ok | {ok, pos_integer(), State} when State::http2_machine().
 ensure_window(StreamID, Size, State=#http2_machine{opts=Opts}) ->
 	Stream = #stream{remote_window=RemoteWindow} = stream_get(StreamID, State),
 	case ensure_window(Size, RemoteWindow, stream, Opts) of

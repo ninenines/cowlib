@@ -1218,6 +1218,17 @@ send_data(Stream0, State0) ->
 send_data_for_one_stream(Stream=#stream{local=nofin, local_buffer_size=0,
 		local_trailers=Trailers}, State, SendAcc) when Trailers =/= undefined ->
 	{ok, Stream, State, lists:reverse([{trailers, Trailers}|SendAcc])};
+send_data_for_one_stream(Stream=#stream{local=nofin, local_buffer=Q0, local_buffer_size=0},
+		State, SendAcc) ->
+	case queue:len(Q0) of
+		0 ->
+			{ok, Stream, State, lists:reverse(SendAcc)};
+		1 ->
+			%% We know there is a final empty data frame in the queue.
+			%% We need to mark the stream as complete.
+			{{value, {fin, 0, _}}, Q} = queue:out(Q0),
+			{ok, Stream#stream{local=fin, local_buffer=Q}, State, lists:reverse(SendAcc)}
+	end;
 send_data_for_one_stream(Stream=#stream{local=IsFin, local_window=StreamWindow,
 		local_buffer_size=BufferSize}, State=#http2_machine{local_window=ConnWindow}, SendAcc)
 		when ConnWindow =< 0; IsFin =:= fin; StreamWindow =< 0; BufferSize =:= 0 ->
@@ -1283,8 +1294,14 @@ queue_data(Stream=#stream{local_buffer=Q0, local_buffer_size=Size0}, IsFin, Data
 		{sendfile, _, Bytes, _} -> Bytes;
 		{data, Iolist} -> iolist_size(Iolist)
 	end,
-	Q = queue:In({IsFin, DataSize, Data}, Q0),
-	Stream#stream{local_buffer=Q, local_buffer_size=Size0 + DataSize}.
+	%% Never queue non-final empty data frames.
+	case {DataSize, IsFin} of
+		{0, nofin} ->
+			Stream;
+		_ ->
+			Q = queue:In({IsFin, DataSize, Data}, Q0),
+			Stream#stream{local_buffer=Q, local_buffer_size=Size0 + DataSize}
+	end.
 
 %% Public interface to update the flow control window.
 %%

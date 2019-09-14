@@ -31,6 +31,7 @@
 -export([reset_stream/2]).
 -export([get_local_setting/2]).
 -export([get_last_streamid/1]).
+-export([get_stream_local_buffer_size/2]).
 -export([get_stream_local_state/2]).
 -export([get_stream_remote_state/2]).
 
@@ -1434,6 +1435,22 @@ default_setting_value(enable_connect_protocol) -> false.
 -spec get_last_streamid(http2_machine()) -> cow_http2:streamid().
 get_last_streamid(#http2_machine{remote_streamid=RemoteStreamID}) ->
 	RemoteStreamID.
+
+%% Retrieve the local buffer size for a stream.
+
+-spec get_stream_local_buffer_size(cow_http2:streamid(), http2_machine())
+	-> {ok, non_neg_integer()} | {error, not_found | closed}.
+get_stream_local_buffer_size(StreamID, State=#http2_machine{mode=Mode,
+		local_streamid=LocalStreamID, remote_streamid=RemoteStreamID}) ->
+	case stream_get(StreamID, State) of
+		#stream{local_buffer_size=Size} ->
+			{ok, Size};
+		undefined when (?IS_LOCAL(Mode, StreamID) andalso (StreamID < LocalStreamID))
+				orelse ((not ?IS_LOCAL(Mode, StreamID)) andalso (StreamID =< RemoteStreamID)) ->
+			{error, closed};
+		undefined ->
+			{error, not_found}
+	end.
 
 %% Retrieve the local state for a stream, including the state in the queue.
 

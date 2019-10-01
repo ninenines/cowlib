@@ -659,6 +659,8 @@ headers_regular_headers(Frame=#headers{id=StreamID},
 			stream_reset(StreamID, State, protocol_error, HumanReadable)
 	end.
 
+regular_headers([{<<>>, _}|_], _) ->
+	{error, 'Empty header names are not valid regular headers. (CVE-2019-9516)'};
 regular_headers([{<<":", _/bits>>, _}|_], _) ->
 	{error, 'Pseudo-headers were found after regular headers. (RFC7540 8.1.2.1)'};
 regular_headers([{<<"connection">>, _}|_], _) ->

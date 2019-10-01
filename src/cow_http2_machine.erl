@@ -29,6 +29,7 @@
 -export([update_window/2]).
 -export([update_window/3]).
 -export([reset_stream/2]).
+-export([get_connection_local_buffer_size/1]).
 -export([get_local_setting/2]).
 -export([get_last_streamid/1]).
 -export([get_stream_local_buffer_size/2]).
@@ -1407,6 +1408,14 @@ reset_stream(StreamID, State=#http2_machine{streams=Streams0}) ->
 		false ->
 			{error, not_found}
 	end.
+
+%% Retrieve the buffer size for all streams.
+
+-spec get_connection_local_buffer_size(http2_machine()) -> non_neg_integer().
+get_connection_local_buffer_size(#http2_machine{streams=Streams}) ->
+	lists:foldl(fun(#stream{local_buffer_size=Size}, Acc) ->
+		Acc + Size
+	end, 0, Streams).
 
 %% Retrieve a setting value, or its default value if not set.
 

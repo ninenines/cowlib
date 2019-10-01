@@ -191,7 +191,7 @@ init(client, Opts) ->
 	NextSettings = settings_init(Opts),
 	client_preface(#http2_machine{
 		mode=client,
-		opts=only_keep_relevant_opts(Opts),
+		opts=Opts,
 		preface_timer=start_timer(preface_timeout, Opts),
 		settings_timer=start_timer(settings_timeout, Opts),
 		next_settings=NextSettings,
@@ -201,21 +201,12 @@ init(server, Opts) ->
 	NextSettings = settings_init(Opts),
 	common_preface(#http2_machine{
 		mode=server,
-		opts=only_keep_relevant_opts(Opts),
+		opts=Opts,
 		preface_timer=start_timer(preface_timeout, Opts),
 		settings_timer=start_timer(settings_timeout, Opts),
 		next_settings=NextSettings,
 		local_streamid=2
 	}).
-
-%% We remove the options that are part of SETTINGS or that are not known.
-only_keep_relevant_opts(Opts) ->
-	maps:with([
-		initial_connection_window_size,
-		max_encode_table_size,
-		max_frame_size_sent,
-		settings_timeout
-	], Opts).
 
 start_timer(Name, Opts) ->
 	case maps:get(Name, Opts, 5000) of

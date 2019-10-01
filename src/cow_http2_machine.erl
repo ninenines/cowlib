@@ -280,7 +280,6 @@ init_upgrade_stream(Method, State=#http2_machine{mode=server, remote_streamid=0,
 -spec frame(cow_http2:frame(), State)
 	-> {ok, State}
 	| {ok, {data, cow_http2:streamid(), cow_http2:fin(), binary()}, State}
-	| {ok, {lingering_data, cow_http2:streamid(), pos_integer()}, State}
 	| {ok, {headers, cow_http2:streamid(), cow_http2:fin(),
 		cow_http:headers(), pseudo_headers(), non_neg_integer() | undefined}, State}
 	| {ok, {trailers, cow_http2:streamid(), cow_http:headers()}, State}
@@ -351,14 +350,11 @@ data_frame(Frame={data, StreamID, _, Data}, State0=#http2_machine{
 				'DATA frame received for a half-closed (remote) stream. (RFC7540 5.1)');
 		undefined ->
 			%% After we send an RST_STREAM frame and terminate a stream,
-			%% the remote endpoint still might be sending us some more frames
-			%% until it can process this RST_STREAM. We cannot use those
-			%% DATA frames, however we still might want to update the window.
+			%% the remote endpoint might still be sending us some more
+			%% frames until it can process this RST_STREAM.
 			case lists:member(StreamID, Lingering) of
-				true when DataLen =:= 0 ->
-					{ok, State};
 				true ->
-					{ok, {lingering_data, StreamID, DataLen}, State};
+					{ok, State};
 				false ->
 					{error, {connection_error, stream_closed,
 						'DATA frame received for a closed stream. (RFC7540 5.1)'},

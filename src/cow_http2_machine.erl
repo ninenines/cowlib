@@ -1079,7 +1079,6 @@ timeout(_, _, State) ->
 -spec prepare_headers(cow_http2:streamid(), State, idle | cow_http2:fin(),
 	pseudo_headers(), cow_http:headers())
 	-> {ok, cow_http2:fin(), iodata(), State} when State::http2_machine().
-%% @todo Should handle the request case too.
 prepare_headers(StreamID, State=#http2_machine{encode_state=EncodeState0},
 		IsFin0, PseudoHeaders, Headers0) ->
 	Stream = #stream{method=Method, local=idle} = stream_get(StreamID, State),
@@ -1088,7 +1087,7 @@ prepare_headers(StreamID, State=#http2_machine{encode_state=EncodeState0},
 		{_, <<"HEAD">>} -> fin;
 		_ -> IsFin0
 	end,
-	Headers = merge_pseudo_headers(PseudoHeaders, Headers0),
+	Headers = merge_pseudo_headers(PseudoHeaders, remove_http11_headers(Headers0)),
 	{HeaderBlock, EncodeState} = cow_hpack:encode(Headers, EncodeState0),
 	{ok, IsFin, HeaderBlock, stream_store(Stream#stream{local=IsFin0},
 		State#http2_machine{encode_state=EncodeState})}.
@@ -1107,13 +1106,33 @@ prepare_push_promise(StreamID, State=#http2_machine{encode_state=EncodeState0,
 		{_, TE0} -> TE0;
 		false -> undefined
 	end,
-	Headers = merge_pseudo_headers(PseudoHeaders, Headers0),
+	Headers = merge_pseudo_headers(PseudoHeaders, remove_http11_headers(Headers0)),
 	{HeaderBlock, EncodeState} = cow_hpack:encode(Headers, EncodeState0),
 	{ok, LocalStreamID, HeaderBlock, stream_store(
 		#stream{id=LocalStreamID, method=maps:get(method, PseudoHeaders),
 			remote=fin, remote_expected_size=0,
 			local_window=LocalWindow, remote_window=RemoteWindow, te=TE},
 		State#http2_machine{encode_state=EncodeState, local_streamid=LocalStreamID + 2})}.
+
+remove_http11_headers(Headers) ->
+	RemoveHeaders0 = [
+		<<"keep-alive">>,
+		<<"proxy-connection">>,
+		<<"transfer-encoding">>,
+		<<"upgrade">>
+	],
+	RemoveHeaders = case lists:keyfind(<<"connection">>, 1, Headers) of
+		false ->
+			RemoveHeaders0;
+		{_, ConnHd} ->
+			%% We do not need to worry about any "close" header because
+			%% that header name is reserved.
+			Connection = cow_http_hd:parse_connection(ConnHd),
+			Connection ++ [<<"connection">>|RemoveHeaders0]
+	end,
+	lists:filter(fun({Name, _}) ->
+		not lists:member(Name, RemoveHeaders)
+	end, Headers).
 
 merge_pseudo_headers(PseudoHeaders, Headers0) ->
 	lists:foldl(fun

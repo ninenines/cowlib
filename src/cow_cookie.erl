@@ -180,7 +180,7 @@ parse_cookie_error_test_() ->
 %% Initial binary implementation:
 %%   * Copyright 2011 Thomas Burdick <thomas.burdick@gmail.com>
 
--spec setcookie(iodata(), iodata(), cookie_opts()) -> iodata().
+-spec setcookie(iodata(), iodata(), cookie_opts()) -> iolist().
 setcookie(Name, Value, Opts) ->
 	nomatch = binary:match(iolist_to_binary(Name), [<<$=>>, <<$,>>, <<$;>>,
 			<<$\s>>, <<$\t>>, <<$\r>>, <<$\n>>, <<$\013>>, <<$\014>>]),

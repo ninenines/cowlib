@@ -1381,12 +1381,19 @@ ensure_window(Size, State=#http2_machine{opts=Opts, remote_window=RemoteWindow})
 -spec ensure_window(cow_http2:streamid(), non_neg_integer(), State)
 	-> ok | {ok, pos_integer(), State} when State::http2_machine().
 ensure_window(StreamID, Size, State=#http2_machine{opts=Opts}) ->
-	Stream = #stream{remote_window=RemoteWindow} = stream_get(StreamID, State),
-	case ensure_window(Size, RemoteWindow, stream, Opts) of
-		ok ->
+	case stream_get(StreamID, State) of
+		%% For simplicity's sake, we do not consider attempts to ensure the window
+		%% of a terminated stream to be errors. We simply act as if the stream
+		%% window is large enough.
+		undefined ->
 			ok;
-		{ok, Increment} ->
-			{ok, Increment, stream_store(Stream#stream{remote_window=RemoteWindow + Increment}, State)}
+		Stream = #stream{remote_window=RemoteWindow} ->
+			case ensure_window(Size, RemoteWindow, stream, Opts) of
+				ok ->
+					ok;
+				{ok, Increment} ->
+					{ok, Increment, stream_store(Stream#stream{remote_window=RemoteWindow + Increment}, State)}
+			end
 	end.
 
 %% No need to update the window when we are not expecting data.

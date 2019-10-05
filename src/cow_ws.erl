@@ -69,7 +69,7 @@
 -type rsv() :: <<_:3>>.
 -export_type([rsv/0]).
 
--type utf8_state() :: 0..8.
+-type utf8_state() :: 0..8 | undefined.
 -export_type([utf8_state/0]).
 
 %% @doc Generate a key for the Websocket handshake request.
@@ -466,7 +466,8 @@ parse_payload(Data, MaskKey, Utf8State, ParsedLen, Type, Len, FragState,
 	Payload = inflate_frame(unmask(Data2, MaskKey, ParsedLen), Inflate, TakeOver, FragState, Eof),
 	validate_payload(Payload, Rest, Utf8State, ParsedLen, Type, FragState, Eof);
 %% Empty frame.
-parse_payload(Data, _, Utf8State = 0, 0, _, 0, _, _, _) ->
+parse_payload(Data, _, Utf8State, 0, _, 0, _, _, _)
+		when Utf8State =:= 0; Utf8State =:= undefined ->
 	{ok, <<>>, Utf8State, Data};
 %% Start of close frame.
 parse_payload(Data, MaskKey, Utf8State, 0, Type = close, Len, FragState, _, << 0:3 >>) ->
@@ -551,6 +552,11 @@ inflate_frame(Data, Inflate, TakeOver, FragState, true)
 inflate_frame(Data, Inflate, _T, _F, _E) ->
 	iolist_to_binary(zlib:inflate(Inflate, Data)).
 
+%% The Utf8State variable can be set to 'undefined' to disable the validation.
+validate_payload(Payload, _, undefined, _, _, _, false) ->
+	{more, Payload, undefined};
+validate_payload(Payload, Rest, undefined, _, _, _, true) ->
+	{ok, Payload, undefined, Rest};
 %% Text frames and close control frames MUST have a payload that is valid UTF-8.
 validate_payload(Payload, Rest, Utf8State, _, Type, _, Eof) when Type =:= text; Type =:= close ->
 	case validate_utf8(Payload, Utf8State) of

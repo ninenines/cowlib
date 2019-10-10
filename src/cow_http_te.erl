@@ -25,13 +25,14 @@
 
 %% The state type is the same for both identity and chunked.
 -type state() :: {non_neg_integer(), non_neg_integer()}.
+-export_type([state/0]).
 
 -type decode_ret() :: more
 	| {more, Data::binary(), state()}
 	| {more, Data::binary(), RemLen::non_neg_integer(), state()}
 	| {more, Data::binary(), Rest::binary(), state()}
-	| {done, TotalLen::non_neg_integer(), Rest::binary()}
-	| {done, Data::binary(), TotalLen::non_neg_integer(), Rest::binary()}.
+	| {done, HasTrailers::trailers | no_trailers, Rest::binary()}
+	| {done, Data::binary(), HasTrailers::trailers | no_trailers, Rest::binary()}.
 -export_type([decode_ret/0]).
 
 -include("cow_parse.hrl").

@@ -35,6 +35,7 @@
 -export([get_stream_local_buffer_size/2]).
 -export([get_stream_local_state/2]).
 -export([get_stream_remote_state/2]).
+-export([is_lingering_stream/2]).
 
 -type opts() :: #{
 	connection_window_margin_size => 0..16#7fffffff,
@@ -1548,6 +1549,16 @@ get_stream_remote_state(StreamID, State=#http2_machine{mode=Mode,
 			{error, closed};
 		undefined ->
 			{error, not_found}
+	end.
+
+%% Query whether the stream was reset recently by the remote endpoint.
+
+-spec is_lingering_stream(cow_http2:streamid(), http2_machine()) -> boolean().
+is_lingering_stream(StreamID, #http2_machine{
+		local_lingering_streams=Local, remote_lingering_streams=Remote}) ->
+	case lists:member(StreamID, Local) of
+		true -> true;
+		false -> lists:member(StreamID, Remote)
 	end.
 
 %% Stream-related functions.

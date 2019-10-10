@@ -20,14 +20,14 @@ and manipulating cookie headers.
 
 [source,erlang]
 ----
-cookie_opts() :: [Option]
-
-Option :: {domain, binary()}
-        | {http_only, boolean()}
-        | {max_age, non_neg_integer()}
-        | {path, binary()}
-        | {same_site, lax | strict}
-        | {secure, boolean()}
+cookie_opts() :: #{
+    domain    => binary(),
+    http_only => boolean(),
+    max_age   => non_neg_integer(),
+    path      => binary(),
+    same_site => lax | strict,
+    secure    => boolean()
+}
 ----
 
 Options for the set-cookie header. They are added to the

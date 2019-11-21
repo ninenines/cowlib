@@ -65,7 +65,7 @@
 -export([parse_if_unmodified_since/1]).
 % @todo -export([parse_last_event_id/1]). eventsource
 -export([parse_last_modified/1]).
-% @todo -export([parse_link/1]). RFC5988
+-export([parse_link/1]).
 % @todo -export([parse_location/1]). RFC7231
 -export([parse_max_forwards/1]).
 % @todo -export([parse_memento_datetime/1]). RFC7089
@@ -2177,6 +2177,12 @@ parse_last_modified_test_() ->
 	],
 	[{V, fun() -> R = parse_last_modified(V) end} || {V, R} <- Tests].
 -endif.
+
+%% @doc Parse the Link header.
+
+-spec parse_link(binary()) -> [cow_link:link()].
+parse_link(Link) ->
+	cow_link:parse_link(Link).
 
 %% @doc Parse the Max-Forwards header.
 

@@ -32,13 +32,16 @@
 -export([parse_dictionary/1]).
 -export([parse_item/1]).
 -export([parse_list/1]).
+-export([dictionary/1]).
+-export([item/1]).
+-export([list/1]).
 
 -include("cow_parse.hrl").
 
 -type sh_list() :: [sh_item() | sh_inner_list()].
 -type sh_inner_list() :: sh_with_params([sh_item()]).
 -type sh_params() :: #{binary() => sh_bare_item() | undefined}.
--type sh_dictionary() :: #{binary() => sh_item() | sh_inner_list()}.
+-type sh_dictionary() :: {#{binary() => sh_item() | sh_inner_list()}, [binary()]}.
 -type sh_item() :: sh_with_params(sh_bare_item()).
 -type sh_bare_item() :: integer() | float() | boolean()
 	| {string | token | binary, binary()}.
@@ -53,39 +56,39 @@
 	(C =:= $z)
 ).
 
-%% Public interface.
+%% Parsing.
 
 -spec parse_dictionary(binary()) -> sh_dictionary().
 parse_dictionary(<<>>) ->
-	#{};
+	{#{}, []};
 parse_dictionary(<<C,R/bits>>) when ?IS_LC_ALPHA(C) ->
-	{Dict, <<>>} = parse_dict_key(R, #{}, <<C>>),
-	Dict.
+	{Dict, Order, <<>>} = parse_dict_key(R, #{}, [], <<C>>),
+	{Dict, Order}.
 
-parse_dict_key(<<$=,$(,R0/bits>>, Acc, K) ->
+parse_dict_key(<<$=,$(,R0/bits>>, Acc, Order, K) ->
 	false = maps:is_key(K, Acc),
 	{Item, R} = parse_inner_list(R0, []),
-	parse_dict_before_sep(R, Acc#{K => Item});
-parse_dict_key(<<$=,R0/bits>>, Acc, K) ->
+	parse_dict_before_sep(R, Acc#{K => Item}, [K|Order]);
+parse_dict_key(<<$=,R0/bits>>, Acc, Order, K) ->
 	false = maps:is_key(K, Acc),
 	{Item, R} = parse_item1(R0),
-	parse_dict_before_sep(R, Acc#{K => Item});
-parse_dict_key(<<C,R/bits>>, Acc, K)
+	parse_dict_before_sep(R, Acc#{K => Item}, [K|Order]);
+parse_dict_key(<<C,R/bits>>, Acc, Order, K)
 		when ?IS_LC_ALPHA(C) or ?IS_DIGIT(C)
 			or (C =:= $_) or (C =:= $-) or (C =:= $*) ->
-	parse_dict_key(R, Acc, <<K/binary,C>>).
+	parse_dict_key(R, Acc, Order, <<K/binary,C>>).
 
-parse_dict_before_sep(<<C,R/bits>>, Acc) when ?IS_WS(C) ->
-	parse_dict_before_sep(R, Acc);
-parse_dict_before_sep(<<C,R/bits>>, Acc) when C =:= $, ->
-	parse_dict_before_member(R, Acc);
-parse_dict_before_sep(<<>>, Acc) ->
-	{Acc, <<>>}.
+parse_dict_before_sep(<<C,R/bits>>, Acc, Order) when ?IS_WS(C) ->
+	parse_dict_before_sep(R, Acc, Order);
+parse_dict_before_sep(<<C,R/bits>>, Acc, Order) when C =:= $, ->
+	parse_dict_before_member(R, Acc, Order);
+parse_dict_before_sep(<<>>, Acc, Order) ->
+	{Acc, lists:reverse(Order), <<>>}.
 
-parse_dict_before_member(<<C,R/bits>>, Acc) when ?IS_WS(C) ->
-	parse_dict_before_member(R, Acc);
-parse_dict_before_member(<<C,R/bits>>, Acc) when ?IS_LC_ALPHA(C) ->
-	parse_dict_key(R, Acc, <<C>>).
+parse_dict_before_member(<<C,R/bits>>, Acc, Order) when ?IS_WS(C) ->
+	parse_dict_before_member(R, Acc, Order);
+parse_dict_before_member(<<C,R/bits>>, Acc, Order) when ?IS_LC_ALPHA(C) ->
+	parse_dict_key(R, Acc, Order, <<C>>).
 
 -spec parse_item(binary()) -> sh_item().
 parse_item(Bin) ->
@@ -218,7 +221,7 @@ parse_binary(<<C,R/bits>>, Acc) when ?IS_ALPHANUM(C) or (C =:= $+) or (C =:= $/)
 	parse_binary(R, <<Acc/binary,C>>).
 
 -ifdef(TEST).
-struct_hd_test_() ->
+parse_struct_hd_test_() ->
 	Files = filelib:wildcard("deps/structured-header-tests/*.json"),
 	lists:flatten([begin
 		{ok, JSON} = file:read_file(File),
@@ -248,7 +251,7 @@ struct_hd_test_() ->
 					<<"list">> when MustFail; CanFail ->
 						{'EXIT', _} = (catch parse_list(Raw));
 					<<"dictionary">> ->
-						Expected = (catch parse_dictionary(Raw));
+						{Expected, _Order} = (catch parse_dictionary(Raw));
 					<<"item">> ->
 						Expected = (catch parse_item(Raw));
 					<<"list">> ->
@@ -319,4 +322,99 @@ trim_ws_end(Value, N) ->
 			<< Value2:S/binary, _/bits >> = Value,
 			Value2
 	end.
+-endif.
+
+%% Building.
+
+-spec dictionary(#{binary() => sh_item() | sh_inner_list()}
+		| [{binary(), sh_item() | sh_inner_list()}])
+	-> iolist().
+%% @todo Also accept this? dictionary({Map, Order}) ->
+dictionary(Map) when is_map(Map) ->
+	dictionary(maps:to_list(Map));
+dictionary(KVList) when is_list(KVList) ->
+	lists:join(<<", ">>, [
+		[Key, $=, item_or_inner_list(Value)]
+	|| {Key, Value} <- KVList]).
+
+-spec item(sh_item()) -> iolist().
+item({with_params, BareItem, Params}) ->
+	[bare_item(BareItem), params(Params)].
+
+-spec list(sh_list()) -> iolist().
+list(List) ->
+	lists:join(<<", ">>, [item_or_inner_list(Value) || Value <- List]).
+
+item_or_inner_list(Value={with_params, List, _}) when is_list(List) ->
+	inner_list(Value);
+item_or_inner_list(Value) ->
+	item(Value).
+
+inner_list({with_params, List, Params}) ->
+	[$(, lists:join($\s, [item(Value) || Value <- List]), $), params(Params)].
+
+bare_item({string, String}) ->
+	[$", escape_string(String, <<>>), $"];
+bare_item({token, Token}) ->
+	Token;
+bare_item({binary, Binary}) ->
+	[$*, base64:encode(Binary), $*];
+bare_item(Integer) when is_integer(Integer) ->
+	integer_to_binary(Integer);
+%% In order to properly reproduce the float as a string we
+%% must first determine how many decimals we want in the
+%% fractional component, otherwise rounding errors may occur.
+bare_item(Float) when is_float(Float) ->
+	Decimals = case trunc(Float) of
+		I when I >= 10000000000000 -> 1;
+		I when I >= 1000000000000 -> 2;
+		I when I >= 100000000000 -> 3;
+		I when I >= 10000000000 -> 4;
+		I when I >= 1000000000 -> 5;
+		_ -> 6
+	end,
+	float_to_binary(Float, [{decimals, Decimals}, compact]);
+bare_item(true) ->
+	<<"?1">>;
+bare_item(false) ->
+	<<"?0">>.
+
+escape_string(<<>>, Acc) -> Acc;
+escape_string(<<$\\,R/bits>>, Acc) -> escape_string(R, <<Acc/binary,$\\,$\\>>);
+escape_string(<<$",R/bits>>, Acc) -> escape_string(R, <<Acc/binary,$\\,$">>);
+escape_string(<<C,R/bits>>, Acc) -> escape_string(R, <<Acc/binary,C>>).
+
+params(Params) ->
+	maps:fold(fun
+		(Key, undefined, Acc) ->
+			[[$;, Key]|Acc];
+		(Key, Value, Acc) ->
+			[[$;, Key, $=, bare_item(Value)]|Acc]
+	end, [], Params).
+
+-ifdef(TEST).
+struct_hd_identity_test_() ->
+	Files = filelib:wildcard("deps/structured-header-tests/*.json"),
+	lists:flatten([begin
+		{ok, JSON} = file:read_file(File),
+		Tests = jsx:decode(JSON, [return_maps]),
+		[
+			{iolist_to_binary(io_lib:format("~s: ~s", [filename:basename(File), Name])), fun() ->
+				Expected = expected_to_term(Expected0),
+				case HeaderType of
+					<<"dictionary">> ->
+						{Expected, _Order} = parse_dictionary(iolist_to_binary(dictionary(Expected)));
+					<<"item">> ->
+						Expected = parse_item(iolist_to_binary(item(Expected)));
+					<<"list">> ->
+						Expected = parse_list(iolist_to_binary(list(Expected)))
+				end
+			end}
+		|| #{
+			<<"name">> := Name,
+			<<"header_type">> := HeaderType,
+			%% We only run tests that must not fail.
+			<<"expected">> := Expected0
+		} <- Tests]
+	end || File <- Files]).
 -endif.

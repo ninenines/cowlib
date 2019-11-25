@@ -101,6 +101,8 @@
 -export([parse_upgrade/1]).
 % @todo -export([parse_user_agent/1]). RFC7231
 % @todo -export([parse_variant_vary/1]). RFC2295
+-export([parse_variant_key/2]).
+-export([parse_variants/1]).
 -export([parse_vary/1]).
 % @todo -export([parse_via/1]). RFC7230
 % @todo -export([parse_want_digest/1]). RFC3230
@@ -118,6 +120,8 @@
 -export([access_control_allow_origin/1]).
 -export([access_control_expose_headers/1]).
 -export([access_control_max_age/1]).
+-export([variant_key/1]).
+-export([variants/1]).
 
 -type etag() :: {weak | strong, binary()}.
 -export_type([etag/0]).
@@ -3060,6 +3064,77 @@ parse_upgrade_error_test_() ->
 		|| V <- Tests].
 -endif.
 
+%% @doc Parse the Variant-Key header.
+%%
+%% The Variants header must be parsed first in order to know
+%% the NumMembers argument as it is the number of members in
+%% the Variants dictionary.
+
+-spec parse_variant_key(binary(), pos_integer()) -> [[binary()]].
+parse_variant_key(VariantKey, NumMembers) ->
+	List = cow_http_struct_hd:parse_list(VariantKey),
+	[case Inner of
+		{with_params, InnerList, #{}} ->
+			NumMembers = length(InnerList),
+			[case Item of
+				{with_params, {token, Value}, #{}} -> Value;
+				{with_params, {string, Value}, #{}} -> Value
+			end || Item <- InnerList]
+	end || Inner <- List].
+
+-ifdef(TEST).
+parse_variant_key_test_() ->
+	Tests = [
+		{<<"(en)">>, 1, [[<<"en">>]]},
+		{<<"(gzip fr)">>, 2, [[<<"gzip">>, <<"fr">>]]},
+		{<<"(gzip fr), (\"identity\" fr)">>, 2, [[<<"gzip">>, <<"fr">>], [<<"identity">>, <<"fr">>]]},
+		{<<"(\"gzip \" fr)">>, 2, [[<<"gzip ">>, <<"fr">>]]},
+		{<<"(en br)">>, 2, [[<<"en">>, <<"br">>]]},
+		{<<"(\"0\")">>, 1, [[<<"0">>]]},
+		{<<"(silver), (\"bronze\")">>, 1, [[<<"silver">>], [<<"bronze">>]]},
+		{<<"(some_person)">>, 1, [[<<"some_person">>]]},
+		{<<"(gold europe)">>, 2, [[<<"gold">>, <<"europe">>]]}
+	],
+	[{V, fun() -> R = parse_variant_key(V, N) end} || {V, N, R} <- Tests].
+
+parse_variant_key_error_test_() ->
+	Tests = [
+		{<<"(gzip fr), (identity fr), (br fr oops)">>, 2}
+	],
+	[{V, fun() -> {'EXIT', _} = (catch parse_variant_key(V, N)) end} || {V, N} <- Tests].
+-endif.
+
+%% @doc Parse the Variants header.
+
+-spec parse_variants(binary()) -> [{binary(), [binary()]}].
+parse_variants(Variants) ->
+	{Dict0, Order} = cow_http_struct_hd:parse_dictionary(Variants),
+	Dict = maps:map(fun(_, {with_params, List, #{}}) ->
+		[case Item of
+			{with_params, {token, Value}, #{}} -> Value;
+			{with_params, {string, Value}, #{}} -> Value
+		end || Item <- List]
+	end, Dict0),
+	[{Key, maps:get(Key, Dict)} || Key <- Order].
+
+-ifdef(TEST).
+parse_variants_test_() ->
+	Tests = [
+		{<<"accept-language=(de en jp)">>, [{<<"accept-language">>, [<<"de">>, <<"en">>, <<"jp">>]}]},
+		{<<"accept-encoding=(gzip)">>, [{<<"accept-encoding">>, [<<"gzip">>]}]},
+		{<<"accept-encoding=()">>, [{<<"accept-encoding">>, []}]},
+		{<<"accept-encoding=(gzip br), accept-language=(en fr)">>, [
+			{<<"accept-encoding">>, [<<"gzip">>, <<"br">>]},
+			{<<"accept-language">>, [<<"en">>, <<"fr">>]}
+		]},
+		{<<"accept-language=(en fr de), accept-encoding=(gzip br)">>, [
+			{<<"accept-language">>, [<<"en">>, <<"fr">>, <<"de">>]},
+			{<<"accept-encoding">>, [<<"gzip">>, <<"br">>]}
+		]}
+	],
+	[{V, fun() -> R = parse_variants(V) end} || {V, R} <- Tests].
+-endif.
+
 %% @doc Parse the Vary header.
 
 -spec parse_vary(binary()) -> '*' | [binary()].
@@ -3446,6 +3521,63 @@ access_control_max_age_test_() ->
 		{1234567890, <<"1234567890">>}
 	],
 	[{V, fun() -> R = access_control_max_age(V) end} || {V, R} <- Tests].
+-endif.
+
+%% @doc Build the Variant-Key-06 (draft) header.
+
+-spec variant_key([[binary()]]) -> iolist().
+%% We assume that the lists are of correct length.
+variant_key(VariantKeys) ->
+	cow_http_struct_hd:list([
+		{with_params, [
+			{with_params, {string, Value}, #{}}
+		|| Value <- InnerList], #{}}
+	|| InnerList <- VariantKeys]).
+
+-ifdef(TEST).
+variant_key_identity_test_() ->
+	Tests = [
+		{1, [[<<"en">>]]},
+		{2, [[<<"gzip">>, <<"fr">>]]},
+		{2, [[<<"gzip">>, <<"fr">>], [<<"identity">>, <<"fr">>]]},
+		{2, [[<<"gzip ">>, <<"fr">>]]},
+		{2, [[<<"en">>, <<"br">>]]},
+		{1, [[<<"0">>]]},
+		{1, [[<<"silver">>], [<<"bronze">>]]},
+		{1, [[<<"some_person">>]]},
+		{2, [[<<"gold">>, <<"europe">>]]}
+	],
+	[{lists:flatten(io_lib:format("~p", [V])),
+		fun() -> V = parse_variant_key(iolist_to_binary(variant_key(V)), N) end} || {N, V} <- Tests].
+-endif.
+
+%% @doc Build the Variants-06 (draft) header.
+
+-spec variants([{binary(), [binary()]}]) -> iolist().
+variants(Variants) ->
+	cow_http_struct_hd:dictionary([
+		{Key, {with_params, [
+			{with_params, {string, Value}, #{}}
+		|| Value <- List], #{}}}
+	|| {Key, List} <- Variants]).
+
+-ifdef(TEST).
+variants_identity_test_() ->
+	Tests = [
+		[{<<"accept-language">>, [<<"de">>, <<"en">>, <<"jp">>]}],
+		[{<<"accept-encoding">>, [<<"gzip">>]}],
+		[{<<"accept-encoding">>, []}],
+		[
+			{<<"accept-encoding">>, [<<"gzip">>, <<"br">>]},
+			{<<"accept-language">>, [<<"en">>, <<"fr">>]}
+		],
+		[
+			{<<"accept-language">>, [<<"en">>, <<"fr">>, <<"de">>]},
+			{<<"accept-encoding">>, [<<"gzip">>, <<"br">>]}
+		]
+	],
+	[{lists:flatten(io_lib:format("~p", [V])),
+		fun() -> V = parse_variants(iolist_to_binary(variants(V))) end} || V <- Tests].
 -endif.
 
 %% Internal.

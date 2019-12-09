@@ -1213,31 +1213,33 @@ send_or_queue_data(StreamID, State0=#http2_machine{opts=Opts, local_window=ConnW
 %% all streams and send what we can until either everything is
 %% sent or we run out of space in the window.
 send_data(State0=#http2_machine{streams=Streams0}) ->
-	case send_data_for_all_streams(maps:to_list(Streams0), State0, [], []) of
+	StreamIDs = maps:keys(Streams0),
+	case send_data_for_all_streams(StreamIDs, Streams0, State0, []) of
 		{ok, Streams, State, []} ->
-			{ok, State#http2_machine{streams=maps:from_list(Streams)}};
+			{ok, State#http2_machine{streams=Streams}};
 		{ok, Streams, State, Send} ->
-			{send, Send, State#http2_machine{streams=maps:from_list(Streams)}}
+			{send, Send, State#http2_machine{streams=Streams}}
 	end.
 
-send_data_for_all_streams([], State, Acc, Send) ->
-	{ok, lists:reverse(Acc), State, Send};
+send_data_for_all_streams([], Streams, State, Send) ->
+	{ok, Streams, State, Send};
 %% While technically we should never get < 0 here, let's be on the safe side.
-send_data_for_all_streams(Tail, State=#http2_machine{local_window=ConnWindow}, Acc, Send)
+send_data_for_all_streams(_, Streams, State=#http2_machine{local_window=ConnWindow}, Send)
 		when ConnWindow =< 0 ->
-	{ok, lists:reverse(Acc, Tail), State, Send};
+	{ok, Streams, State, Send};
 %% We rely on send_data_for_one_stream/3 to do all the necessary checks about the stream.
-send_data_for_all_streams([{StreamID, Stream0}|Tail], State0, Acc, Send) ->
+send_data_for_all_streams([StreamID|Tail], Streams, State0, Send) ->
+	Stream0 = maps:get(StreamID, Streams),
 	case send_data_for_one_stream(Stream0, State0, []) of
 		{ok, Stream, State, []} ->
-			send_data_for_all_streams(Tail, State, [{StreamID, Stream}|Acc], Send);
+			send_data_for_all_streams(Tail, Streams#{StreamID => Stream}, State, Send);
 		%% We need to remove the stream here because we do not use stream_store/2.
-		{ok, #stream{id=StreamID, local=fin, remote=fin}, State, SendData} ->
-			send_data_for_all_streams(Tail, State, Acc,
-				[{StreamID, fin, SendData}|Send]);
-		{ok, Stream=#stream{id=StreamID, local=IsFin}, State, SendData} ->
-			send_data_for_all_streams(Tail, State, [{StreamID, Stream}|Acc],
-				[{StreamID, IsFin, SendData}|Send])
+		{ok, #stream{local=fin, remote=fin}, State, SendData} ->
+			send_data_for_all_streams(Tail, maps:remove(StreamID, Streams),
+				State, [{StreamID, fin, SendData}|Send]);
+		{ok, Stream=#stream{local=IsFin}, State, SendData} ->
+			send_data_for_all_streams(Tail, Streams#{StreamID => Stream},
+				State, [{StreamID, IsFin, SendData}|Send])
 	end.
 
 send_data(Stream0, State0) ->

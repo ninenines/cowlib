@@ -15,7 +15,7 @@
 %% This is a full level 4 implementation of URI Templates
 %% as defined by RFC6570.
 
--module(cow_uri_templates).
+-module(cow_uri_template).
 
 -export([parse/1]).
 -export([expand/2]).

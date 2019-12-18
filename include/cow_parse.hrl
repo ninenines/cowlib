@@ -66,6 +66,10 @@
 	?IS_ALPHA(C) or ?IS_DIGIT(C) or
 	(C =:= $-) or (C =:= $.) or (C =:= $_) or (C =:= $~)).
 
+-define(IS_URI_GEN_DELIMS(C),
+	(C =:= $:) or (C =:= $/) or (C =:= $?) or (C =:= $#) or
+	(C =:= $[) or (C =:= $]) or (C =:= $@)).
+
 -define(IS_URI_SUB_DELIMS(C),
 	(C =:= $!) or (C =:= $$) or (C =:= $&) or (C =:= $') or
 	(C =:= $() or (C =:= $)) or (C =:= $*) or (C =:= $+) or

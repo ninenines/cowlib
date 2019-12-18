@@ -388,4 +388,60 @@ end).
 	C -> Function(Rest, A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, << Acc/binary, C >>)
 end).
 
+%% HEX(C)
+
+-define(HEX(C), (?HEXHL(C bsr 4)), (?HEXHL(C band 16#0f))).
+
+-define(HEXHL(HL),
+	case HL of
+		0 -> $0;
+		1 -> $1;
+		2 -> $2;
+		3 -> $3;
+		4 -> $4;
+		5 -> $5;
+		6 -> $6;
+		7 -> $7;
+		8 -> $8;
+		9 -> $9;
+		10 -> $A;
+		11 -> $B;
+		12 -> $C;
+		13 -> $D;
+		14 -> $E;
+		15 -> $F
+	end
+).
+
+%% UNHEX(H, L)
+
+-define(UNHEX(H, L), (?UNHEX(H) bsl 4 bor ?UNHEX(L))).
+
+-define(UNHEX(C),
+	case C of
+		$0 -> 0;
+		$1 -> 1;
+		$2 -> 2;
+		$3 -> 3;
+		$4 -> 4;
+		$5 -> 5;
+		$6 -> 6;
+		$7 -> 7;
+		$8 -> 8;
+		$9 -> 9;
+		$A -> 10;
+		$B -> 11;
+		$C -> 12;
+		$D -> 13;
+		$E -> 14;
+		$F -> 15;
+		$a -> 10;
+		$b -> 11;
+		$c -> 12;
+		$d -> 13;
+		$e -> 14;
+		$f -> 15
+	end
+).
+
 -endif.

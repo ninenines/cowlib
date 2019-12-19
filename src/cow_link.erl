@@ -355,7 +355,11 @@ resolve_test_() ->
 
 %% Build a link header.
 
--spec link([link()]) -> iodata().
+-spec link([#{
+	target := binary(),
+	rel := binary(),
+	attributes := [{binary(), binary()}]
+}]) -> iodata().
 link(Links) ->
 	lists:join(<<", ">>, [do_link(Link) || Link <- Links]).
 
@@ -363,7 +367,7 @@ do_link(#{target := TargetURI, rel := Rel, attributes := Params}) ->
 	[
 		$<, TargetURI, <<">"
 		"; rel=\"">>, Rel, $",
-		[[<<"; ">>, Key, <<"=\"">>, escape(Value, <<>>), $"]
+		[[<<"; ">>, Key, <<"=\"">>, escape(iolist_to_binary(Value), <<>>), $"]
 			|| {Key, Value} <- Params]
 	].
 

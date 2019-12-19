@@ -363,9 +363,14 @@ do_link(#{target := TargetURI, rel := Rel, attributes := Params}) ->
 	[
 		$<, TargetURI, <<">"
 		"; rel=\"">>, Rel, $",
-		[[<<"; ">>, Key, <<"=\"">>, Value, $"]
+		[[<<"; ">>, Key, <<"=\"">>, escape(Value, <<>>), $"]
 			|| {Key, Value} <- Params]
 	].
+
+escape(<<>>, Acc) -> Acc;
+escape(<<$\\,R/bits>>, Acc) -> escape(R, <<Acc/binary,$\\,$\\>>);
+escape(<<$\",R/bits>>, Acc) -> escape(R, <<Acc/binary,$\\,$\">>);
+escape(<<C,R/bits>>, Acc) -> escape(R, <<Acc/binary,C>>).
 
 -ifdef(TEST).
 link_test_() ->
@@ -419,6 +424,15 @@ link_test_() ->
 				target => <<"https://example.org/index">>,
 				rel => <<"index">>,
 				attributes => []
+			}
+		]},
+		{<<"</>; rel=\"previous\"; quoted=\"name=\\\"value\\\"\"">>, [
+			#{
+				target => <<"/">>,
+				rel => <<"previous">>,
+				attributes => [
+					{<<"quoted">>, <<"name=\"value\"">>}
+				]
 			}
 		]}
 	],

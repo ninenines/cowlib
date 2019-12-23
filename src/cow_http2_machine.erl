@@ -1338,7 +1338,8 @@ send_or_queue_data(Stream=#stream{local_window=StreamWindow},
 queue_data(Stream=#stream{local_buffer=Q0, local_buffer_size=Size0}, IsFin, Data, In) ->
 	DataSize = case Data of
 		{sendfile, _, Bytes, _} -> Bytes;
-		{data, Iolist} -> iolist_size(Iolist)
+		{data, Iolist} -> iolist_size(Iolist);
+		{trailers, _} -> 0
 	end,
 	%% Never queue non-final empty data frames.
 	case {DataSize, IsFin} of

@@ -1184,9 +1184,9 @@ send_or_queue_data(StreamID, State0=#http2_machine{opts=Opts, local_window=ConnW
 		_ ->
 			DataOrFileOrTrailers0
 	end,
-	SendSize = BufferSize + case DataOrFileOrTrailers of
-		{data, D} -> iolist_size(D);
-		#sendfile{bytes=B} -> B;
+	SendSize = case DataOrFileOrTrailers of
+		{data, D} -> BufferSize + iolist_size(D);
+		#sendfile{bytes=B} -> BufferSize + B;
 		{trailers, _} -> 0
 	end,
 	MinSendSize = maps:get(stream_window_data_threshold, Opts, 16384),

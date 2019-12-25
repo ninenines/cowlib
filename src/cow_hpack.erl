@@ -201,277 +201,29 @@ dec_str(<< 0:1, Rest/bits >>) ->
 	{Str, Rest3};
 dec_str(<< 1:1, Rest/bits >>) ->
 	{Length, Rest2} = dec_int7(Rest),
-	dec_huffman(Rest2, Length * 8, <<>>).
+	dec_huffman(Rest2, Length, 0, ok, <<>>).
 
-%% HPACK uses a static code table for Huffman encoded strings.
-%% It has been converted into one clause per code in the following function.
+%% We use a lookup table that allows us to benefit from
+%% the binary match context optimization. A more naive
+%% implementation using bit pattern matching cannot reuse
+%% a match context because it wouldn't always match on
+%% bit boundaries.
+%%
+%% See cow_hpack_dec_huffman_lookup.hrl for more details.
 
-%% EOS.
-dec_huffman(Rest, 0, String) -> {String, Rest};
-dec_huffman(<<2#1:1, Rest/bits>>, 1, String) -> {String, Rest};
-dec_huffman(<<2#11:2, Rest/bits>>, 2, String) -> {String, Rest};
-dec_huffman(<<2#111:3, Rest/bits>>, 3, String) -> {String, Rest};
-dec_huffman(<<2#1111:4, Rest/bits>>, 4, String) -> {String, Rest};
-dec_huffman(<<2#11111:5, Rest/bits>>, 5, String) -> {String, Rest};
-dec_huffman(<<2#111111:6, Rest/bits>>, 6, String) -> {String, Rest};
-dec_huffman(<<2#1111111:7, Rest/bits>>, 7, String) -> {String, Rest};
-%% Static code table.
-dec_huffman(<<2#00000:5, R/bits>>, L, A) -> dec_huffman(R, L - 5, <<A/binary, 48>>);
-dec_huffman(<<2#00001:5, R/bits>>, L, A) -> dec_huffman(R, L - 5, <<A/binary, 49>>);
-dec_huffman(<<2#00010:5, R/bits>>, L, A) -> dec_huffman(R, L - 5, <<A/binary, 50>>);
-dec_huffman(<<2#00011:5, R/bits>>, L, A) -> dec_huffman(R, L - 5, <<A/binary, 97>>);
-dec_huffman(<<2#00100:5, R/bits>>, L, A) -> dec_huffman(R, L - 5, <<A/binary, 99>>);
-dec_huffman(<<2#00101:5, R/bits>>, L, A) -> dec_huffman(R, L - 5, <<A/binary, 101>>);
-dec_huffman(<<2#00110:5, R/bits>>, L, A) -> dec_huffman(R, L - 5, <<A/binary, 105>>);
-dec_huffman(<<2#00111:5, R/bits>>, L, A) -> dec_huffman(R, L - 5, <<A/binary, 111>>);
-dec_huffman(<<2#01000:5, R/bits>>, L, A) -> dec_huffman(R, L - 5, <<A/binary, 115>>);
-dec_huffman(<<2#01001:5, R/bits>>, L, A) -> dec_huffman(R, L - 5, <<A/binary, 116>>);
-dec_huffman(<<2#010100:6, R/bits>>, L, A) -> dec_huffman(R, L - 6, <<A/binary, 32>>);
-dec_huffman(<<2#010101:6, R/bits>>, L, A) -> dec_huffman(R, L - 6, <<A/binary, 37>>);
-dec_huffman(<<2#010110:6, R/bits>>, L, A) -> dec_huffman(R, L - 6, <<A/binary, 45>>);
-dec_huffman(<<2#010111:6, R/bits>>, L, A) -> dec_huffman(R, L - 6, <<A/binary, 46>>);
-dec_huffman(<<2#011000:6, R/bits>>, L, A) -> dec_huffman(R, L - 6, <<A/binary, 47>>);
-dec_huffman(<<2#011001:6, R/bits>>, L, A) -> dec_huffman(R, L - 6, <<A/binary, 51>>);
-dec_huffman(<<2#011010:6, R/bits>>, L, A) -> dec_huffman(R, L - 6, <<A/binary, 52>>);
-dec_huffman(<<2#011011:6, R/bits>>, L, A) -> dec_huffman(R, L - 6, <<A/binary, 53>>);
-dec_huffman(<<2#011100:6, R/bits>>, L, A) -> dec_huffman(R, L - 6, <<A/binary, 54>>);
-dec_huffman(<<2#011101:6, R/bits>>, L, A) -> dec_huffman(R, L - 6, <<A/binary, 55>>);
-dec_huffman(<<2#011110:6, R/bits>>, L, A) -> dec_huffman(R, L - 6, <<A/binary, 56>>);
-dec_huffman(<<2#011111:6, R/bits>>, L, A) -> dec_huffman(R, L - 6, <<A/binary, 57>>);
-dec_huffman(<<2#100000:6, R/bits>>, L, A) -> dec_huffman(R, L - 6, <<A/binary, 61>>);
-dec_huffman(<<2#100001:6, R/bits>>, L, A) -> dec_huffman(R, L - 6, <<A/binary, 65>>);
-dec_huffman(<<2#100010:6, R/bits>>, L, A) -> dec_huffman(R, L - 6, <<A/binary, 95>>);
-dec_huffman(<<2#100011:6, R/bits>>, L, A) -> dec_huffman(R, L - 6, <<A/binary, 98>>);
-dec_huffman(<<2#100100:6, R/bits>>, L, A) -> dec_huffman(R, L - 6, <<A/binary, 100>>);
-dec_huffman(<<2#100101:6, R/bits>>, L, A) -> dec_huffman(R, L - 6, <<A/binary, 102>>);
-dec_huffman(<<2#100110:6, R/bits>>, L, A) -> dec_huffman(R, L - 6, <<A/binary, 103>>);
-dec_huffman(<<2#100111:6, R/bits>>, L, A) -> dec_huffman(R, L - 6, <<A/binary, 104>>);
-dec_huffman(<<2#101000:6, R/bits>>, L, A) -> dec_huffman(R, L - 6, <<A/binary, 108>>);
-dec_huffman(<<2#101001:6, R/bits>>, L, A) -> dec_huffman(R, L - 6, <<A/binary, 109>>);
-dec_huffman(<<2#101010:6, R/bits>>, L, A) -> dec_huffman(R, L - 6, <<A/binary, 110>>);
-dec_huffman(<<2#101011:6, R/bits>>, L, A) -> dec_huffman(R, L - 6, <<A/binary, 112>>);
-dec_huffman(<<2#101100:6, R/bits>>, L, A) -> dec_huffman(R, L - 6, <<A/binary, 114>>);
-dec_huffman(<<2#101101:6, R/bits>>, L, A) -> dec_huffman(R, L - 6, <<A/binary, 117>>);
-dec_huffman(<<2#1011100:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 58>>);
-dec_huffman(<<2#1011101:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 66>>);
-dec_huffman(<<2#1011110:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 67>>);
-dec_huffman(<<2#1011111:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 68>>);
-dec_huffman(<<2#1100000:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 69>>);
-dec_huffman(<<2#1100001:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 70>>);
-dec_huffman(<<2#1100010:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 71>>);
-dec_huffman(<<2#1100011:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 72>>);
-dec_huffman(<<2#1100100:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 73>>);
-dec_huffman(<<2#1100101:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 74>>);
-dec_huffman(<<2#1100110:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 75>>);
-dec_huffman(<<2#1100111:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 76>>);
-dec_huffman(<<2#1101000:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 77>>);
-dec_huffman(<<2#1101001:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 78>>);
-dec_huffman(<<2#1101010:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 79>>);
-dec_huffman(<<2#1101011:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 80>>);
-dec_huffman(<<2#1101100:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 81>>);
-dec_huffman(<<2#1101101:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 82>>);
-dec_huffman(<<2#1101110:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 83>>);
-dec_huffman(<<2#1101111:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 84>>);
-dec_huffman(<<2#1110000:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 85>>);
-dec_huffman(<<2#1110001:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 86>>);
-dec_huffman(<<2#1110010:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 87>>);
-dec_huffman(<<2#1110011:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 89>>);
-dec_huffman(<<2#1110100:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 106>>);
-dec_huffman(<<2#1110101:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 107>>);
-dec_huffman(<<2#1110110:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 113>>);
-dec_huffman(<<2#1110111:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 118>>);
-dec_huffman(<<2#1111000:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 119>>);
-dec_huffman(<<2#1111001:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 120>>);
-dec_huffman(<<2#1111010:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 121>>);
-dec_huffman(<<2#1111011:7, R/bits>>, L, A) -> dec_huffman(R, L - 7, <<A/binary, 122>>);
-dec_huffman(<<2#11111000:8, R/bits>>, L, A) -> dec_huffman(R, L - 8, <<A/binary, 38>>);
-dec_huffman(<<2#11111001:8, R/bits>>, L, A) -> dec_huffman(R, L - 8, <<A/binary, 42>>);
-dec_huffman(<<2#11111010:8, R/bits>>, L, A) -> dec_huffman(R, L - 8, <<A/binary, 44>>);
-dec_huffman(<<2#11111011:8, R/bits>>, L, A) -> dec_huffman(R, L - 8, <<A/binary, 59>>);
-dec_huffman(<<2#11111100:8, R/bits>>, L, A) -> dec_huffman(R, L - 8, <<A/binary, 88>>);
-dec_huffman(<<2#11111101:8, R/bits>>, L, A) -> dec_huffman(R, L - 8, <<A/binary, 90>>);
-dec_huffman(<<2#1111111000:10, R/bits>>, L, A) -> dec_huffman(R, L - 10, <<A/binary, 33>>);
-dec_huffman(<<2#1111111001:10, R/bits>>, L, A) -> dec_huffman(R, L - 10, <<A/binary, 34>>);
-dec_huffman(<<2#1111111010:10, R/bits>>, L, A) -> dec_huffman(R, L - 10, <<A/binary, 40>>);
-dec_huffman(<<2#1111111011:10, R/bits>>, L, A) -> dec_huffman(R, L - 10, <<A/binary, 41>>);
-dec_huffman(<<2#1111111100:10, R/bits>>, L, A) -> dec_huffman(R, L - 10, <<A/binary, 63>>);
-dec_huffman(<<2#11111111010:11, R/bits>>, L, A) -> dec_huffman(R, L - 11, <<A/binary, 39>>);
-dec_huffman(<<2#11111111011:11, R/bits>>, L, A) -> dec_huffman(R, L - 11, <<A/binary, 43>>);
-dec_huffman(<<2#11111111100:11, R/bits>>, L, A) -> dec_huffman(R, L - 11, <<A/binary, 124>>);
-dec_huffman(<<2#111111111010:12, R/bits>>, L, A) -> dec_huffman(R, L - 12, <<A/binary, 35>>);
-dec_huffman(<<2#111111111011:12, R/bits>>, L, A) -> dec_huffman(R, L - 12, <<A/binary, 62>>);
-dec_huffman(<<2#1111111111000:13, R/bits>>, L, A) -> dec_huffman(R, L - 13, <<A/binary, 0>>);
-dec_huffman(<<2#1111111111001:13, R/bits>>, L, A) -> dec_huffman(R, L - 13, <<A/binary, 36>>);
-dec_huffman(<<2#1111111111010:13, R/bits>>, L, A) -> dec_huffman(R, L - 13, <<A/binary, 64>>);
-dec_huffman(<<2#1111111111011:13, R/bits>>, L, A) -> dec_huffman(R, L - 13, <<A/binary, 91>>);
-dec_huffman(<<2#1111111111100:13, R/bits>>, L, A) -> dec_huffman(R, L - 13, <<A/binary, 93>>);
-dec_huffman(<<2#1111111111101:13, R/bits>>, L, A) -> dec_huffman(R, L - 13, <<A/binary, 126>>);
-dec_huffman(<<2#11111111111100:14, R/bits>>, L, A) -> dec_huffman(R, L - 14, <<A/binary, 94>>);
-dec_huffman(<<2#11111111111101:14, R/bits>>, L, A) -> dec_huffman(R, L - 14, <<A/binary, 125>>);
-dec_huffman(<<2#111111111111100:15, R/bits>>, L, A) -> dec_huffman(R, L - 15, <<A/binary, 60>>);
-dec_huffman(<<2#111111111111101:15, R/bits>>, L, A) -> dec_huffman(R, L - 15, <<A/binary, 96>>);
-dec_huffman(<<2#111111111111110:15, R/bits>>, L, A) -> dec_huffman(R, L - 15, <<A/binary, 123>>);
-dec_huffman(<<2#1111111111111110000:19, R/bits>>, L, A) -> dec_huffman(R, L - 19, <<A/binary, 92>>);
-dec_huffman(<<2#1111111111111110001:19, R/bits>>, L, A) -> dec_huffman(R, L - 19, <<A/binary, 195>>);
-dec_huffman(<<2#1111111111111110010:19, R/bits>>, L, A) -> dec_huffman(R, L - 19, <<A/binary, 208>>);
-dec_huffman(<<2#11111111111111100110:20, R/bits>>, L, A) -> dec_huffman(R, L - 20, <<A/binary, 128>>);
-dec_huffman(<<2#11111111111111100111:20, R/bits>>, L, A) -> dec_huffman(R, L - 20, <<A/binary, 130>>);
-dec_huffman(<<2#11111111111111101000:20, R/bits>>, L, A) -> dec_huffman(R, L - 20, <<A/binary, 131>>);
-dec_huffman(<<2#11111111111111101001:20, R/bits>>, L, A) -> dec_huffman(R, L - 20, <<A/binary, 162>>);
-dec_huffman(<<2#11111111111111101010:20, R/bits>>, L, A) -> dec_huffman(R, L - 20, <<A/binary, 184>>);
-dec_huffman(<<2#11111111111111101011:20, R/bits>>, L, A) -> dec_huffman(R, L - 20, <<A/binary, 194>>);
-dec_huffman(<<2#11111111111111101100:20, R/bits>>, L, A) -> dec_huffman(R, L - 20, <<A/binary, 224>>);
-dec_huffman(<<2#11111111111111101101:20, R/bits>>, L, A) -> dec_huffman(R, L - 20, <<A/binary, 226>>);
-dec_huffman(<<2#111111111111111011100:21, R/bits>>, L, A) -> dec_huffman(R, L - 21, <<A/binary, 153>>);
-dec_huffman(<<2#111111111111111011101:21, R/bits>>, L, A) -> dec_huffman(R, L - 21, <<A/binary, 161>>);
-dec_huffman(<<2#111111111111111011110:21, R/bits>>, L, A) -> dec_huffman(R, L - 21, <<A/binary, 167>>);
-dec_huffman(<<2#111111111111111011111:21, R/bits>>, L, A) -> dec_huffman(R, L - 21, <<A/binary, 172>>);
-dec_huffman(<<2#111111111111111100000:21, R/bits>>, L, A) -> dec_huffman(R, L - 21, <<A/binary, 176>>);
-dec_huffman(<<2#111111111111111100001:21, R/bits>>, L, A) -> dec_huffman(R, L - 21, <<A/binary, 177>>);
-dec_huffman(<<2#111111111111111100010:21, R/bits>>, L, A) -> dec_huffman(R, L - 21, <<A/binary, 179>>);
-dec_huffman(<<2#111111111111111100011:21, R/bits>>, L, A) -> dec_huffman(R, L - 21, <<A/binary, 209>>);
-dec_huffman(<<2#111111111111111100100:21, R/bits>>, L, A) -> dec_huffman(R, L - 21, <<A/binary, 216>>);
-dec_huffman(<<2#111111111111111100101:21, R/bits>>, L, A) -> dec_huffman(R, L - 21, <<A/binary, 217>>);
-dec_huffman(<<2#111111111111111100110:21, R/bits>>, L, A) -> dec_huffman(R, L - 21, <<A/binary, 227>>);
-dec_huffman(<<2#111111111111111100111:21, R/bits>>, L, A) -> dec_huffman(R, L - 21, <<A/binary, 229>>);
-dec_huffman(<<2#111111111111111101000:21, R/bits>>, L, A) -> dec_huffman(R, L - 21, <<A/binary, 230>>);
-dec_huffman(<<2#1111111111111111010010:22, R/bits>>, L, A) -> dec_huffman(R, L - 22, <<A/binary, 129>>);
-dec_huffman(<<2#1111111111111111010011:22, R/bits>>, L, A) -> dec_huffman(R, L - 22, <<A/binary, 132>>);
-dec_huffman(<<2#1111111111111111010100:22, R/bits>>, L, A) -> dec_huffman(R, L - 22, <<A/binary, 133>>);
-dec_huffman(<<2#1111111111111111010101:22, R/bits>>, L, A) -> dec_huffman(R, L - 22, <<A/binary, 134>>);
-dec_huffman(<<2#1111111111111111010110:22, R/bits>>, L, A) -> dec_huffman(R, L - 22, <<A/binary, 136>>);
-dec_huffman(<<2#1111111111111111010111:22, R/bits>>, L, A) -> dec_huffman(R, L - 22, <<A/binary, 146>>);
-dec_huffman(<<2#1111111111111111011000:22, R/bits>>, L, A) -> dec_huffman(R, L - 22, <<A/binary, 154>>);
-dec_huffman(<<2#1111111111111111011001:22, R/bits>>, L, A) -> dec_huffman(R, L - 22, <<A/binary, 156>>);
-dec_huffman(<<2#1111111111111111011010:22, R/bits>>, L, A) -> dec_huffman(R, L - 22, <<A/binary, 160>>);
-dec_huffman(<<2#1111111111111111011011:22, R/bits>>, L, A) -> dec_huffman(R, L - 22, <<A/binary, 163>>);
-dec_huffman(<<2#1111111111111111011100:22, R/bits>>, L, A) -> dec_huffman(R, L - 22, <<A/binary, 164>>);
-dec_huffman(<<2#1111111111111111011101:22, R/bits>>, L, A) -> dec_huffman(R, L - 22, <<A/binary, 169>>);
-dec_huffman(<<2#1111111111111111011110:22, R/bits>>, L, A) -> dec_huffman(R, L - 22, <<A/binary, 170>>);
-dec_huffman(<<2#1111111111111111011111:22, R/bits>>, L, A) -> dec_huffman(R, L - 22, <<A/binary, 173>>);
-dec_huffman(<<2#1111111111111111100000:22, R/bits>>, L, A) -> dec_huffman(R, L - 22, <<A/binary, 178>>);
-dec_huffman(<<2#1111111111111111100001:22, R/bits>>, L, A) -> dec_huffman(R, L - 22, <<A/binary, 181>>);
-dec_huffman(<<2#1111111111111111100010:22, R/bits>>, L, A) -> dec_huffman(R, L - 22, <<A/binary, 185>>);
-dec_huffman(<<2#1111111111111111100011:22, R/bits>>, L, A) -> dec_huffman(R, L - 22, <<A/binary, 186>>);
-dec_huffman(<<2#1111111111111111100100:22, R/bits>>, L, A) -> dec_huffman(R, L - 22, <<A/binary, 187>>);
-dec_huffman(<<2#1111111111111111100101:22, R/bits>>, L, A) -> dec_huffman(R, L - 22, <<A/binary, 189>>);
-dec_huffman(<<2#1111111111111111100110:22, R/bits>>, L, A) -> dec_huffman(R, L - 22, <<A/binary, 190>>);
-dec_huffman(<<2#1111111111111111100111:22, R/bits>>, L, A) -> dec_huffman(R, L - 22, <<A/binary, 196>>);
-dec_huffman(<<2#1111111111111111101000:22, R/bits>>, L, A) -> dec_huffman(R, L - 22, <<A/binary, 198>>);
-dec_huffman(<<2#1111111111111111101001:22, R/bits>>, L, A) -> dec_huffman(R, L - 22, <<A/binary, 228>>);
-dec_huffman(<<2#1111111111111111101010:22, R/bits>>, L, A) -> dec_huffman(R, L - 22, <<A/binary, 232>>);
-dec_huffman(<<2#1111111111111111101011:22, R/bits>>, L, A) -> dec_huffman(R, L - 22, <<A/binary, 233>>);
-dec_huffman(<<2#11111111111111111011000:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 1>>);
-dec_huffman(<<2#11111111111111111011001:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 135>>);
-dec_huffman(<<2#11111111111111111011010:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 137>>);
-dec_huffman(<<2#11111111111111111011011:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 138>>);
-dec_huffman(<<2#11111111111111111011100:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 139>>);
-dec_huffman(<<2#11111111111111111011101:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 140>>);
-dec_huffman(<<2#11111111111111111011110:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 141>>);
-dec_huffman(<<2#11111111111111111011111:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 143>>);
-dec_huffman(<<2#11111111111111111100000:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 147>>);
-dec_huffman(<<2#11111111111111111100001:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 149>>);
-dec_huffman(<<2#11111111111111111100010:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 150>>);
-dec_huffman(<<2#11111111111111111100011:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 151>>);
-dec_huffman(<<2#11111111111111111100100:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 152>>);
-dec_huffman(<<2#11111111111111111100101:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 155>>);
-dec_huffman(<<2#11111111111111111100110:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 157>>);
-dec_huffman(<<2#11111111111111111100111:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 158>>);
-dec_huffman(<<2#11111111111111111101000:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 165>>);
-dec_huffman(<<2#11111111111111111101001:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 166>>);
-dec_huffman(<<2#11111111111111111101010:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 168>>);
-dec_huffman(<<2#11111111111111111101011:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 174>>);
-dec_huffman(<<2#11111111111111111101100:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 175>>);
-dec_huffman(<<2#11111111111111111101101:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 180>>);
-dec_huffman(<<2#11111111111111111101110:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 182>>);
-dec_huffman(<<2#11111111111111111101111:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 183>>);
-dec_huffman(<<2#11111111111111111110000:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 188>>);
-dec_huffman(<<2#11111111111111111110001:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 191>>);
-dec_huffman(<<2#11111111111111111110010:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 197>>);
-dec_huffman(<<2#11111111111111111110011:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 231>>);
-dec_huffman(<<2#11111111111111111110100:23, R/bits>>, L, A) -> dec_huffman(R, L - 23, <<A/binary, 239>>);
-dec_huffman(<<2#111111111111111111101010:24, R/bits>>, L, A) -> dec_huffman(R, L - 24, <<A/binary, 9>>);
-dec_huffman(<<2#111111111111111111101011:24, R/bits>>, L, A) -> dec_huffman(R, L - 24, <<A/binary, 142>>);
-dec_huffman(<<2#111111111111111111101100:24, R/bits>>, L, A) -> dec_huffman(R, L - 24, <<A/binary, 144>>);
-dec_huffman(<<2#111111111111111111101101:24, R/bits>>, L, A) -> dec_huffman(R, L - 24, <<A/binary, 145>>);
-dec_huffman(<<2#111111111111111111101110:24, R/bits>>, L, A) -> dec_huffman(R, L - 24, <<A/binary, 148>>);
-dec_huffman(<<2#111111111111111111101111:24, R/bits>>, L, A) -> dec_huffman(R, L - 24, <<A/binary, 159>>);
-dec_huffman(<<2#111111111111111111110000:24, R/bits>>, L, A) -> dec_huffman(R, L - 24, <<A/binary, 171>>);
-dec_huffman(<<2#111111111111111111110001:24, R/bits>>, L, A) -> dec_huffman(R, L - 24, <<A/binary, 206>>);
-dec_huffman(<<2#111111111111111111110010:24, R/bits>>, L, A) -> dec_huffman(R, L - 24, <<A/binary, 215>>);
-dec_huffman(<<2#111111111111111111110011:24, R/bits>>, L, A) -> dec_huffman(R, L - 24, <<A/binary, 225>>);
-dec_huffman(<<2#111111111111111111110100:24, R/bits>>, L, A) -> dec_huffman(R, L - 24, <<A/binary, 236>>);
-dec_huffman(<<2#111111111111111111110101:24, R/bits>>, L, A) -> dec_huffman(R, L - 24, <<A/binary, 237>>);
-dec_huffman(<<2#1111111111111111111101100:25, R/bits>>, L, A) -> dec_huffman(R, L - 25, <<A/binary, 199>>);
-dec_huffman(<<2#1111111111111111111101101:25, R/bits>>, L, A) -> dec_huffman(R, L - 25, <<A/binary, 207>>);
-dec_huffman(<<2#1111111111111111111101110:25, R/bits>>, L, A) -> dec_huffman(R, L - 25, <<A/binary, 234>>);
-dec_huffman(<<2#1111111111111111111101111:25, R/bits>>, L, A) -> dec_huffman(R, L - 25, <<A/binary, 235>>);
-dec_huffman(<<2#11111111111111111111100000:26, R/bits>>, L, A) -> dec_huffman(R, L - 26, <<A/binary, 192>>);
-dec_huffman(<<2#11111111111111111111100001:26, R/bits>>, L, A) -> dec_huffman(R, L - 26, <<A/binary, 193>>);
-dec_huffman(<<2#11111111111111111111100010:26, R/bits>>, L, A) -> dec_huffman(R, L - 26, <<A/binary, 200>>);
-dec_huffman(<<2#11111111111111111111100011:26, R/bits>>, L, A) -> dec_huffman(R, L - 26, <<A/binary, 201>>);
-dec_huffman(<<2#11111111111111111111100100:26, R/bits>>, L, A) -> dec_huffman(R, L - 26, <<A/binary, 202>>);
-dec_huffman(<<2#11111111111111111111100101:26, R/bits>>, L, A) -> dec_huffman(R, L - 26, <<A/binary, 205>>);
-dec_huffman(<<2#11111111111111111111100110:26, R/bits>>, L, A) -> dec_huffman(R, L - 26, <<A/binary, 210>>);
-dec_huffman(<<2#11111111111111111111100111:26, R/bits>>, L, A) -> dec_huffman(R, L - 26, <<A/binary, 213>>);
-dec_huffman(<<2#11111111111111111111101000:26, R/bits>>, L, A) -> dec_huffman(R, L - 26, <<A/binary, 218>>);
-dec_huffman(<<2#11111111111111111111101001:26, R/bits>>, L, A) -> dec_huffman(R, L - 26, <<A/binary, 219>>);
-dec_huffman(<<2#11111111111111111111101010:26, R/bits>>, L, A) -> dec_huffman(R, L - 26, <<A/binary, 238>>);
-dec_huffman(<<2#11111111111111111111101011:26, R/bits>>, L, A) -> dec_huffman(R, L - 26, <<A/binary, 240>>);
-dec_huffman(<<2#11111111111111111111101100:26, R/bits>>, L, A) -> dec_huffman(R, L - 26, <<A/binary, 242>>);
-dec_huffman(<<2#11111111111111111111101101:26, R/bits>>, L, A) -> dec_huffman(R, L - 26, <<A/binary, 243>>);
-dec_huffman(<<2#11111111111111111111101110:26, R/bits>>, L, A) -> dec_huffman(R, L - 26, <<A/binary, 255>>);
-dec_huffman(<<2#111111111111111111111011110:27, R/bits>>, L, A) -> dec_huffman(R, L - 27, <<A/binary, 203>>);
-dec_huffman(<<2#111111111111111111111011111:27, R/bits>>, L, A) -> dec_huffman(R, L - 27, <<A/binary, 204>>);
-dec_huffman(<<2#111111111111111111111100000:27, R/bits>>, L, A) -> dec_huffman(R, L - 27, <<A/binary, 211>>);
-dec_huffman(<<2#111111111111111111111100001:27, R/bits>>, L, A) -> dec_huffman(R, L - 27, <<A/binary, 212>>);
-dec_huffman(<<2#111111111111111111111100010:27, R/bits>>, L, A) -> dec_huffman(R, L - 27, <<A/binary, 214>>);
-dec_huffman(<<2#111111111111111111111100011:27, R/bits>>, L, A) -> dec_huffman(R, L - 27, <<A/binary, 221>>);
-dec_huffman(<<2#111111111111111111111100100:27, R/bits>>, L, A) -> dec_huffman(R, L - 27, <<A/binary, 222>>);
-dec_huffman(<<2#111111111111111111111100101:27, R/bits>>, L, A) -> dec_huffman(R, L - 27, <<A/binary, 223>>);
-dec_huffman(<<2#111111111111111111111100110:27, R/bits>>, L, A) -> dec_huffman(R, L - 27, <<A/binary, 241>>);
-dec_huffman(<<2#111111111111111111111100111:27, R/bits>>, L, A) -> dec_huffman(R, L - 27, <<A/binary, 244>>);
-dec_huffman(<<2#111111111111111111111101000:27, R/bits>>, L, A) -> dec_huffman(R, L - 27, <<A/binary, 245>>);
-dec_huffman(<<2#111111111111111111111101001:27, R/bits>>, L, A) -> dec_huffman(R, L - 27, <<A/binary, 246>>);
-dec_huffman(<<2#111111111111111111111101010:27, R/bits>>, L, A) -> dec_huffman(R, L - 27, <<A/binary, 247>>);
-dec_huffman(<<2#111111111111111111111101011:27, R/bits>>, L, A) -> dec_huffman(R, L - 27, <<A/binary, 248>>);
-dec_huffman(<<2#111111111111111111111101100:27, R/bits>>, L, A) -> dec_huffman(R, L - 27, <<A/binary, 250>>);
-dec_huffman(<<2#111111111111111111111101101:27, R/bits>>, L, A) -> dec_huffman(R, L - 27, <<A/binary, 251>>);
-dec_huffman(<<2#111111111111111111111101110:27, R/bits>>, L, A) -> dec_huffman(R, L - 27, <<A/binary, 252>>);
-dec_huffman(<<2#111111111111111111111101111:27, R/bits>>, L, A) -> dec_huffman(R, L - 27, <<A/binary, 253>>);
-dec_huffman(<<2#111111111111111111111110000:27, R/bits>>, L, A) -> dec_huffman(R, L - 27, <<A/binary, 254>>);
-dec_huffman(<<2#1111111111111111111111100010:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 2>>);
-dec_huffman(<<2#1111111111111111111111100011:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 3>>);
-dec_huffman(<<2#1111111111111111111111100100:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 4>>);
-dec_huffman(<<2#1111111111111111111111100101:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 5>>);
-dec_huffman(<<2#1111111111111111111111100110:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 6>>);
-dec_huffman(<<2#1111111111111111111111100111:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 7>>);
-dec_huffman(<<2#1111111111111111111111101000:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 8>>);
-dec_huffman(<<2#1111111111111111111111101001:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 11>>);
-dec_huffman(<<2#1111111111111111111111101010:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 12>>);
-dec_huffman(<<2#1111111111111111111111101011:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 14>>);
-dec_huffman(<<2#1111111111111111111111101100:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 15>>);
-dec_huffman(<<2#1111111111111111111111101101:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 16>>);
-dec_huffman(<<2#1111111111111111111111101110:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 17>>);
-dec_huffman(<<2#1111111111111111111111101111:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 18>>);
-dec_huffman(<<2#1111111111111111111111110000:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 19>>);
-dec_huffman(<<2#1111111111111111111111110001:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 20>>);
-dec_huffman(<<2#1111111111111111111111110010:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 21>>);
-dec_huffman(<<2#1111111111111111111111110011:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 23>>);
-dec_huffman(<<2#1111111111111111111111110100:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 24>>);
-dec_huffman(<<2#1111111111111111111111110101:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 25>>);
-dec_huffman(<<2#1111111111111111111111110110:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 26>>);
-dec_huffman(<<2#1111111111111111111111110111:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 27>>);
-dec_huffman(<<2#1111111111111111111111111000:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 28>>);
-dec_huffman(<<2#1111111111111111111111111001:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 29>>);
-dec_huffman(<<2#1111111111111111111111111010:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 30>>);
-dec_huffman(<<2#1111111111111111111111111011:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 31>>);
-dec_huffman(<<2#1111111111111111111111111100:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 127>>);
-dec_huffman(<<2#1111111111111111111111111101:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 220>>);
-dec_huffman(<<2#1111111111111111111111111110:28, R/bits>>, L, A) -> dec_huffman(R, L - 28, <<A/binary, 249>>);
-dec_huffman(<<2#111111111111111111111111111100:30, R/bits>>, L, A) -> dec_huffman(R, L - 30, <<A/binary, 10>>);
-dec_huffman(<<2#111111111111111111111111111101:30, R/bits>>, L, A) -> dec_huffman(R, L - 30, <<A/binary, 13>>);
-dec_huffman(<<2#111111111111111111111111111110:30, R/bits>>, L, A) -> dec_huffman(R, L - 30, <<A/binary, 22>>).
+dec_huffman(<<A:4, B:4, R/bits>>, Len, Huff0, _, Acc) when Len > 0 ->
+	{_, CharA, Huff1} = dec_huffman_lookup(Huff0, A),
+	{Result, CharB, Huff} = dec_huffman_lookup(Huff1, B),
+	case {CharA, CharB} of
+		{undefined, undefined} -> dec_huffman(R, Len - 1, Huff, Result, Acc);
+		{CharA, undefined} -> dec_huffman(R, Len - 1, Huff, Result, <<Acc/binary, CharA>>);
+		{undefined, CharB} -> dec_huffman(R, Len - 1, Huff, Result, <<Acc/binary, CharB>>);
+		{CharA, CharB} -> dec_huffman(R, Len - 1, Huff, Result, <<Acc/binary, CharA, CharB>>)
+	end;
+dec_huffman(Rest, 0, _, ok, Acc) ->
+	{Acc, Rest}.
+
+-include("cow_hpack_dec_huffman_lookup.hrl").
 
 -ifdef(TEST).
 req_decode_test() ->
@@ -711,6 +463,28 @@ table_update_decode_zero_test() ->
 		{65,{<<"date">>, <<"Mon, 21 Oct 2013 20:13:21 GMT">>}},
 		{52,{<<"cache-control">>, <<"private">>}},
 		{42,{<<":status">>, <<"302">>}}]} = State3,
+	ok.
+
+horse_decode_raw() ->
+	horse:repeat(20000,
+		do_horse_decode_raw()
+	).
+
+do_horse_decode_raw() ->
+	{_, State1} = decode(<<16#828684410f7777772e6578616d706c652e636f6d:160>>),
+	{_, State2} = decode(<<16#828684be58086e6f2d6361636865:112>>, State1),
+	{_, _} = decode(<<16#828785bf400a637573746f6d2d6b65790c637573746f6d2d76616c7565:232>>, State2),
+	ok.
+
+horse_decode_huffman() ->
+	horse:repeat(20000,
+		do_horse_decode_huffman()
+	).
+
+do_horse_decode_huffman() ->
+	{_, State1} = decode(<<16#828684418cf1e3c2e5f23a6ba0ab90f4ff:136>>),
+	{_, State2} = decode(<<16#828684be5886a8eb10649cbf:96>>, State1),
+	{_, _} = decode(<<16#828785bf408825a849e95ba97d7f8925a849e95bb8e8b4bf:192>>, State2),
 	ok.
 -endif.
 

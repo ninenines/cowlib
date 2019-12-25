@@ -207,7 +207,7 @@ dec_str(<< 1:1, Rest/bits >>) ->
 %% the binary match context optimization. A more naive
 %% implementation using bit pattern matching cannot reuse
 %% a match context because it wouldn't always match on
-%% bit boundaries.
+%% byte boundaries.
 %%
 %% See cow_hpack_dec_huffman_lookup.hrl for more details.
 

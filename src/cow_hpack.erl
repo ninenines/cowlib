@@ -330,7 +330,7 @@ table_update_decode_test() ->
 	%% Set a new configured max_size to avoid header evictions.
 	State2 = set_max_size(512, State1),
 	%% Second response with the table size update (raw then huffman).
-	MaxSize = enc_big_int(512 - 31, []),
+	MaxSize = enc_big_int(512 - 31, <<>>),
 	{Headers2, State3} = decode(
 		iolist_to_binary([<< 2#00111111>>, MaxSize, <<16#4803333037c1c0bf:64>>]),
 		State2),
@@ -372,7 +372,7 @@ table_update_decode_smaller_test() ->
 	%% Set a new configured max_size to avoid header evictions.
 	State2 = set_max_size(512, State1),
 	%% Second response with the table size update smaller than the limit (raw then huffman).
-	MaxSize = enc_big_int(400 - 31, []),
+	MaxSize = enc_big_int(400 - 31, <<>>),
 	{Headers2, State3} = decode(
 		iolist_to_binary([<< 2#00111111>>, MaxSize, <<16#4803333037c1c0bf:64>>]),
 		State2),
@@ -414,7 +414,7 @@ table_update_decode_too_large_test() ->
 	%% Set a new configured max_size to avoid header evictions.
 	State2 = set_max_size(512, State1),
 	%% Second response with the table size update (raw then huffman).
-	MaxSize = enc_big_int(1024 - 31, []),
+	MaxSize = enc_big_int(1024 - 31, <<>>),
 	{'EXIT', _} = (catch decode(
 		iolist_to_binary([<< 2#00111111>>, MaxSize, <<16#4803333037c1c0bf:64>>]),
 		State2)),
@@ -444,7 +444,7 @@ table_update_decode_zero_test() ->
 	%% Second response with the table size update (raw then huffman).
 	%% We set the table size to 0 to evict all values before setting
 	%% it to 512 so we only get the second request indexed.
-	MaxSize = enc_big_int(512 - 31, []),
+	MaxSize = enc_big_int(512 - 31, <<>>),
 	{Headers1, State3} = decode(iolist_to_binary([
 		<<2#00100000, 2#00111111>>, MaxSize,
 		<<16#4803333032580770726976617465611d4d6f6e2c203231204f637420323031332032303a31333a323120474d546e1768747470733a2f2f7777772e6578616d706c652e636f6d:560>>]),
@@ -533,22 +533,22 @@ encode([{Name, Value0}|Tail], State, Opts, Acc) ->
 enc_int5(Int, Prefix) when Int < 31 ->
 	<< Prefix:3, Int:5 >>;
 enc_int5(Int, Prefix) ->
-	[<< Prefix:3, 2#11111:5 >>|enc_big_int(Int - 31, [])].
+	[<< Prefix:3, 2#11111:5 >>|enc_big_int(Int - 31, <<>>)].
 
 enc_int6(Int, Prefix) when Int < 63 ->
 	<< Prefix:2, Int:6 >>;
 enc_int6(Int, Prefix) ->
-	[<< Prefix:2, 2#111111:6 >>|enc_big_int(Int - 63, [])].
+	[<< Prefix:2, 2#111111:6 >>|enc_big_int(Int - 63, <<>>)].
 
 enc_int7(Int, Prefix) when Int < 127 ->
 	<< Prefix:1, Int:7 >>;
 enc_int7(Int, Prefix) ->
-	[<< Prefix:1, 2#1111111:7 >>|enc_big_int(Int - 127, [])].
+	[<< Prefix:1, 2#1111111:7 >>|enc_big_int(Int - 127, <<>>)].
 
 enc_big_int(Int, Acc) when Int < 128 ->
-	lists:reverse([<< Int:8 >>|Acc]);
+	<<Acc/binary, Int:8>>;
 enc_big_int(Int, Acc) ->
-	enc_big_int(Int bsr 7, [<< 1:1, Int:7 >>|Acc]).
+	enc_big_int(Int bsr 7, <<Acc/binary, 1:1, Int:7>>).
 
 %% Encode a string.
 

@@ -511,8 +511,13 @@ encode(Headers, State0=#state{configured_max_size=MaxSize}, Opts) ->
 %% @todo Handle cases where no/never indexing is expected.
 encode([], State, _, Acc) ->
 	{lists:reverse(Acc), State};
-encode([_Header0 = {Name, Value0}|Tail], State, Opts, Acc) ->
-	Value = iolist_to_binary(Value0),
+encode([{Name, Value0}|Tail], State, Opts, Acc) ->
+	%% We conditionally call iolist_to_binary/1 because a small
+	%% but noticeable speed improvement happens when we do this.
+	Value = if
+		is_binary(Value0) -> Value0;
+		true -> iolist_to_binary(Value0)
+	end,
 	Header = {Name, Value},
 	case table_find(Header, State) of
 		%% Indexed header field representation.
@@ -558,7 +563,7 @@ enc_str(Str, Opts) ->
 			Str2 = enc_huffman(Str, <<>>),
 			[enc_int7(byte_size(Str2), 2#1), Str2];
 		false ->
-			[enc_int7(iolist_size(Str), 2#0), Str]
+			[enc_int7(byte_size(Str), 2#0), Str]
 	end.
 
 enc_huffman(<<>>, Acc) ->
@@ -989,6 +994,68 @@ encode_iolist_test() ->
 		{<<"content-type">>, [<<"image">>,<<"/">>,<<"png">>,<<>>]}
 	],
 	{_, _} = encode(Headers),
+	ok.
+
+horse_encode_raw() ->
+	horse:repeat(20000,
+		do_horse_encode_raw()
+	).
+
+do_horse_encode_raw() ->
+	Headers1 = [
+		{<<":method">>, <<"GET">>},
+		{<<":scheme">>, <<"http">>},
+		{<<":path">>, <<"/">>},
+		{<<":authority">>, <<"www.example.com">>}
+	],
+	{_, State1} = encode(Headers1, init(), #{huffman => false}),
+	Headers2 = [
+		{<<":method">>, <<"GET">>},
+		{<<":scheme">>, <<"http">>},
+		{<<":path">>, <<"/">>},
+		{<<":authority">>, <<"www.example.com">>},
+		{<<"cache-control">>, <<"no-cache">>}
+	],
+	{_, State2} = encode(Headers2, State1, #{huffman => false}),
+	Headers3 = [
+		{<<":method">>, <<"GET">>},
+		{<<":scheme">>, <<"https">>},
+		{<<":path">>, <<"/index.html">>},
+		{<<":authority">>, <<"www.example.com">>},
+		{<<"custom-key">>, <<"custom-value">>}
+	],
+	{_, _} = encode(Headers3, State2, #{huffman => false}),
+	ok.
+
+horse_encode_huffman() ->
+	horse:repeat(20000,
+		do_horse_encode_huffman()
+	).
+
+do_horse_encode_huffman() ->
+	Headers1 = [
+		{<<":method">>, <<"GET">>},
+		{<<":scheme">>, <<"http">>},
+		{<<":path">>, <<"/">>},
+		{<<":authority">>, <<"www.example.com">>}
+	],
+	{_, State1} = encode(Headers1),
+	Headers2 = [
+		{<<":method">>, <<"GET">>},
+		{<<":scheme">>, <<"http">>},
+		{<<":path">>, <<"/">>},
+		{<<":authority">>, <<"www.example.com">>},
+		{<<"cache-control">>, <<"no-cache">>}
+	],
+	{_, State2} = encode(Headers2, State1),
+	Headers3 = [
+		{<<":method">>, <<"GET">>},
+		{<<":scheme">>, <<"https">>},
+		{<<":path">>, <<"/index.html">>},
+		{<<":authority">>, <<"www.example.com">>},
+		{<<"custom-key">>, <<"custom-value">>}
+	],
+	{_, _} = encode(Headers3, State2),
 	ok.
 -endif.
 

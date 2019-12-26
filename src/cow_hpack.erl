@@ -1358,11 +1358,11 @@ table_update_size(MaxSize, State=#state{dyn_table=DynTable}) ->
 -ifdef(TEST).
 prop_str_raw() ->
 	?FORALL(Str, binary(), begin
-		{Str, <<>>} =:= dec_str(iolist_to_binary(enc_str(Str, #{huffman => false})))
+		{Str, <<>>} =:= dec_str(iolist_to_binary(enc_str(Str, no_huffman)))
 	end).
 
 prop_str_huffman() ->
 	?FORALL(Str, binary(), begin
-		{Str, <<>>} =:= dec_str(iolist_to_binary(enc_str(Str, #{huffman => true})))
+		{Str, <<>>} =:= dec_str(iolist_to_binary(enc_str(Str, huffman)))
 	end).
 -endif.

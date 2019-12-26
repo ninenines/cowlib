@@ -487,26 +487,29 @@ do_horse_decode_huffman() ->
 
 -spec encode(cow_http:headers()) -> {iodata(), state()}.
 encode(Headers) ->
-	encode(Headers, init(), #{}, []).
+	encode(Headers, init(), huffman, []).
 
 -spec encode(cow_http:headers(), State) -> {iodata(), State} when State::state().
 encode(Headers, State=#state{max_size=MaxSize, configured_max_size=MaxSize}) ->
-	encode(Headers, State, #{}, []);
+	encode(Headers, State, huffman, []);
 encode(Headers, State0=#state{configured_max_size=MaxSize}) ->
-	{Data, State} = encode(Headers, State0#state{max_size=MaxSize}, #{}, []),
+	{Data, State} = encode(Headers, State0#state{max_size=MaxSize}, huffman, []),
 	{[enc_int5(MaxSize, 2#001), Data], State}.
 
 -spec encode(cow_http:headers(), State, opts()) -> {iodata(), State} when State::state().
 encode(Headers, State=#state{max_size=MaxSize, configured_max_size=MaxSize}, Opts) ->
-	encode(Headers, State, Opts, []);
+	encode(Headers, State, huffman_opt(Opts), []);
 encode(Headers, State0=#state{configured_max_size=MaxSize}, Opts) ->
-	{Data, State} = encode(Headers, State0#state{max_size=MaxSize}, Opts, []),
+	{Data, State} = encode(Headers, State0#state{max_size=MaxSize}, huffman_opt(Opts), []),
 	{[enc_int5(MaxSize, 2#001), Data], State}.
+
+huffman_opt(#{huffman := false}) -> no_huffman;
+huffman_opt(_) -> huffman.
 
 %% @todo Handle cases where no/never indexing is expected.
 encode([], State, _, Acc) ->
 	{lists:reverse(Acc), State};
-encode([{Name, Value0}|Tail], State, Opts, Acc) ->
+encode([{Name, Value0}|Tail], State, HuffmanOpt, Acc) ->
 	%% We conditionally call iolist_to_binary/1 because a small
 	%% but noticeable speed improvement happens when we do this.
 	Value = if
@@ -517,15 +520,18 @@ encode([{Name, Value0}|Tail], State, Opts, Acc) ->
 	case table_find(Header, State) of
 		%% Indexed header field representation.
 		{field, Index} ->
-			encode(Tail, State, Opts, [enc_int7(Index, 2#1)|Acc]);
+			encode(Tail, State, HuffmanOpt,
+				[enc_int7(Index, 2#1)|Acc]);
 		%% Literal header field representation: indexed name.
 		{name, Index} ->
 			State2 = table_insert(Header, State),
-			encode(Tail, State2, Opts, [[enc_int6(Index, 2#01), enc_str(Value, Opts)]|Acc]);
+			encode(Tail, State2, HuffmanOpt,
+				[[enc_int6(Index, 2#01), enc_str(Value, HuffmanOpt)]|Acc]);
 		%% Literal header field representation: new name.
 		not_found ->
 			State2 = table_insert(Header, State),
-			encode(Tail, State2, Opts, [[<< 0:1, 1:1, 0:6 >>, enc_str(Name, Opts), enc_str(Value, Opts)]|Acc])
+			encode(Tail, State2, HuffmanOpt,
+				[[<< 0:1, 1:1, 0:6 >>, enc_str(Name, HuffmanOpt), enc_str(Value, HuffmanOpt)]|Acc])
 	end.
 
 %% Encode an integer.
@@ -552,14 +558,11 @@ enc_big_int(Int, Acc) ->
 
 %% Encode a string.
 
-enc_str(Str, Opts) ->
-	case maps:get(huffman, Opts, true) of
-		true ->
-			Str2 = enc_huffman(Str, <<>>),
-			[enc_int7(byte_size(Str2), 2#1), Str2];
-		false ->
-			[enc_int7(byte_size(Str), 2#0), Str]
-	end.
+enc_str(Str, huffman) ->
+	Str2 = enc_huffman(Str, <<>>),
+	[enc_int7(byte_size(Str2), 2#1), Str2];
+enc_str(Str, no_huffman) ->
+	[enc_int7(byte_size(Str), 2#0), Str].
 
 enc_huffman(<<>>, Acc) ->
 	case bit_size(Acc) rem 8 of

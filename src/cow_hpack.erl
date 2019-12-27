@@ -119,10 +119,18 @@ decode(<< 0:3, 1:1, Rest/bits >>, State, Acc) ->
 
 %% Indexed header field representation.
 
-dec_indexed(Rest, State, Acc) ->
-	{Index, Rest2} = dec_int7(Rest),
+%% We do the integer decoding inline where appropriate, falling
+%% back to dec_big_int for larger values.
+dec_indexed(<<2#1111111:7, 0:1, Int:7, Rest/bits>>, State, Acc) ->
+	{Name, Value} = table_get(127 + Int bsl 7, State),
+	decode(Rest, State, [{Name, Value}|Acc]);
+dec_indexed(<<2#1111111:7, Rest0/bits>>, State, Acc) ->
+	{Index, Rest} = dec_big_int(Rest0, 127, 0),
 	{Name, Value} = table_get(Index, State),
-	decode(Rest2, State, [{Name, Value}|Acc]).
+	decode(Rest, State, [{Name, Value}|Acc]);
+dec_indexed(<<Index:7, Rest/bits>>, State, Acc) ->
+	{Name, Value} = table_get(Index, State),
+	decode(Rest, State, [{Name, Value}|Acc]).
 
 %% Literal header field with incremental indexing.
 
@@ -130,10 +138,18 @@ dec_lit_index_new_name(Rest, State, Acc) ->
 	{Name, Rest2} = dec_str(Rest),
 	dec_lit_index(Rest2, State, Acc, Name).
 
-dec_lit_index_indexed_name(Rest, State, Acc) ->
-	{Index, Rest2} = dec_int6(Rest),
+%% We do the integer decoding inline where appropriate, falling
+%% back to dec_big_int for larger values.
+dec_lit_index_indexed_name(<<2#111111:6, 0:1, Int:7, Rest/bits>>, State, Acc) ->
+	Name = table_get_name(63 + Int bsl 7, State),
+	dec_lit_index(Rest, State, Acc, Name);
+dec_lit_index_indexed_name(<<2#111111:6, Rest0/bits>>, State, Acc) ->
+	{Index, Rest} = dec_big_int(Rest0, 63, 0),
 	Name = table_get_name(Index, State),
-	dec_lit_index(Rest2, State, Acc, Name).
+	dec_lit_index(Rest, State, Acc, Name);
+dec_lit_index_indexed_name(<<Index:6, Rest/bits>>, State, Acc) ->
+	Name = table_get_name(Index, State),
+	dec_lit_index(Rest, State, Acc, Name).
 
 dec_lit_index(Rest, State, Acc, Name) ->
 	{Value, Rest2} = dec_str(Rest),
@@ -146,10 +162,18 @@ dec_lit_no_index_new_name(Rest, State, Acc) ->
 	{Name, Rest2} = dec_str(Rest),
 	dec_lit_no_index(Rest2, State, Acc, Name).
 
-dec_lit_no_index_indexed_name(Rest, State, Acc) ->
-	{Index, Rest2} = dec_int4(Rest),
+%% We do the integer decoding inline where appropriate, falling
+%% back to dec_big_int for larger values.
+dec_lit_no_index_indexed_name(<<2#1111:4, 0:1, Int:7, Rest/bits>>, State, Acc) ->
+	Name = table_get_name(15 + Int bsl 7, State),
+	dec_lit_no_index(Rest, State, Acc, Name);
+dec_lit_no_index_indexed_name(<<2#1111:4, Rest0/bits>>, State, Acc) ->
+	{Index, Rest} = dec_big_int(Rest0, 15, 0),
 	Name = table_get_name(Index, State),
-	dec_lit_no_index(Rest2, State, Acc, Name).
+	dec_lit_no_index(Rest, State, Acc, Name);
+dec_lit_no_index_indexed_name(<<Index:4, Rest/bits>>, State, Acc) ->
+	Name = table_get_name(Index, State),
+	dec_lit_no_index(Rest, State, Acc, Name).
 
 dec_lit_no_index(Rest, State, Acc, Name) ->
 	{Value, Rest2} = dec_str(Rest),
@@ -163,24 +187,9 @@ dec_lit_no_index(Rest, State, Acc, Name) ->
 %% and each can be used to create an indefinite length integer if all bits
 %% of the prefix are set to 1.
 
-dec_int4(<< 2#1111:4, Rest/bits >>) ->
-	dec_big_int(Rest, 15, 0);
-dec_int4(<< Int:4, Rest/bits >>) ->
-	{Int, Rest}.
-
 dec_int5(<< 2#11111:5, Rest/bits >>) ->
 	dec_big_int(Rest, 31, 0);
 dec_int5(<< Int:5, Rest/bits >>) ->
-	{Int, Rest}.
-
-dec_int6(<< 2#111111:6, Rest/bits >>) ->
-	dec_big_int(Rest, 63, 0);
-dec_int6(<< Int:6, Rest/bits >>) ->
-	{Int, Rest}.
-
-dec_int7(<< 2#1111111:7, Rest/bits >>) ->
-	dec_big_int(Rest, 127, 0);
-dec_int7(<< Int:7, Rest/bits >>) ->
 	{Int, Rest}.
 
 dec_big_int(<< 0:1, Value:7, Rest/bits >>, Int, M) ->
@@ -190,13 +199,18 @@ dec_big_int(<< 1:1, Value:7, Rest/bits >>, Int, M) ->
 
 %% Decode a string.
 
-dec_str(<< 0:1, Rest/bits >>) ->
-	{Length, Rest2} = dec_int7(Rest),
-	<< Str:Length/binary, Rest3/bits >> = Rest2,
-	{Str, Rest3};
-dec_str(<< 1:1, Rest/bits >>) ->
-	{Length, Rest2} = dec_int7(Rest),
-	dec_huffman(Rest2, Length, 0, ok, <<>>).
+dec_str(<<0:1, 2#1111111:7, Rest0/bits>>) ->
+	{Length, Rest1} = dec_big_int(Rest0, 127, 0),
+	<<Str:Length/binary, Rest/bits>> = Rest1,
+	{Str, Rest};
+dec_str(<<0:1, Length:7, Rest0/bits>>) ->
+	<<Str:Length/binary, Rest/bits>> = Rest0,
+	{Str, Rest};
+dec_str(<<1:1, 2#1111111:7, Rest0/bits>>) ->
+	{Length, Rest} = dec_big_int(Rest0, 127, 0),
+	dec_huffman(Rest, Length, 0, ok, <<>>);
+dec_str(<<1:1, Length:7, Rest/bits>>) ->
+	dec_huffman(Rest, Length, 0, ok, <<>>).
 
 %% We use a lookup table that allows us to benefit from
 %% the binary match context optimization. A more naive

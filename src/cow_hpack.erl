@@ -1349,8 +1349,9 @@ table_resize([Entry = {EntrySize, _}|Tail], MaxSize, Size, Acc) ->
 
 table_update_size(0, State) ->
 	State#state{size=0, max_size=0, dyn_table=[]};
-table_update_size(MaxSize, State=#state{max_size=MaxSize}) ->
-	State;
+table_update_size(MaxSize, State=#state{max_size=CurrentMaxSize})
+		when CurrentMaxSize =< MaxSize ->
+	State#state{max_size=MaxSize};
 table_update_size(MaxSize, State=#state{dyn_table=DynTable}) ->
 	{DynTable2, Size} = table_resize(DynTable, MaxSize, 0, []),
 	State#state{size=Size, max_size=MaxSize, dyn_table=DynTable2}.

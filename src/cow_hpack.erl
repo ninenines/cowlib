@@ -494,14 +494,14 @@ encode(Headers, State=#state{max_size=MaxSize, configured_max_size=MaxSize}) ->
 	encode(Headers, State, huffman, []);
 encode(Headers, State0=#state{configured_max_size=MaxSize}) ->
 	{Data, State} = encode(Headers, State0#state{max_size=MaxSize}, huffman, []),
-	{[enc_int5(MaxSize, 2#001), Data], State}.
+	{[enc_int5(MaxSize, 2#001)|Data], State}.
 
 -spec encode(cow_http:headers(), State, opts()) -> {iodata(), State} when State::state().
 encode(Headers, State=#state{max_size=MaxSize, configured_max_size=MaxSize}, Opts) ->
 	encode(Headers, State, huffman_opt(Opts), []);
 encode(Headers, State0=#state{configured_max_size=MaxSize}, Opts) ->
 	{Data, State} = encode(Headers, State0#state{max_size=MaxSize}, huffman_opt(Opts), []),
-	{[enc_int5(MaxSize, 2#001), Data], State}.
+	{[enc_int5(MaxSize, 2#001)|Data], State}.
 
 huffman_opt(#{huffman := false}) -> no_huffman;
 huffman_opt(_) -> huffman.
@@ -526,12 +526,12 @@ encode([{Name, Value0}|Tail], State, HuffmanOpt, Acc) ->
 		{name, Index} ->
 			State2 = table_insert(Header, State),
 			encode(Tail, State2, HuffmanOpt,
-				[[enc_int6(Index, 2#01), enc_str(Value, HuffmanOpt)]|Acc]);
+				[[enc_int6(Index, 2#01)|enc_str(Value, HuffmanOpt)]|Acc]);
 		%% Literal header field representation: new name.
 		not_found ->
 			State2 = table_insert(Header, State),
 			encode(Tail, State2, HuffmanOpt,
-				[[<< 0:1, 1:1, 0:6 >>, enc_str(Name, HuffmanOpt), enc_str(Value, HuffmanOpt)]|Acc])
+				[[<< 0:1, 1:1, 0:6 >>|[enc_str(Name, HuffmanOpt)|enc_str(Value, HuffmanOpt)]]|Acc])
 	end.
 
 %% Encode an integer.
@@ -539,17 +539,17 @@ encode([{Name, Value0}|Tail], State, HuffmanOpt, Acc) ->
 enc_int5(Int, Prefix) when Int < 31 ->
 	<< Prefix:3, Int:5 >>;
 enc_int5(Int, Prefix) ->
-	[<< Prefix:3, 2#11111:5 >>|enc_big_int(Int - 31, <<>>)].
+	enc_big_int(Int - 31, << Prefix:3, 2#11111:5 >>).
 
 enc_int6(Int, Prefix) when Int < 63 ->
 	<< Prefix:2, Int:6 >>;
 enc_int6(Int, Prefix) ->
-	[<< Prefix:2, 2#111111:6 >>|enc_big_int(Int - 63, <<>>)].
+	enc_big_int(Int - 63, << Prefix:2, 2#111111:6 >>).
 
 enc_int7(Int, Prefix) when Int < 127 ->
 	<< Prefix:1, Int:7 >>;
 enc_int7(Int, Prefix) ->
-	[<< Prefix:1, 2#1111111:7 >>|enc_big_int(Int - 127, <<>>)].
+	enc_big_int(Int - 127, << Prefix:1, 2#1111111:7 >>).
 
 enc_big_int(Int, Acc) when Int < 128 ->
 	<<Acc/binary, Int:8>>;
@@ -560,9 +560,9 @@ enc_big_int(Int, Acc) ->
 
 enc_str(Str, huffman) ->
 	Str2 = enc_huffman(Str, <<>>),
-	[enc_int7(byte_size(Str2), 2#1), Str2];
+	[enc_int7(byte_size(Str2), 2#1)|Str2];
 enc_str(Str, no_huffman) ->
-	[enc_int7(byte_size(Str), 2#0), Str].
+	[enc_int7(byte_size(Str), 2#0)|Str].
 
 enc_huffman(<<>>, Acc) ->
 	case bit_size(Acc) rem 8 of

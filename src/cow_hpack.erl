@@ -123,7 +123,7 @@ decode(<< 0:3, 1:1, Rest/bits >>, State, Acc) ->
 %% We do the integer decoding inline where appropriate, falling
 %% back to dec_big_int for larger values.
 dec_indexed(<<2#1111111:7, 0:1, Int:7, Rest/bits>>, State, Acc) ->
-	{Name, Value} = table_get(127 + Int bsl 7, State),
+	{Name, Value} = table_get(127 + Int, State),
 	decode(Rest, State, [{Name, Value}|Acc]);
 dec_indexed(<<2#1111111:7, Rest0/bits>>, State, Acc) ->
 	{Index, Rest} = dec_big_int(Rest0, 127, 0),
@@ -142,7 +142,7 @@ dec_lit_index_new_name(Rest, State, Acc) ->
 %% We do the integer decoding inline where appropriate, falling
 %% back to dec_big_int for larger values.
 dec_lit_index_indexed_name(<<2#111111:6, 0:1, Int:7, Rest/bits>>, State, Acc) ->
-	Name = table_get_name(63 + Int bsl 7, State),
+	Name = table_get_name(63 + Int, State),
 	dec_lit_index(Rest, State, Acc, Name);
 dec_lit_index_indexed_name(<<2#111111:6, Rest0/bits>>, State, Acc) ->
 	{Index, Rest} = dec_big_int(Rest0, 63, 0),
@@ -166,7 +166,7 @@ dec_lit_no_index_new_name(Rest, State, Acc) ->
 %% We do the integer decoding inline where appropriate, falling
 %% back to dec_big_int for larger values.
 dec_lit_no_index_indexed_name(<<2#1111:4, 0:1, Int:7, Rest/bits>>, State, Acc) ->
-	Name = table_get_name(15 + Int bsl 7, State),
+	Name = table_get_name(15 + Int, State),
 	dec_lit_no_index(Rest, State, Acc, Name);
 dec_lit_no_index_indexed_name(<<2#1111:4, Rest0/bits>>, State, Acc) ->
 	{Index, Rest} = dec_big_int(Rest0, 15, 0),

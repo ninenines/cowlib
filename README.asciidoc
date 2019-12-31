@@ -15,3 +15,4 @@ is ignored, they are all returned.
 
 * Official IRC Channel: #ninenines on irc.freenode.net
 * https://ninenines.eu/services[Commercial Support]
+* https://github.com/sponsors/essen[Sponsor me!]

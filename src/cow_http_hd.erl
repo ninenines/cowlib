@@ -1,4 +1,4 @@
-%% Copyright (c) 2014-2018, Loïc Hoguin <essen@ninenines.eu>
+%% Copyright (c) 2014-2022, Loïc Hoguin <essen@ninenines.eu>
 %%
 %% Permission to use, copy, modify, and/or distribute this software for any
 %% purpose with or without fee is hereby granted, provided that the above
@@ -3227,11 +3227,11 @@ parse_upgrade_error_test_() ->
 parse_variant_key(VariantKey, NumMembers) ->
 	List = cow_http_struct_hd:parse_list(VariantKey),
 	[case Inner of
-		{with_params, InnerList, #{}} ->
+		{list, InnerList, []} ->
 			NumMembers = length(InnerList),
 			[case Item of
-				{with_params, {token, Value}, #{}} -> Value;
-				{with_params, {string, Value}, #{}} -> Value
+				{item, {token, Value}, []} -> Value;
+				{item, {string, Value}, []} -> Value
 			end || Item <- InnerList]
 	end || Inner <- List].
 
@@ -3261,9 +3261,9 @@ parse_variant_key_error_test_() ->
 %% We assume that the lists are of correct length.
 variant_key(VariantKeys) ->
 	cow_http_struct_hd:list([
-		{with_params, [
-			{with_params, {string, Value}, #{}}
-		|| Value <- InnerList], #{}}
+		{list, [
+			{item, {string, Value}, []}
+		|| Value <- InnerList], []}
 	|| InnerList <- VariantKeys]).
 
 -ifdef(TEST).
@@ -3287,14 +3287,14 @@ variant_key_identity_test_() ->
 
 -spec parse_variants(binary()) -> [{binary(), [binary()]}].
 parse_variants(Variants) ->
-	{Dict0, Order} = cow_http_struct_hd:parse_dictionary(Variants),
-	Dict = maps:map(fun(_, {with_params, List, #{}}) ->
-		[case Item of
-			{with_params, {token, Value}, #{}} -> Value;
-			{with_params, {string, Value}, #{}} -> Value
-		end || Item <- List]
-	end, Dict0),
-	[{Key, maps:get(Key, Dict)} || Key <- Order].
+	Dict = cow_http_struct_hd:parse_dictionary(Variants),
+	[case DictItem of
+		{Key, {list, List, []}} ->
+			{Key, [case Item of
+				{item, {token, Value}, []} -> Value;
+				{item, {string, Value}, []} -> Value
+			end || Item <- List]}
+	end || DictItem <- Dict].
 
 -ifdef(TEST).
 parse_variants_test_() ->
@@ -3317,9 +3317,9 @@ parse_variants_test_() ->
 -spec variants([{binary(), [binary()]}]) -> iolist().
 variants(Variants) ->
 	cow_http_struct_hd:dictionary([
-		{Key, {with_params, [
-			{with_params, {string, Value}, #{}}
-		|| Value <- List], #{}}}
+		{Key, {list, [
+			{item, {string, Value}, []}
+		|| Value <- List], []}}
 	|| {Key, List} <- Variants]).
 
 -ifdef(TEST).

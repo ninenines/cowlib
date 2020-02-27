@@ -830,9 +830,13 @@ settings_frame({settings, Settings}, State0=#http2_machine{
 		_ -> {ok, State2}
 	end;
 %% We expect to receive a SETTINGS frame as part of the preface.
-settings_frame(_F, State) ->
+settings_frame(_F, State=#http2_machine{mode=server}) ->
 	{error, {connection_error, protocol_error,
 		'The preface sequence must be followed by a SETTINGS frame. (RFC7540 3.5)'},
+		State};
+settings_frame(_F, State) ->
+	{error, {connection_error, protocol_error,
+		'The preface must begin with a SETTINGS frame. (RFC7540 3.5)'},
 		State}.
 
 %% When SETTINGS_INITIAL_WINDOW_SIZE changes we need to update

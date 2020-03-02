@@ -28,6 +28,10 @@ An exception is thrown in the event of a parse error.
 
 == Changelog
 
+* *2.9*: Fixes to the parser may lead to potential incompatibilities.
+         A cookie name starting with `$` is no longer ignored.
+         A cookie without a `=` will be parsed as the value of
+         the cookie named `<<>>` (empty name).
 * *1.0*: Function introduced.
 
 == Examples

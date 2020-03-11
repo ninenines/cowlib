@@ -16,6 +16,7 @@
 
 -export([parse_cookie/1]).
 -export([parse_set_cookie/1]).
+-export([cookie/1]).
 -export([setcookie/3]).
 
 -type cookie_attrs() :: #{
@@ -285,12 +286,41 @@ parse_set_cookie_test_() ->
 		|| {SetCookie, Res} <- Tests].
 -endif.
 
+%% Build a cookie header.
+
+-spec cookie([{iodata(), iodata()}]) -> iolist().
+cookie([]) ->
+	[];
+cookie([{<<>>, Value}]) ->
+	[Value];
+cookie([{Name, Value}]) ->
+	[Name, $=, Value];
+cookie([{<<>>, Value}|Tail]) ->
+	[Value, $;, $\s|cookie(Tail)];
+cookie([{Name, Value}|Tail]) ->
+	[Name, $=, Value, $;, $\s|cookie(Tail)].
+
+-ifdef(TEST).
+cookie_test_() ->
+	Tests = [
+		{[], <<>>},
+		{[{<<"a">>, <<"b">>}], <<"a=b">>},
+		{[{<<"a">>, <<"b">>}, {<<"c">>, <<"d">>}], <<"a=b; c=d">>},
+		{[{<<>>, <<"b">>}, {<<"c">>, <<"d">>}], <<"b; c=d">>},
+		{[{<<"a">>, <<"b">>}, {<<>>, <<"d">>}], <<"a=b; d">>}
+	],
+	[{Res, fun() -> Res = iolist_to_binary(cookie(Cookies)) end}
+		|| {Cookies, Res} <- Tests].
+-endif.
+
 %% Convert a cookie name, value and options to its iodata form.
 %%
 %% Initially from Mochiweb:
 %%   * Copyright 2007 Mochi Media, Inc.
 %% Initial binary implementation:
 %%   * Copyright 2011 Thomas Burdick <thomas.burdick@gmail.com>
+%%
+%% @todo Rename the function to set_cookie eventually.
 
 -spec setcookie(iodata(), iodata(), cookie_opts()) -> iolist().
 setcookie(Name, Value, Opts) ->

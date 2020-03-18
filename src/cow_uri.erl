@@ -133,6 +133,8 @@ unhex($f) -> 15.
 -ifdef(TEST).
 urldecode_test_() ->
 	Tests = [
+		{<<"`">>, <<"`">>},
+		{<<"%60">>, <<"`">>},
 		{<<"%20">>, <<" ">>},
 		{<<"+">>, <<"+">>},
 		{<<"%00">>, <<0>>},
@@ -153,6 +155,7 @@ urldecode_identity_test_() ->
 	Tests = [
 		<<"%20">>,
 		<<"+">>,
+		<<"%60">>,
 		<<"nothingnothingnothingnothing">>,
 		<<"Small+fast+modular+HTTP+server">>,
 		<<"Small%20fast%20modular%20HTTP%20server">>,

@@ -52,4 +52,6 @@ SetCookie = cow_cookie:setcookie(<<"sessionid">>, ID, #{
 == See also
 
 link:man:cow_cookie(3)[cow_cookie(3)],
-link:man:cow_cookie:parse_cookie(3)[cow_cookie:parse_cookie(3)]
+link:man:cow_cookie:parse_cookie(3)[cow_cookie:parse_cookie(3)],
+link:man:cow_cookie:parse_set_cookie(3)[cow_cookie:parse_set_cookie(3)],
+link:man:cow_cookie:cookie(3)[cow_cookie:cookie(3)]

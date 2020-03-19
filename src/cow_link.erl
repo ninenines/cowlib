@@ -258,7 +258,7 @@ resolve_link_test_() ->
 		fun() -> R = resolve_link(L, C, O) end} || {L, C, O, R} <- Tests].
 -endif.
 
-%% @todo This function should ideally be part of Erlang/OTP's uri_string module.
+%% @todo This function has been added to Erlang/OTP 22.3 as uri_string:resolve/2,3.
 resolve(URI, BaseURI) ->
 	case resolve1(ensure_map_uri(URI), BaseURI) of
 		TargetURI = #{path := Path0} ->

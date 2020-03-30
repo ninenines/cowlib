@@ -209,9 +209,9 @@ dec_str(<<0:1, Length:7, Rest0/bits>>) ->
 	{Str, Rest};
 dec_str(<<1:1, 2#1111111:7, Rest0/bits>>) ->
 	{Length, Rest} = dec_big_int(Rest0, 127, 0),
-	dec_huffman(Rest, Length, 0, ok, <<>>);
+	dec_huffman(Rest, Length, 0, <<>>);
 dec_str(<<1:1, Length:7, Rest/bits>>) ->
-	dec_huffman(Rest, Length, 0, ok, <<>>).
+	dec_huffman(Rest, Length, 0, <<>>).
 
 %% We use a lookup table that allows us to benefit from
 %% the binary match context optimization. A more naive
@@ -221,21 +221,39 @@ dec_str(<<1:1, Length:7, Rest/bits>>) ->
 %%
 %% See cow_hpack_dec_huffman_lookup.hrl for more details.
 
-dec_huffman(<<A:4, B:4, R/bits>>, Len, Huff0, _, Acc) when Len > 0 ->
+dec_huffman(<<A:4, B:4, R/bits>>, Len, Huff0, Acc) when Len > 1 ->
 	{_, CharA, Huff1} = dec_huffman_lookup(Huff0, A),
-	{Result, CharB, Huff} = dec_huffman_lookup(Huff1, B),
+	{_, CharB, Huff} = dec_huffman_lookup(Huff1, B),
 	case {CharA, CharB} of
-		{undefined, undefined} -> dec_huffman(R, Len - 1, Huff, Result, Acc);
-		{CharA, undefined} -> dec_huffman(R, Len - 1, Huff, Result, <<Acc/binary, CharA>>);
-		{undefined, CharB} -> dec_huffman(R, Len - 1, Huff, Result, <<Acc/binary, CharB>>);
-		{CharA, CharB} -> dec_huffman(R, Len - 1, Huff, Result, <<Acc/binary, CharA, CharB>>)
+		{undefined, undefined} -> dec_huffman(R, Len - 1, Huff, Acc);
+		{CharA, undefined} -> dec_huffman(R, Len - 1, Huff, <<Acc/binary, CharA>>);
+		{undefined, CharB} -> dec_huffman(R, Len - 1, Huff, <<Acc/binary, CharB>>);
+		{CharA, CharB} -> dec_huffman(R, Len - 1, Huff, <<Acc/binary, CharA, CharB>>)
 	end;
-dec_huffman(Rest, 0, _, ok, Acc) ->
-	{Acc, Rest}.
+dec_huffman(<<A:4, B:4, Rest/bits>>, 1, Huff0, Acc) ->
+	{_, CharA, Huff} = dec_huffman_lookup(Huff0, A),
+	{ok, CharB, _} = dec_huffman_lookup(Huff, B),
+	case {CharA, CharB} of
+		%% {undefined, undefined} (> 7-bit final padding) is rejected with a crash.
+		{CharA, undefined} ->
+			{<<Acc/binary, CharA>>, Rest};
+		{undefined, CharB} ->
+			{<<Acc/binary, CharB>>, Rest};
+		_ ->
+			{<<Acc/binary, CharA, CharB>>, Rest}
+	end;
+%% Can only be reached when the string length to decode is 0.
+dec_huffman(Rest, 0, _, <<>>) ->
+	{<<>>, Rest}.
 
 -include("cow_hpack_dec_huffman_lookup.hrl").
 
 -ifdef(TEST).
+%% Test case extracted from h2spec.
+decode_reject_eos_test() ->
+	{'EXIT', _} = (catch decode(<<16#0085f2b24a84ff874951fffffffa7f:120>>)),
+	ok.
+
 req_decode_test() ->
 	%% First request (raw then huffman).
 	{Headers1, State1} = decode(<< 16#828684410f7777772e6578616d706c652e636f6d:160 >>),

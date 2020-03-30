@@ -55,7 +55,7 @@
 % @todo -export([parse_content_security_policy/1]). CSP
 % @todo -export([parse_content_security_policy_report_only/1]). CSP
 -export([parse_content_type/1]).
-% @todo -export([parse_cookie/1]). RFC6265
+-export([parse_cookie/1]).
 -export([parse_date/1]).
 % @todo -export([parse_digest/1]). RFC3230
 % @todo -export([parse_dnt/1]). http://donottrack.us/
@@ -100,7 +100,7 @@
 -export([parse_sec_websocket_version_req/1]).
 -export([parse_sec_websocket_version_resp/1]).
 % @todo -export([parse_server/1]). RFC7231
-% @todo -export([parse_set_cookie/1]). RFC6265
+-export([parse_set_cookie/1]).
 % @todo -export([parse_strict_transport_security/1]). RFC6797
 % @todo -export([parse_tcn/1]). RFC2295
 -export([parse_te/1]).
@@ -1914,6 +1914,12 @@ horse_parse_content_type() ->
 	).
 -endif.
 
+%% Cookie header.
+
+-spec parse_cookie(binary()) -> [{binary(), binary()}].
+parse_cookie(Cookie) ->
+	cow_cookie:parse_cookie(Cookie).
+
 %% Date header.
 
 -spec parse_date(binary()) -> calendar:datetime().
@@ -2963,6 +2969,14 @@ horse_parse_sec_websocket_version_resp() ->
 		parse_sec_websocket_version_resp(<<"13, 8, 7">>)
 	).
 -endif.
+
+%% Set-Cookie header.
+
+-spec parse_set_cookie(binary())
+	-> {ok, binary(), binary(), cow_cookie:cookie_attrs()}
+	| ignore.
+parse_set_cookie(SetCookie) ->
+	cow_cookie:parse_set_cookie(SetCookie).
 
 %% TE header.
 %%

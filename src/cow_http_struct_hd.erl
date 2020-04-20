@@ -62,24 +62,24 @@
 -spec parse_dictionary(binary()) -> sh_dictionary().
 parse_dictionary(<<>>) ->
 	{#{}, []};
-parse_dictionary(<<C,R/bits>>) when ?IS_LC_ALPHA(C) ->
+parse_dictionary(<<C,R/bits>>) when ?IS_LC_ALPHA(C) or (C =:= $*) ->
 	{Dict, Order, <<>>} = parse_dict_key(R, #{}, [], <<C>>),
 	{Dict, Order}.
 
 parse_dict_key(<<$=,$(,R0/bits>>, Acc, Order, K) ->
-	false = maps:is_key(K, Acc),
 	{Item, R} = parse_inner_list(R0, []),
 	parse_dict_before_sep(R, Acc#{K => Item}, [K|Order]);
 parse_dict_key(<<$=,R0/bits>>, Acc, Order, K) ->
-	false = maps:is_key(K, Acc),
 	{Item, R} = parse_item1(R0),
 	parse_dict_before_sep(R, Acc#{K => Item}, [K|Order]);
 parse_dict_key(<<C,R/bits>>, Acc, Order, K)
 		when ?IS_LC_ALPHA(C) or ?IS_DIGIT(C)
 			or (C =:= $_) or (C =:= $-) or (C =:= $.) or (C =:= $*) ->
 	parse_dict_key(R, Acc, Order, <<K/binary,C>>);
+parse_dict_key(<<$;,R0/bits>>, Acc, Order, K) ->
+	{Params, R} = parse_before_param(R0, #{}),
+	parse_dict_before_sep(R, Acc#{K => {with_params, true, Params}}, [K|Order]);
 parse_dict_key(R, Acc, Order, K) ->
-	false = maps:is_key(K, Acc),
 	parse_dict_before_sep(R, Acc#{K => {with_params, true, #{}}}, [K|Order]).
 
 parse_dict_before_sep(<<$\s,R/bits>>, Acc, Order) ->
@@ -91,7 +91,7 @@ parse_dict_before_sep(<<>>, Acc, Order) ->
 
 parse_dict_before_member(<<$\s,R/bits>>, Acc, Order) ->
 	parse_dict_before_member(R, Acc, Order);
-parse_dict_before_member(<<C,R/bits>>, Acc, Order) when ?IS_LC_ALPHA(C) ->
+parse_dict_before_member(<<C,R/bits>>, Acc, Order) when ?IS_LC_ALPHA(C) or (C =:= $*) ->
 	parse_dict_key(R, Acc, Order, <<C>>).
 
 -spec parse_item(binary()) -> sh_item().
@@ -149,7 +149,7 @@ parse_inner_list(R0, Acc) ->
 
 parse_before_param(<<$\s,R/bits>>, Acc) ->
 	parse_before_param(R, Acc);
-parse_before_param(<<C,R/bits>>, Acc) when ?IS_LC_ALPHA(C) ->
+parse_before_param(<<C,R/bits>>, Acc) when ?IS_LC_ALPHA(C) or (C =:= $*) ->
 	parse_param(R, Acc, <<C>>).
 
 parse_param(<<$;,R/bits>>, Acc, K) ->
@@ -158,10 +158,8 @@ parse_param(<<$;,R/bits>>, Acc, K) ->
 parse_param(<<$=,R0/bits>>, Acc, K) ->
 	case parse_bare_item(R0) of
 		{Item, <<$;,R/bits>>} ->
-			false = maps:is_key(K, Acc),
 			parse_before_param(R, Acc#{K => Item});
 		{Item, R} ->
-			false = maps:is_key(K, Acc),
 			{Acc#{K => Item}, R}
 	end;
 parse_param(<<C,R/bits>>, Acc, K)

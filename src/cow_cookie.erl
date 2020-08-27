@@ -26,7 +26,7 @@
 	path => binary(),
 	secure => true,
 	http_only => true,
-	same_site => strict | lax
+	same_site => strict | lax | none
 }.
 -export_type([cookie_attrs/0]).
 
@@ -35,7 +35,7 @@
 	http_only => boolean(),
 	max_age => non_neg_integer(),
 	path => binary(),
-	same_site => lax | strict,
+	same_site => lax | strict | none,
 	secure => boolean()
 }.
 -export_type([cookie_opts/0]).
@@ -258,7 +258,9 @@ parse_set_cookie_attr(<<"samesite">>, Value) ->
 			{ok, same_site, strict};
 		<<"lax">> ->
 			{ok, same_site, lax};
-		%% Value "none", unknown values and lack of value are equivalent.
+		<<"none">> ->
+			{ok, same_site, none};
+		%% unknown values and lack of value are equivalent.
 		_ ->
 			ignore
 	end;
@@ -348,6 +350,7 @@ attributes([{secure, false}|Tail]) -> attributes(Tail);
 attributes([{secure, true}|Tail]) -> [<<"; Secure">>|attributes(Tail)];
 attributes([{same_site, lax}|Tail]) -> [<<"; SameSite=Lax">>|attributes(Tail)];
 attributes([{same_site, strict}|Tail]) -> [<<"; SameSite=Strict">>|attributes(Tail)];
+attributes([{same_site, none}|Tail]) -> [<<"; SameSite=None">>|attributes(Tail)];
 %% Skip unknown options.
 attributes([_|Tail]) -> attributes(Tail).
 

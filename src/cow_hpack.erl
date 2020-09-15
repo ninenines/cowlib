@@ -526,14 +526,16 @@ encode(Headers) ->
 encode(Headers, State=#state{max_size=MaxSize, configured_max_size=MaxSize}) ->
 	encode(Headers, State, huffman, []);
 encode(Headers, State0=#state{configured_max_size=MaxSize}) ->
-	{Data, State} = encode(Headers, State0#state{max_size=MaxSize}, huffman, []),
+	State1 = table_update_size(MaxSize, State0),
+	{Data, State} = encode(Headers, State1, huffman, []),
 	{[enc_int5(MaxSize, 2#001)|Data], State}.
 
 -spec encode(cow_http:headers(), State, opts()) -> {iodata(), State} when State::state().
 encode(Headers, State=#state{max_size=MaxSize, configured_max_size=MaxSize}, Opts) ->
 	encode(Headers, State, huffman_opt(Opts), []);
 encode(Headers, State0=#state{configured_max_size=MaxSize}, Opts) ->
-	{Data, State} = encode(Headers, State0#state{max_size=MaxSize}, huffman_opt(Opts), []),
+	State1 = table_update_size(MaxSize, State0),
+	{Data, State} = encode(Headers, State1, huffman_opt(Opts), []),
 	{[enc_int5(MaxSize, 2#001)|Data], State}.
 
 huffman_opt(#{huffman := false}) -> no_huffman;
@@ -1016,6 +1018,47 @@ table_update_encode_test() ->
 		{42,{<<":status">>, <<"302">>}}]} = EncState3,
 	ok.
 
+%% Check that encode/2 is using the new table size after calling
+%% set_max_size/1 and that adding entries larger than the max size
+%% results in an empty table.
+table_update_encode_max_size_0_test() ->
+	%% Encoding starts with default max size
+	EncState0 = init(),
+	%% Decoding starts with max size of 0
+	DecState0 = init(0),
+
+	%% First request
+	Headers1 = [
+		{<<":method">>, <<"GET">>},
+		{<<":scheme">>, <<"http">>},
+		{<<":path">>, <<"/">>},
+		{<<":authority">>, <<"www.example.com">>}
+	],
+	{Encoded1, EncState1} = encode(Headers1, EncState0),
+	{Headers1, DecState1} = decode(iolist_to_binary(Encoded1), DecState0),
+
+	#state{size=57, dyn_table=[{57,{<<":authority">>, <<"www.example.com">>}}]} = EncState1,
+	#state{size=0, dyn_table=[]} = DecState1,
+
+	%% Settings received after the first request
+	EncState2 = set_max_size(0, EncState1),
+	#state{configured_max_size=0, max_size=4096,
+	       size=57, dyn_table=[{57,{<<":authority">>, <<"www.example.com">>}}]} = EncState2,
+
+	%% Second request
+	Headers2 = [
+		{<<":method">>, <<"GET">>},
+		{<<":scheme">>, <<"http">>},
+		{<<":path">>, <<"/">>},
+		{<<":authority">>, <<"www.example.com">>},
+		{<<"cache-control">>, <<"no-cache">>}
+	],
+	{Encoded2, EncState3} = encode(Headers2, EncState2),
+	{Headers2, DecState2} = decode(iolist_to_binary(Encoded2), DecState1),
+	#state{configured_max_size=0, max_size=0, size=0, dyn_table=[]} = EncState3,
+	#state{size=0, dyn_table=[]} = DecState2,
+	ok.
+
 encode_iolist_test() ->
 	Headers = [
 		{<<":method">>, <<"GET">>},
@@ -1365,13 +1408,21 @@ table_get_name(Index, #state{dyn_table=DynamicTable}) ->
 
 table_insert(Entry = {Name, Value}, State=#state{size=Size, max_size=MaxSize, dyn_table=DynamicTable}) ->
 	EntrySize = byte_size(Name) + byte_size(Value) + 32,
-	{DynamicTable2, Size2} = if
-		Size + EntrySize > MaxSize ->
-			table_resize(DynamicTable, MaxSize - EntrySize, 0, []);
-		true ->
-			{DynamicTable, Size}
-	end,
-	State#state{size=Size2 + EntrySize, dyn_table=[{EntrySize, Entry}|DynamicTable2]}.
+	if
+		EntrySize + Size =< MaxSize ->
+			%% Add entry without eviction
+			State#state{size=Size + EntrySize, dyn_table=[{EntrySize, Entry}|DynamicTable]};
+		EntrySize =< MaxSize ->
+			%% Evict, then add entry
+			{DynamicTable2, Size2} = table_resize(DynamicTable, MaxSize - EntrySize, 0, []),
+			State#state{size=Size2 + EntrySize, dyn_table=[{EntrySize, Entry}|DynamicTable2]};
+		EntrySize > MaxSize ->
+			%% "an attempt to add an entry larger than the
+			%% maximum size causes the table to be emptied
+			%% of all existing entries and results in an
+			%% empty table" (RFC 7541, 4.4)
+			State#state{size=0, dyn_table=[]}
+	end.
 
 table_resize([], _, Size, Acc) ->
 	{lists:reverse(Acc), Size};

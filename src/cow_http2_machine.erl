@@ -31,6 +31,8 @@
 -export([reset_stream/2]).
 -export([get_connection_local_buffer_size/1]).
 -export([get_local_setting/2]).
+-export([get_remote_setting/2]).
+-export([get_remote_settings/1]).
 -export([get_last_streamid/1]).
 -export([get_stream_local_buffer_size/2]).
 -export([get_stream_local_state/2]).
@@ -1487,6 +1489,14 @@ get_connection_local_buffer_size(#http2_machine{streams=Streams}) ->
 get_local_setting(Key, #http2_machine{local_settings=Settings}) ->
 	maps:get(Key, Settings, default_setting_value(Key)).
 
+-spec get_remote_setting(atom(), http2_machine()) -> atom() | integer().
+get_remote_setting(Key, #http2_machine{remote_settings=Settings}) ->
+	maps:get(Key, Settings, default_setting_value(Key)).
+
+-spec get_remote_settings(http2_machine()) -> map().
+get_remote_settings(#http2_machine{remote_settings=Settings}) ->
+	maps:merge(default_settings(), Settings).
+
 default_setting_value(header_table_size) -> 4096;
 default_setting_value(enable_push) -> true;
 default_setting_value(max_concurrent_streams) -> infinity;
@@ -1494,6 +1504,16 @@ default_setting_value(initial_window_size) -> 65535;
 default_setting_value(max_frame_size) -> 16384;
 default_setting_value(max_header_list_size) -> infinity;
 default_setting_value(enable_connect_protocol) -> false.
+
+default_settings() ->
+	#{
+		header_table_size => default_setting_value(header_table_size),
+		enable_push => default_setting_value(enable_push),
+		max_concurrent_streams => default_setting_value(max_concurrent_streams),
+		initial_window_size => default_setting_value(initial_window_size),
+		max_frame_size => default_setting_value(max_frame_size),
+		max_header_list_size => default_setting_value(max_header_list_size)
+	}.
 
 %% Function to obtain the last known streamid received
 %% for the purposes of sending a GOAWAY frame and closing the connection.

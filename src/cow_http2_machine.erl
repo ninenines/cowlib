@@ -50,6 +50,7 @@
 	max_frame_size_received => 16384..16777215,
 	max_frame_size_sent => 16384..16777215 | infinity,
 	max_stream_window_size => 0..16#7fffffff,
+	message_tag => any(),
 	preface_timeout => timeout(),
 	settings_timeout => timeout(),
 	stream_window_data_threshold => 0..16#7fffffff,
@@ -211,6 +212,13 @@ init(server, Opts) ->
 		local_streamid=2
 	}).
 
+%% @todo In Cowlib 3.0 we should always include MessageTag in the message.
+%% It can be set to 'undefined' if the option is missing.
+start_timer(Name, Opts=#{message_tag := MessageTag}) ->
+	case maps:get(Name, Opts, 5000) of
+		infinity -> undefined;
+		Timeout -> erlang:start_timer(Timeout, self(), {?MODULE, MessageTag, Name})
+	end;
 start_timer(Name, Opts) ->
 	case maps:get(Name, Opts, 5000) of
 		infinity -> undefined;

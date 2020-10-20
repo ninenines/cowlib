@@ -29,7 +29,7 @@ cookie_attrs() :: #{
     path => binary(),
     secure => true,
     http_only => true,
-    same_site => strict | lax
+    same_site => strict | lax | none
 }
 ----
 
@@ -48,7 +48,7 @@ cookie_opts() :: #{
     http_only => boolean(),
     max_age   => non_neg_integer(),
     path      => binary(),
-    same_site => lax | strict,
+    same_site => strict | lax | none,
     secure    => boolean()
 }
 ----
@@ -83,10 +83,14 @@ be sent to the current "directory" of the effective request URI.
 same_site::
 
 Whether the cookie should be sent along with cross-site
-requests. This header is currently non-standard but is in
+requests. This attribute is currently non-standard but is in
 the process of being standardized. Please refer to the
 https://tools.ietf.org/html/draft-ietf-httpbis-rfc6265bis-03#section-4.1.2.7[RFC 6265 (bis) draft]
 for details.
++
+The default value for this attribute may vary depending on
+user agent and configuration. Browsers are known to be more
+strict over TCP compared to TLS.
 
 secure::
 
@@ -97,6 +101,8 @@ transfer. By default there are no restrictions.
 
 == Changelog
 
+* *2.10*: The `same_site` attribute and option may now be
+          set to `none`.
 * *2.9*: The `cookie_attrs` type was added.
 * *1.0*: Module introduced.
 

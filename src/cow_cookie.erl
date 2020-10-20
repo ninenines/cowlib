@@ -35,7 +35,7 @@
 	http_only => boolean(),
 	max_age => non_neg_integer(),
 	path => binary(),
-	same_site => lax | strict | none,
+	same_site => strict | lax | none,
 	secure => boolean()
 }.
 -export_type([cookie_opts/0]).

@@ -33,6 +33,7 @@
 -export([get_local_setting/2]).
 -export([get_remote_settings/1]).
 -export([get_last_streamid/1]).
+-export([set_last_streamid/1]).
 -export([get_stream_local_buffer_size/2]).
 -export([get_stream_local_state/2]).
 -export([get_stream_remote_state/2]).
@@ -145,6 +146,7 @@
 	%% Stream identifiers.
 	local_streamid :: pos_integer(), %% The next streamid to be used.
 	remote_streamid = 0 :: non_neg_integer(), %% The last streamid received.
+	last_remote_streamid = 16#7fffffff :: non_neg_integer(), %% Used in GOAWAY.
 
 	%% Currently active HTTP/2 streams. Streams may be initiated either
 	%% by the client or by the server through PUSH_PROMISE frames.
@@ -309,11 +311,11 @@ frame(Frame, State=#http2_machine{state=settings, preface_timer=TRef}) ->
 	end,
 	settings_frame(Frame, State#http2_machine{state=normal, preface_timer=undefined});
 frame(Frame, State=#http2_machine{state={continuation, _, _}}) ->
-	continuation_frame(Frame, State);
+	maybe_discard_result(continuation_frame(Frame, State));
 frame(settings_ack, State=#http2_machine{state=normal}) ->
 	settings_ack_frame(State);
 frame(Frame, State=#http2_machine{state=normal}) ->
-	case element(1, Frame) of
+	Result = case element(1, Frame) of
 		data -> data_frame(Frame, State);
 		headers -> headers_frame(Frame, State);
 		priority -> priority_frame(Frame, State);
@@ -326,7 +328,26 @@ frame(Frame, State=#http2_machine{state=normal}) ->
 		window_update -> window_update_frame(Frame, State);
 		continuation -> unexpected_continuation_frame(Frame, State);
 		_ -> ignored_frame(State)
-	end.
+	end,
+	maybe_discard_result(Result).
+
+%% RFC7540 6.9. After sending a GOAWAY frame, the sender can discard frames for
+%% streams initiated by the receiver with identifiers higher than the identified
+%% last stream. However, any frames that alter connection state cannot be
+%% completely ignored. For instance, HEADERS, PUSH_PROMISE, and CONTINUATION
+%% frames MUST be minimally processed to ensure the state maintained for header
+%% compression is consistent.
+maybe_discard_result(FrameResult={ok, Result, State=#http2_machine{mode=Mode,
+		last_remote_streamid=MaxID}})
+		when element(1, Result) =/= goaway ->
+	case element(2, Result) of
+		StreamID when StreamID > MaxID, not ?IS_LOCAL(Mode, StreamID) ->
+			{ok, State};
+		_StreamID ->
+			FrameResult
+	end;
+maybe_discard_result(FrameResult) ->
+	FrameResult.
 
 %% DATA frame.
 
@@ -1528,6 +1549,14 @@ default_setting_value(enable_connect_protocol) -> false.
 -spec get_last_streamid(http2_machine()) -> cow_http2:streamid().
 get_last_streamid(#http2_machine{remote_streamid=RemoteStreamID}) ->
 	RemoteStreamID.
+
+%% Set last accepted streamid to the last known streamid, for the purpose
+%% ignoring frames for remote streams created after sending GOAWAY.
+
+-spec set_last_streamid(http2_machine()) -> {cow_http2:streamid(), http2_machine()}.
+set_last_streamid(State=#http2_machine{remote_streamid=StreamID,
+		last_remote_streamid=LastStreamID}) when StreamID =< LastStreamID->
+	{StreamID, State#http2_machine{last_remote_streamid = StreamID}}.
 
 %% Retrieve the local buffer size for a stream.
 

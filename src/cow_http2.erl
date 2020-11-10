@@ -36,6 +36,10 @@
 -export([window_update/1]).
 -export([window_update/2]).
 
+%% Accessing.
+-export([frame_stream_id/1]).
+
+%% Types.
 -type streamid() :: pos_integer().
 -export_type([streamid/0]).
 
@@ -481,3 +485,23 @@ error_code(connect_error) -> 10;
 error_code(enhance_your_calm) -> 11;
 error_code(inadequate_security) -> 12;
 error_code(http_1_1_required) -> 13.
+
+%% Accessing.
+
+%% Returns the stream ID associated with the frame or 0 if the frame is not
+%% associated with any particular stream (AKA stream zero).
+-spec frame_stream_id(frame()) -> streamid() | 0.
+frame_stream_id({data, StreamID, _, _}) -> StreamID;
+frame_stream_id({headers, StreamID, _, _, _}) -> StreamID;
+frame_stream_id({headers, StreamID, _, _, _, _, _, _}) -> StreamID;
+frame_stream_id({priority, StreamID, _, _, _}) -> StreamID;
+frame_stream_id({rst_stream, StreamID, _}) -> StreamID;
+frame_stream_id({settings, _}) -> 0;
+frame_stream_id(settings_ack) -> 0;
+frame_stream_id({push_promise, StreamID, _, _, _}) -> StreamID;
+frame_stream_id({ping, _}) -> 0;
+frame_stream_id({ping_ack, _}) -> 0;
+frame_stream_id({goaway, _LastStreamID, _, _}) -> 0;
+frame_stream_id({window_update, _}) -> 0;
+frame_stream_id({window_update, StreamID, _}) -> StreamID;
+frame_stream_id({continuation, StreamID, _, _}) -> StreamID.

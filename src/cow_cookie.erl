@@ -232,7 +232,7 @@ parse_set_cookie_attr(<<"max-age">>, Value) ->
 parse_set_cookie_attr(<<"domain">>, Value) ->
 	case Value of
 		<<>> ->
-			{ignore, domain};
+			ignore;
 		<<".",Rest/bits>> ->
 			{ok, domain, ?LOWER(Rest)};
 		_ ->

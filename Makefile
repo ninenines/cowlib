@@ -2,7 +2,7 @@
 
 PROJECT = cowlib
 PROJECT_DESCRIPTION = Support library for manipulating Web protocols.
-PROJECT_VERSION = 2.10.0
+PROJECT_VERSION = 2.10.1
 
 # Options.
 
@@ -37,6 +37,18 @@ AUTO_CI_OTP ?= OTP-21+
 AUTO_CI_HIPE ?= OTP-LATEST
 # AUTO_CI_ERLLVM ?= OTP-LATEST
 AUTO_CI_WINDOWS ?= OTP-21+
+
+# Hex configuration.
+
+define HEX_TARBALL_EXTRA_METADATA
+#{
+	licenses => [<<"ISC">>],
+	links => #{
+		<<"Function reference">> => <<"https://ninenines.eu/docs/en/cowlib/2.10/manual/">>,
+		<<"GitHub">> => <<"https://github.com/ninenines/cowlib">>
+	}
+}
+endef
 
 # Standard targets.
 
@@ -85,9 +97,11 @@ perfs: test-build
 # Prepare for the release.
 
 prepare_tag:
+	$(verbose) $(warning Hex metadata: $(HEX_TARBALL_EXTRA_METADATA))
+	$(verbose) echo
 	$(verbose) echo -n "Most recent tag:            "
-	$(verbose) git tag | tail -n1
-	$(verbose) git verify-tag `git tag | tail -n1`
+	$(verbose) git tag --sort taggerdate | tail -n1
+	$(verbose) git verify-tag `git tag --sort taggerdate | tail -n1`
 	$(verbose) echo -n "MAKEFILE: "
 	$(verbose) grep -m1 PROJECT_VERSION Makefile
 	$(verbose) echo -n "APP:                 "

@@ -45,7 +45,8 @@ define HEX_TARBALL_EXTRA_METADATA
 	licenses => [<<"ISC">>],
 	links => #{
 		<<"Function reference">> => <<"https://ninenines.eu/docs/en/cowlib/2.10/manual/">>,
-		<<"GitHub">> => <<"https://github.com/ninenines/cowlib">>
+		<<"GitHub">> => <<"https://github.com/ninenines/cowlib">>,
+		<<"Sponsor">> => <<"https://github.com/sponsors/essen">>
 	}
 }
 endef

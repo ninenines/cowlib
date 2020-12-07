@@ -58,6 +58,10 @@ parse_cookie(<< $,, Rest/binary >>, Acc) ->
 	parse_cookie(Rest, Acc);
 parse_cookie(<< $;, Rest/binary >>, Acc) ->
 	parse_cookie(Rest, Acc);
+parse_cookie(<< $=, Rest/binary >>, Acc) ->
+	parse_cookie(Rest, Acc);
+parse_cookie(<< $/, Rest/binary >>, Acc) ->
+	parse_cookie(Rest, Acc);
 parse_cookie(Cookie, Acc) ->
 	parse_cookie_name(Cookie, Acc, <<>>).
 

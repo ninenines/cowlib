@@ -76,19 +76,19 @@
 	method = undefined :: binary(),
 
 	%% Whether we finished sending data.
-	local = idle :: idle | cow_http2:fin(),
+	local = idle :: idle | cow_http:fin(),
 
 	%% Local flow control window (how much we can send).
 	local_window :: integer(),
 
 	%% Buffered data waiting for the flow control window to increase.
 	local_buffer = queue:new() ::
-		queue:queue({cow_http2:fin(), non_neg_integer(), {data, iodata()} | #sendfile{}}),
+		queue:queue({cow_http:fin(), non_neg_integer(), {data, iodata()} | #sendfile{}}),
 	local_buffer_size = 0 :: non_neg_integer(),
 	local_trailers = undefined :: undefined | cow_http:headers(),
 
 	%% Whether we finished receiving data.
-	remote = idle :: idle | cow_http2:fin(),
+	remote = idle :: idle | cow_http:fin(),
 
 	%% Remote flow control window (how much we accept to receive).
 	remote_window :: integer(),
@@ -105,7 +105,7 @@
 -type stream() :: #stream{}.
 
 -type continued_frame() ::
-	{headers, cow_http2:streamid(), cow_http2:fin(), cow_http2:head_fin(), binary()} |
+	{headers, cow_http2:streamid(), cow_http:fin(), cow_http2:head_fin(), binary()} |
 	{push_promise, cow_http2:streamid(), cow_http2:head_fin(), cow_http2:streamid(), binary()}.
 
 -record(http2_machine, {
@@ -134,8 +134,9 @@
 		initial_window_size => 65535
 %		max_frame_size => 16384
 %		max_header_list_size => infinity
+%		enable_connect_protocol => false
 	} :: map(),
-	next_settings = undefined :: undefined | map(),
+	next_settings = #{} :: map(),
 	remote_settings = #{
 		initial_window_size => 65535
 	} :: map(),
@@ -170,20 +171,6 @@
 
 -opaque http2_machine() :: #http2_machine{}.
 -export_type([http2_machine/0]).
-
--type pseudo_headers() :: #{} %% Trailers
-	| #{ %% Responses.
-		status := cow_http:status()
-	} | #{ %% Normal CONNECT requests.
-		method := binary(),
-		authority := binary()
-	} | #{ %% Other requests and extended CONNECT requests.
-		method := binary(),
-		scheme := binary(),
-		authority := binary(),
-		path := binary(),
-		protocol => binary()
-	}.
 
 %% Returns true when the given StreamID is for a local-initiated stream.
 -define(IS_SERVER_LOCAL(StreamID), ((StreamID rem 2) =:= 0)).
@@ -292,15 +279,16 @@ init_upgrade_stream(Method, State=#http2_machine{mode=server, remote_streamid=0,
 
 -spec frame(cow_http2:frame(), State)
 	-> {ok, State}
-	| {ok, {data, cow_http2:streamid(), cow_http2:fin(), binary()}, State}
-	| {ok, {headers, cow_http2:streamid(), cow_http2:fin(),
-		cow_http:headers(), pseudo_headers(), non_neg_integer() | undefined}, State}
+	| {ok, {data, cow_http2:streamid(), cow_http:fin(), binary()}, State}
+	| {ok, {headers, cow_http2:streamid(), cow_http:fin(),
+		cow_http:headers(), cow_http:pseudo_headers(),
+		non_neg_integer() | undefined}, State}
 	| {ok, {trailers, cow_http2:streamid(), cow_http:headers()}, State}
 	| {ok, {rst_stream, cow_http2:streamid(), cow_http2:error()}, State}
 	| {ok, {push_promise, cow_http2:streamid(), cow_http2:streamid(),
-		cow_http:headers(), pseudo_headers()}, State}
+		cow_http:headers(), cow_http:pseudo_headers()}, State}
 	| {ok, {goaway, cow_http2:streamid(), cow_http2:error(), binary()}, State}
-	| {send, [{cow_http2:streamid(), cow_http2:fin(),
+	| {send, [{cow_http2:streamid(), cow_http:fin(),
 		[{data, iodata()} | #sendfile{} | {trailers, cow_http:headers()}]}], State}
 	| {error, {stream_error, cow_http2:streamid(), cow_http2:error(), atom()}, State}
 	| {error, {connection_error, cow_http2:error(), atom()}, State}
@@ -434,7 +422,7 @@ is_body_size_valid(_) ->
 %% The order of the fields matter.
 -record(headers, {
 	id :: cow_http2:streamid(),
-	fin :: cow_http2:fin(),
+	fin :: cow_http:fin(),
 	head :: cow_http2:head_fin(),
 	data :: binary()
 }).
@@ -444,8 +432,8 @@ headers_frame(Frame=#headers{}, State=#http2_machine{mode=Mode}) ->
 		server -> server_headers_frame(Frame, State);
 		client -> client_headers_frame(Frame, State)
 	end;
-%% @todo Handle the PRIORITY data, but only if this returns an ok tuple.
-%% @todo Do not lose the PRIORITY information if CONTINUATION frames follow.
+%% The PRIORITY mechanism is seen as flawed and deprecated.
+%% We will not implement it.
 headers_frame({headers, StreamID, IsFin, IsHeadFin,
 		_IsExclusive, _DepStreamID, _Weight, HeaderData},
 		State=#http2_machine{mode=Mode}) ->
@@ -536,7 +524,7 @@ headers_decode(Frame=#headers{head=head_fin, data=HeaderData},
 			headers_enforce_concurrency_limit(Frame,
 				State#http2_machine{decode_state=DecodeState}, Type, Stream, Headers);
 		{Headers, DecodeState} ->
-			headers_pseudo_headers(Frame,
+			headers_process(Frame,
 				State#http2_machine{decode_state=DecodeState}, Type, Stream, Headers)
 	catch _:_ ->
 		{error, {connection_error, compression_error,
@@ -552,239 +540,95 @@ headers_enforce_concurrency_limit(Frame=#headers{id=StreamID},
 	%% in the Streams variable yet and so we'll end up with +1 stream.
 	case map_size(Streams) < MaxConcurrentStreams of
 		true ->
-			headers_pseudo_headers(Frame, State, Type, Stream, Headers);
+			headers_process(Frame, State, Type, Stream, Headers);
 		false ->
 			{error, {stream_error, StreamID, refused_stream,
 				'Maximum number of concurrent streams has been reached. (RFC7540 5.1.2)'},
 				State}
 	end.
 
-headers_pseudo_headers(Frame, State=#http2_machine{local_settings=LocalSettings},
-		Type, Stream, Headers0) when Type =:= request; Type =:= push_promise ->
-	IsExtendedConnectEnabled = maps:get(enable_connect_protocol, LocalSettings, false),
-	case request_pseudo_headers(Headers0, #{}) of
-		%% Extended CONNECT method (RFC8441).
-		{ok, PseudoHeaders=#{method := <<"CONNECT">>, scheme := _,
-			authority := _, path := _, protocol := _}, Headers}
-			when IsExtendedConnectEnabled ->
-			headers_regular_headers(Frame, State, Type, Stream, PseudoHeaders, Headers);
-		{ok, #{method := <<"CONNECT">>, scheme := _,
-			authority := _, path := _}, _}
-			when IsExtendedConnectEnabled ->
-			headers_malformed(Frame, State,
-				'The :protocol pseudo-header MUST be sent with an extended CONNECT. (RFC8441 4)');
-		{ok, #{protocol := _}, _} ->
-			headers_malformed(Frame, State,
-				'The :protocol pseudo-header is only defined for the extended CONNECT. (RFC8441 4)');
-		%% Normal CONNECT (no scheme/path).
-		{ok, PseudoHeaders=#{method := <<"CONNECT">>, authority := _}, Headers}
-				when map_size(PseudoHeaders) =:= 2 ->
-			headers_regular_headers(Frame, State, Type, Stream, PseudoHeaders, Headers);
-		{ok, #{method := <<"CONNECT">>}, _} ->
-			headers_malformed(Frame, State,
-				'CONNECT requests only use the :method and :authority pseudo-headers. (RFC7540 8.3)');
-		%% Other requests.
-		{ok, PseudoHeaders=#{method := _, scheme := _, path := _}, Headers} ->
-			headers_regular_headers(Frame, State, Type, Stream, PseudoHeaders, Headers);
-		{ok, _, _} ->
-			headers_malformed(Frame, State,
-				'A required pseudo-header was not found. (RFC7540 8.1.2.3)');
-		{error, HumanReadable} ->
-			headers_malformed(Frame, State, HumanReadable)
-	end;
-headers_pseudo_headers(Frame=#headers{id=StreamID},
-		State, Type=response, Stream, Headers0) ->
-	case response_pseudo_headers(Headers0, #{}) of
-		{ok, PseudoHeaders=#{status := _}, Headers} ->
-			headers_regular_headers(Frame, State, Type, Stream, PseudoHeaders, Headers);
-		{ok, _, _} ->
-			stream_reset(StreamID, State, protocol_error,
-				'A required pseudo-header was not found. (RFC7540 8.1.2.4)');
-		{error, HumanReadable} ->
-			stream_reset(StreamID, State, protocol_error, HumanReadable)
-	end;
-headers_pseudo_headers(Frame=#headers{id=StreamID},
-		State, Type=trailers, Stream, Headers) ->
-	case trailers_contain_pseudo_headers(Headers) of
-		false ->
-			headers_regular_headers(Frame, State, Type, Stream, #{}, Headers);
-		true ->
-			stream_reset(StreamID, State, protocol_error,
-				'Trailer header blocks must not contain pseudo-headers. (RFC7540 8.1.2.1)')
+headers_process(Frame=#headers{id=StreamID, fin=IsFin},
+		State=#http2_machine{local_settings=LocalSettings},
+		Type, Stream, Headers0) ->
+	ReqMethod = case Stream of
+		#stream{method=ReqMethod0} -> ReqMethod0;
+		undefined -> undefined
+	end,
+	case cow_http:process_headers(Headers0, Type, ReqMethod, IsFin, LocalSettings) of
+		{headers, Headers, PseudoHeaders, Len} ->
+			headers_frame(Frame, State, Type, Stream, Headers, PseudoHeaders, Len);
+		{push_promise, Headers, PseudoHeaders} ->
+			push_promise_frame(Frame, State, Stream, Headers, PseudoHeaders);
+		{trailers, Headers} ->
+			trailers_frame(Frame, State, Stream, Headers);
+		{error, Reason} when Type =:= request ->
+			headers_malformed(Frame, State, format_error(Reason));
+		{error, Reason} ->
+			stream_reset(StreamID, State, protocol_error, format_error(Reason))
 	end.
 
 headers_malformed(#headers{id=StreamID}, State, HumanReadable) ->
 	{error, {stream_error, StreamID, protocol_error, HumanReadable}, State}.
 
-request_pseudo_headers([{<<":method">>, _}|_], #{method := _}) ->
-	{error, 'Multiple :method pseudo-headers were found. (RFC7540 8.1.2.3)'};
-request_pseudo_headers([{<<":method">>, Method}|Tail], PseudoHeaders) ->
-	request_pseudo_headers(Tail, PseudoHeaders#{method => Method});
-request_pseudo_headers([{<<":scheme">>, _}|_], #{scheme := _}) ->
-	{error, 'Multiple :scheme pseudo-headers were found. (RFC7540 8.1.2.3)'};
-request_pseudo_headers([{<<":scheme">>, Scheme}|Tail], PseudoHeaders) ->
-	request_pseudo_headers(Tail, PseudoHeaders#{scheme => Scheme});
-request_pseudo_headers([{<<":authority">>, _}|_], #{authority := _}) ->
-	{error, 'Multiple :authority pseudo-headers were found. (RFC7540 8.1.2.3)'};
-request_pseudo_headers([{<<":authority">>, Authority}|Tail], PseudoHeaders) ->
-	request_pseudo_headers(Tail, PseudoHeaders#{authority => Authority});
-request_pseudo_headers([{<<":path">>, _}|_], #{path := _}) ->
-	{error, 'Multiple :path pseudo-headers were found. (RFC7540 8.1.2.3)'};
-request_pseudo_headers([{<<":path">>, Path}|Tail], PseudoHeaders) ->
-	request_pseudo_headers(Tail, PseudoHeaders#{path => Path});
-request_pseudo_headers([{<<":protocol">>, _}|_], #{protocol := _}) ->
-	{error, 'Multiple :protocol pseudo-headers were found. (RFC7540 8.1.2.3)'};
-request_pseudo_headers([{<<":protocol">>, Protocol}|Tail], PseudoHeaders) ->
-	request_pseudo_headers(Tail, PseudoHeaders#{protocol => Protocol});
-request_pseudo_headers([{<<":", _/bits>>, _}|_], _) ->
-	{error, 'An unknown or invalid pseudo-header was found. (RFC7540 8.1.2.1)'};
-request_pseudo_headers(Headers, PseudoHeaders) ->
-	{ok, PseudoHeaders, Headers}.
-
-response_pseudo_headers([{<<":status">>, _}|_], #{status := _}) ->
-	{error, 'Multiple :status pseudo-headers were found. (RFC7540 8.1.2.3)'};
-response_pseudo_headers([{<<":status">>, Status}|Tail], PseudoHeaders) ->
-	try cow_http:status_to_integer(Status) of
-		IntStatus ->
-			response_pseudo_headers(Tail, PseudoHeaders#{status => IntStatus})
-	catch _:_ ->
-		{error, 'The :status pseudo-header value is invalid. (RFC7540 8.1.2.4)'}
-	end;
-response_pseudo_headers([{<<":", _/bits>>, _}|_], _) ->
-	{error, 'An unknown or invalid pseudo-header was found. (RFC7540 8.1.2.1)'};
-response_pseudo_headers(Headers, PseudoHeaders) ->
-	{ok, PseudoHeaders, Headers}.
-
-trailers_contain_pseudo_headers([]) ->
-	false;
-trailers_contain_pseudo_headers([{<<":", _/bits>>, _}|_]) ->
-	true;
-trailers_contain_pseudo_headers([_|Tail]) ->
-	trailers_contain_pseudo_headers(Tail).
-
-%% Rejecting invalid regular headers might be a bit too strong for clients.
-headers_regular_headers(Frame=#headers{id=StreamID},
-		State, Type, Stream, PseudoHeaders, Headers) ->
-	case regular_headers(Headers, Type) of
-		ok when Type =:= request ->
-			request_expected_size(Frame, State, Type, Stream, PseudoHeaders, Headers);
-		ok when Type =:= push_promise ->
-			push_promise_frame(Frame, State, Stream, PseudoHeaders, Headers);
-		ok when Type =:= response ->
-			response_expected_size(Frame, State, Type, Stream, PseudoHeaders, Headers);
-		ok when Type =:= trailers ->
-			trailers_frame(Frame, State, Stream, Headers);
-		{error, HumanReadable} when Type =:= request ->
-			headers_malformed(Frame, State, HumanReadable);
-		{error, HumanReadable} ->
-			stream_reset(StreamID, State, protocol_error, HumanReadable)
-	end.
-
-regular_headers([{<<>>, _}|_], _) ->
-	{error, 'Empty header names are not valid regular headers. (CVE-2019-9516)'};
-regular_headers([{<<":", _/bits>>, _}|_], _) ->
-	{error, 'Pseudo-headers were found after regular headers. (RFC7540 8.1.2.1)'};
-regular_headers([{<<"connection">>, _}|_], _) ->
-	{error, 'The connection header is not allowed. (RFC7540 8.1.2.2)'};
-regular_headers([{<<"keep-alive">>, _}|_], _) ->
-	{error, 'The keep-alive header is not allowed. (RFC7540 8.1.2.2)'};
-regular_headers([{<<"proxy-authenticate">>, _}|_], _) ->
-	{error, 'The proxy-authenticate header is not allowed. (RFC7540 8.1.2.2)'};
-regular_headers([{<<"proxy-authorization">>, _}|_], _) ->
-	{error, 'The proxy-authorization header is not allowed. (RFC7540 8.1.2.2)'};
-regular_headers([{<<"transfer-encoding">>, _}|_], _) ->
-	{error, 'The transfer-encoding header is not allowed. (RFC7540 8.1.2.2)'};
-regular_headers([{<<"upgrade">>, _}|_], _) ->
-	{error, 'The upgrade header is not allowed. (RFC7540 8.1.2.2)'};
-regular_headers([{<<"te">>, Value}|_], request) when Value =/= <<"trailers">> ->
-	{error, 'The te header with a value other than "trailers" is not allowed. (RFC7540 8.1.2.2)'};
-regular_headers([{<<"te">>, _}|_], Type) when Type =/= request ->
-	{error, 'The te header is only allowed in request headers. (RFC7540 8.1.2.2)'};
-regular_headers([{Name, _}|Tail], Type) ->
-	Pattern = [
-		<<$A>>, <<$B>>, <<$C>>, <<$D>>, <<$E>>, <<$F>>, <<$G>>, <<$H>>, <<$I>>,
-		<<$J>>, <<$K>>, <<$L>>, <<$M>>, <<$N>>, <<$O>>, <<$P>>, <<$Q>>, <<$R>>,
-		<<$S>>, <<$T>>, <<$U>>, <<$V>>, <<$W>>, <<$X>>, <<$Y>>, <<$Z>>
-	],
-	case binary:match(Name, Pattern) of
-		nomatch -> regular_headers(Tail, Type);
-		_ -> {error, 'Header names must be lowercase. (RFC7540 8.1.2)'}
-	end;
-regular_headers([], _) ->
-	ok.
-
-request_expected_size(Frame=#headers{fin=IsFin}, State, Type, Stream, PseudoHeaders, Headers) ->
-	case [CL || {<<"content-length">>, CL} <- Headers] of
-		[] when IsFin =:= fin ->
-			headers_frame(Frame, State, Type, Stream, PseudoHeaders, Headers, 0);
-		[] ->
-			headers_frame(Frame, State, Type, Stream, PseudoHeaders, Headers, undefined);
-		[<<"0">>] when IsFin =:= fin ->
-			headers_frame(Frame, State, Type, Stream, PseudoHeaders, Headers, 0);
-		[_] when IsFin =:= fin ->
-			headers_malformed(Frame, State,
-				'HEADERS frame with the END_STREAM flag contains a non-zero content-length. (RFC7540 8.1.2.6)');
-		[BinLen] ->
-			headers_parse_expected_size(Frame, State, Type, Stream,
-				PseudoHeaders, Headers, BinLen);
-		_ ->
-			headers_malformed(Frame, State,
-				'Multiple content-length headers were received. (RFC7230 3.3.2)')
-	end.
-
-response_expected_size(Frame=#headers{id=StreamID, fin=IsFin}, State, Type,
-		Stream=#stream{method=Method}, PseudoHeaders=#{status := Status}, Headers) ->
-	case [CL || {<<"content-length">>, CL} <- Headers] of
-		[] when IsFin =:= fin ->
-			headers_frame(Frame, State, Type, Stream, PseudoHeaders, Headers, 0);
-		[] ->
-			headers_frame(Frame, State, Type, Stream, PseudoHeaders, Headers, undefined);
-		[_] when Status >= 100, Status =< 199 ->
-			stream_reset(StreamID, State, protocol_error,
-				'Content-length header received in a 1xx response. (RFC7230 3.3.2)');
-		[_] when Status =:= 204 ->
-			stream_reset(StreamID, State, protocol_error,
-				'Content-length header received in a 204 response. (RFC7230 3.3.2)');
-		[_] when Status >= 200, Status =< 299, Method =:= <<"CONNECT">> ->
-			stream_reset(StreamID, State, protocol_error,
-				'Content-length header received in a 2xx response to a CONNECT request. (RFC7230 3.3.2).');
-		%% Responses to HEAD requests, and 304 responses may contain
-		%% a content-length header that must be ignored. (RFC7230 3.3.2)
-		[_] when Method =:= <<"HEAD">> ->
-			headers_frame(Frame, State, Type, Stream, PseudoHeaders, Headers, 0);
-		[_] when Status =:= 304 ->
-			headers_frame(Frame, State, Type, Stream, PseudoHeaders, Headers, 0);
-		[<<"0">>] when IsFin =:= fin ->
-			headers_frame(Frame, State, Type, Stream, PseudoHeaders, Headers, 0);
-		[_] when IsFin =:= fin ->
-			stream_reset(StreamID, State, protocol_error,
-				'HEADERS frame with the END_STREAM flag contains a non-zero content-length. (RFC7540 8.1.2.6)');
-		[BinLen] ->
-			headers_parse_expected_size(Frame, State, Type, Stream,
-				PseudoHeaders, Headers, BinLen);
-		_ ->
-			stream_reset(StreamID, State, protocol_error,
-				'Multiple content-length headers were received. (RFC7230 3.3.2)')
-	end.
-
-headers_parse_expected_size(Frame=#headers{id=StreamID},
-		State, Type, Stream, PseudoHeaders, Headers, BinLen) ->
-	try cow_http_hd:parse_content_length(BinLen) of
-		Len ->
-			headers_frame(Frame, State, Type, Stream, PseudoHeaders, Headers, Len)
-	catch
-		_:_ ->
-			HumanReadable = 'The content-length header is invalid. (RFC7230 3.3.2)',
-			case Type of
-				request -> headers_malformed(Frame, State, HumanReadable);
-				response -> stream_reset(StreamID, State, protocol_error, HumanReadable)
-			end
-	end.
+format_error(connect_invalid_pseudo_header) ->
+	'CONNECT requests only use the :method and :authority pseudo-headers. (RFC7540 8.3)';
+format_error(connect_missing_authority) ->
+	'CONNECT requests must include the :authority pseudo-header. (RFC7540 8.3)';
+format_error(empty_header_name) ->
+	'Empty header names are not valid regular headers. (CVE-2019-9516)';
+format_error(extended_connect_missing_protocol) ->
+	'The :protocol pseudo-header MUST be sent with an extended CONNECT. (RFC8441 4)';
+format_error(invalid_connection_header) ->
+	'The connection header is not allowed. (RFC7540 8.1.2.2)';
+format_error(invalid_keep_alive_header) ->
+	'The keep-alive header is not allowed. (RFC7540 8.1.2.2)';
+format_error(invalid_protocol_pseudo_header) ->
+	'The :protocol pseudo-header is only defined for the extended CONNECT. (RFC8441 4)';
+format_error(invalid_proxy_authenticate_header) ->
+	'The proxy-authenticate header is not allowed. (RFC7540 8.1.2.2)';
+format_error(invalid_proxy_authorization_header) ->
+	'The proxy-authorization header is not allowed. (RFC7540 8.1.2.2)';
+format_error(invalid_pseudo_header) ->
+	'An unknown or invalid pseudo-header was found. (RFC7540 8.1.2.1)';
+format_error(invalid_status_pseudo_header) ->
+	'The :status pseudo-header value is invalid. (RFC7540 8.1.2.4)';
+format_error(invalid_te_header) ->
+	'The te header is only allowed in request headers. (RFC7540 8.1.2.2)';
+format_error(invalid_te_value) ->
+	'The te header with a value other than "trailers" is not allowed. (RFC7540 8.1.2.2)';
+format_error(invalid_transfer_encoding_header) ->
+	'The transfer-encoding header is not allowed. (RFC7540 8.1.2.2)';
+format_error(invalid_upgrade_header) ->
+	'The upgrade header is not allowed. (RFC7540 8.1.2.2)';
+format_error(missing_pseudo_header) ->
+	'A required pseudo-header was not found. (RFC7540 8.1.2.3, RFC7540 8.1.2.4)';
+format_error(multiple_authority_pseudo_headers) ->
+	'Multiple :authority pseudo-headers were found. (RFC7540 8.1.2.3)';
+format_error(multiple_method_pseudo_headers) ->
+	'Multiple :method pseudo-headers were found. (RFC7540 8.1.2.3)';
+format_error(multiple_path_pseudo_headers) ->
+	'Multiple :path pseudo-headers were found. (RFC7540 8.1.2.3)';
+format_error(multiple_protocol_pseudo_headers) ->
+	'Multiple :protocol pseudo-headers were found. (RFC7540 8.1.2.3)';
+format_error(multiple_scheme_pseudo_headers) ->
+	'Multiple :scheme pseudo-headers were found. (RFC7540 8.1.2.3)';
+format_error(multiple_status_pseudo_headers) ->
+	'Multiple :status pseudo-headers were found. (RFC7540 8.1.2.3)';
+format_error(non_zero_length_with_fin_flag) ->
+	'HEADERS frame with the END_STREAM flag contains a non-zero content-length. (RFC7540 8.1.2.6)';
+format_error(pseudo_header_after_regular) ->
+	'Pseudo-headers were found after regular headers. (RFC7540 8.1.2.1)';
+format_error(trailer_invalid_pseudo_header) ->
+	'Trailer header blocks must not contain pseudo-headers. (RFC7540 8.1.2.1)';
+format_error(uppercase_header_name) ->
+	'Header names must be lowercase. (RFC7540 8.1.2)';
+format_error(Reason) ->
+	cow_http:format_semantic_error(Reason).
 
 headers_frame(#headers{id=StreamID, fin=IsFin}, State0=#http2_machine{
 		local_settings=#{initial_window_size := RemoteWindow},
 		remote_settings=#{initial_window_size := LocalWindow}},
-		Type, Stream0, PseudoHeaders, Headers, Len) ->
+		Type, Stream0, Headers, PseudoHeaders, Len) ->
 	{Stream, State1} = case Type of
 		request ->
 			TE = case lists:keyfind(<<"te">>, 1, Headers) of
@@ -818,7 +662,8 @@ trailers_frame(#headers{id=StreamID}, State0, Stream0, Headers) ->
 
 %% PRIORITY frame.
 %%
-%% @todo Handle PRIORITY frames.
+%% The PRIORITY mechanism is seen as flawed and deprecated.
+%% We will not implement it.
 
 priority_frame(_Frame, State) ->
 	{ok, State}.
@@ -967,7 +812,7 @@ push_promise_frame(#headers{id=PromisedStreamID},
 		State0=#http2_machine{
 			local_settings=#{initial_window_size := RemoteWindow},
 			remote_settings=#{initial_window_size := LocalWindow}},
-		#stream{id=StreamID}, PseudoHeaders=#{method := Method}, Headers) ->
+		#stream{id=StreamID}, Headers, PseudoHeaders=#{method := Method}) ->
 	TE = case lists:keyfind(<<"te">>, 1, Headers) of
 		{_, TE0} -> TE0;
 		false -> undefined
@@ -1141,9 +986,9 @@ timeout(_, _, State) ->
 %% this module does not send data directly, instead it returns
 %% a value that can then be used to send the frames.
 
--spec prepare_headers(cow_http2:streamid(), State, idle | cow_http2:fin(),
-	pseudo_headers(), cow_http:headers())
-	-> {ok, cow_http2:fin(), iodata(), State} when State::http2_machine().
+-spec prepare_headers(cow_http2:streamid(), State, idle | cow_http:fin(),
+		cow_http:pseudo_headers(), cow_http:headers())
+	-> {ok, cow_http:fin(), iodata(), State} when State::http2_machine().
 prepare_headers(StreamID, State=#http2_machine{encode_state=EncodeState0},
 		IsFin0, PseudoHeaders, Headers0) ->
 	Stream = #stream{method=Method, local=idle} = stream_get(StreamID, State),
@@ -1152,12 +997,14 @@ prepare_headers(StreamID, State=#http2_machine{encode_state=EncodeState0},
 		{_, <<"HEAD">>} -> fin;
 		_ -> IsFin0
 	end,
-	Headers = merge_pseudo_headers(PseudoHeaders, remove_http11_headers(Headers0)),
+	Headers = cow_http:merge_pseudo_headers(PseudoHeaders,
+		cow_http:remove_http1_headers(Headers0)),
 	{HeaderBlock, EncodeState} = cow_hpack:encode(Headers, EncodeState0),
 	{ok, IsFin, HeaderBlock, stream_store(Stream#stream{local=IsFin0},
 		State#http2_machine{encode_state=EncodeState})}.
 
--spec prepare_push_promise(cow_http2:streamid(), State, pseudo_headers(), cow_http:headers())
+-spec prepare_push_promise(cow_http2:streamid(), State,
+		cow_http:pseudo_headers(), cow_http:headers())
 	-> {ok, cow_http2:streamid(), iodata(), State}
 	| {error, no_push} when State::http2_machine().
 prepare_push_promise(_, #http2_machine{remote_settings=#{enable_push := false}}, _, _) ->
@@ -1171,41 +1018,14 @@ prepare_push_promise(StreamID, State=#http2_machine{encode_state=EncodeState0,
 		{_, TE0} -> TE0;
 		false -> undefined
 	end,
-	Headers = merge_pseudo_headers(PseudoHeaders, remove_http11_headers(Headers0)),
+	Headers = cow_http:merge_pseudo_headers(PseudoHeaders,
+		cow_http:remove_http1_headers(Headers0)),
 	{HeaderBlock, EncodeState} = cow_hpack:encode(Headers, EncodeState0),
 	{ok, LocalStreamID, HeaderBlock, stream_store(
 		#stream{id=LocalStreamID, method=maps:get(method, PseudoHeaders),
 			remote=fin, remote_expected_size=0,
 			local_window=LocalWindow, remote_window=RemoteWindow, te=TE},
 		State#http2_machine{encode_state=EncodeState, local_streamid=LocalStreamID + 2})}.
-
-remove_http11_headers(Headers) ->
-	RemoveHeaders0 = [
-		<<"keep-alive">>,
-		<<"proxy-connection">>,
-		<<"transfer-encoding">>,
-		<<"upgrade">>
-	],
-	RemoveHeaders = case lists:keyfind(<<"connection">>, 1, Headers) of
-		false ->
-			RemoveHeaders0;
-		{_, ConnHd} ->
-			%% We do not need to worry about any "close" header because
-			%% that header name is reserved.
-			Connection = cow_http_hd:parse_connection(ConnHd),
-			Connection ++ [<<"connection">>|RemoveHeaders0]
-	end,
-	lists:filter(fun({Name, _}) ->
-		not lists:member(Name, RemoveHeaders)
-	end, Headers).
-
-merge_pseudo_headers(PseudoHeaders, Headers0) ->
-	lists:foldl(fun
-		({status, Status}, Acc) when is_integer(Status) ->
-			[{<<":status">>, integer_to_binary(Status)}|Acc];
-		({Name, Value}, Acc) ->
-			[{iolist_to_binary([$:, atom_to_binary(Name, latin1)]), Value}|Acc]
-		end, Headers0, maps:to_list(PseudoHeaders)).
 
 -spec prepare_trailers(cow_http2:streamid(), State, cow_http:headers())
 	-> {ok, iodata(), State} when State::http2_machine().
@@ -1215,9 +1035,9 @@ prepare_trailers(StreamID, State=#http2_machine{encode_state=EncodeState0}, Trai
 	{ok, HeaderBlock, stream_store(Stream#stream{local=fin},
 		State#http2_machine{encode_state=EncodeState})}.
 
--spec send_or_queue_data(cow_http2:streamid(), State, cow_http2:fin(), DataOrFileOrTrailers)
+-spec send_or_queue_data(cow_http2:streamid(), State, cow_http:fin(), DataOrFileOrTrailers)
 	-> {ok, State}
-	| {send, [{cow_http2:streamid(), cow_http2:fin(), [DataOrFileOrTrailers]}], State}
+	| {send, [{cow_http2:streamid(), cow_http:fin(), [DataOrFileOrTrailers]}], State}
 	when State::http2_machine(), DataOrFileOrTrailers::
 		{data, iodata()} | #sendfile{} | {trailers, cow_http:headers()}.
 send_or_queue_data(StreamID, State0=#http2_machine{opts=Opts, local_window=ConnWindow},
@@ -1272,8 +1092,8 @@ send_or_queue_data(StreamID, State0=#http2_machine{opts=Opts, local_window=ConnW
 
 %% Internal data sending/queuing functions.
 
-%% @todo Should we ever want to implement the PRIORITY mechanism,
-%% this would be the place to do it. Right now, we just go over
+%% The PRIORITY mechanism is seen as flawed and deprecated.
+%% We will not implement it. So we just go over
 %% all streams and send what we can until either everything is
 %% sent or we run out of space in the window.
 send_data(State0=#http2_machine{streams=Streams0}) ->
@@ -1607,7 +1427,7 @@ get_stream_local_buffer_size(StreamID, State=#http2_machine{mode=Mode,
 %% Retrieve the local state for a stream, including the state in the queue.
 
 -spec get_stream_local_state(cow_http2:streamid(), http2_machine())
-	-> {ok, idle | cow_http2:fin(), empty | nofin | fin} | {error, not_found | closed}.
+	-> {ok, idle | cow_http:fin(), empty | nofin | fin} | {error, not_found | closed}.
 get_stream_local_state(StreamID, State=#http2_machine{mode=Mode,
 		local_streamid=LocalStreamID, remote_streamid=RemoteStreamID}) ->
 	case stream_get(StreamID, State) of
@@ -1630,7 +1450,7 @@ get_stream_local_state(StreamID, State=#http2_machine{mode=Mode,
 %% Retrieve the remote state for a stream.
 
 -spec get_stream_remote_state(cow_http2:streamid(), http2_machine())
-	-> {ok, idle | cow_http2:fin()} | {error, not_found | closed}.
+	-> {ok, idle | cow_http:fin()} | {error, not_found | closed}.
 get_stream_remote_state(StreamID, State=#http2_machine{mode=Mode,
 		local_streamid=LocalStreamID, remote_streamid=RemoteStreamID}) ->
 	case stream_get(StreamID, State) of

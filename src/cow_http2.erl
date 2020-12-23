@@ -39,9 +39,6 @@
 -type streamid() :: pos_integer().
 -export_type([streamid/0]).
 
--type fin() :: fin | nofin.
--export_type([fin/0]).
-
 -type head_fin() :: head_fin | head_nofin.
 -export_type([head_fin/0]).
 
@@ -66,9 +63,10 @@
 	| unknown_error.
 -export_type([error/0]).
 
--type frame() :: {data, streamid(), fin(), binary()}
-	| {headers, streamid(), fin(), head_fin(), binary()}
-	| {headers, streamid(), fin(), head_fin(), exclusive(), streamid(), weight(), binary()}
+-type frame() :: {data, streamid(), cow_http:fin(), binary()}
+	| {headers, streamid(), cow_http:fin(), head_fin(), binary()}
+	| {headers, streamid(), cow_http:fin(), head_fin(),
+		exclusive(), streamid(), weight(), binary()}
 	| {priority, streamid(), exclusive(), streamid(), weight()}
 	| {rst_stream, streamid(), error()}
 	| {settings, settings()}

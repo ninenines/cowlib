@@ -7,11 +7,6 @@ PROJECT_VERSION = 2.13.0
 # Options.
 
 #ERLC_OPTS += +bin_opt_info
-ifdef HIPE
-	ERLC_OPTS += -smp +native
-	TEST_ERLC_OPTS += -smp +native
-endif
-
 DIALYZER_OPTS = -Werror_handling -Wunmatched_returns
 
 # Dependencies.
@@ -34,10 +29,8 @@ dep_uritemplate-tests = git https://github.com/uri-templates/uritemplate-test ma
 dep_ci.erlang.mk = git https://github.com/ninenines/ci.erlang.mk master
 DEP_EARLY_PLUGINS = ci.erlang.mk
 
-AUTO_CI_OTP ?= OTP-21+
-AUTO_CI_HIPE ?= OTP-LATEST
-# AUTO_CI_ERLLVM ?= OTP-LATEST
-AUTO_CI_WINDOWS ?= OTP-21+
+AUTO_CI_OTP ?= OTP-LATEST-24+
+AUTO_CI_WINDOWS ?= OTP-LATEST-24+
 
 # Hex configuration.
 

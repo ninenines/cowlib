@@ -12,23 +12,35 @@
 %% ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 %% OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
+%% This module contains functions and types common
+%% to all or most HTTP versions.
 -module(cow_http).
 
+%% The HTTP/1 functions have been moved to cow_http1.
+%% In order to remain backward compatible we redirect
+%% calls to cow_http1. The type version() was moved
+%% and no fallback is provided.
+%%
+%% @todo Remove the aliases in Cowlib 3.0.
 -export([parse_request_line/1]).
 -export([parse_status_line/1]).
 -export([status_to_integer/1]).
 -export([parse_headers/1]).
-
 -export([parse_fullpath/1]).
 -export([parse_version/1]).
-
 -export([request/4]).
 -export([response/3]).
 -export([headers/1]).
 -export([version/1]).
 
--type version() :: 'HTTP/1.0' | 'HTTP/1.1'.
--export_type([version/0]).
+%% Functions used by HTTP/2+.
+
+-export([format_semantic_error/1]).
+-export([merge_pseudo_headers/2]).
+-export([process_headers/5]).
+-export([remove_http1_headers/1]).
+
+%% Types used by all versions of HTTP.
 
 -type status() :: 100..999.
 -export_type([status/0]).
@@ -36,391 +48,324 @@
 -type headers() :: [{binary(), iodata()}].
 -export_type([headers/0]).
 
--include("cow_inline.hrl").
+%% Types used by HTTP/2+.
 
-%% @doc Parse the request line.
+-type pseudo_headers() :: #{} %% Trailers
+	| #{ %% Responses.
+		status := cow_http:status()
+	} | #{ %% Normal CONNECT requests.
+		method := binary(),
+		authority := binary()
+	} | #{ %% Extended CONNECT requests.
+		method := binary(),
+		scheme := binary(),
+		authority := binary(),
+		path := binary(),
+		protocol := binary()
+	} | #{ %% Other requests.
+		method := binary(),
+		scheme := binary(),
+		authority => binary(),
+		path := binary()
+	}.
+-export_type([pseudo_headers/0]).
 
--spec parse_request_line(binary()) -> {binary(), binary(), version(), binary()}.
-parse_request_line(Data) ->
-	{Pos, _} = binary:match(Data, <<"\r">>),
-	<<RequestLine:Pos/binary, "\r\n", Rest/bits>> = Data,
-	[Method, Target, Version0] = binary:split(RequestLine, <<$\s>>, [trim_all, global]),
-	Version = case Version0 of
-		<<"HTTP/1.1">> -> 'HTTP/1.1';
-		<<"HTTP/1.0">> -> 'HTTP/1.0'
-	end,
-	{Method, Target, Version, Rest}.
+-type fin() :: fin | nofin.
+-export_type([fin/0]).
 
--ifdef(TEST).
-parse_request_line_test_() ->
-	Tests = [
-		{<<"GET /path HTTP/1.0\r\nRest">>,
-			{<<"GET">>, <<"/path">>, 'HTTP/1.0', <<"Rest">>}},
-		{<<"GET /path HTTP/1.1\r\nRest">>,
-			{<<"GET">>, <<"/path">>, 'HTTP/1.1', <<"Rest">>}},
-		{<<"CONNECT proxy.example.org:1080 HTTP/1.1\r\nRest">>,
-			{<<"CONNECT">>, <<"proxy.example.org:1080">>, 'HTTP/1.1', <<"Rest">>}}
-	],
-	[{V, fun() -> R = parse_request_line(V) end}
-		|| {V, R} <- Tests].
+%% HTTP/1 function aliases.
 
-parse_request_line_error_test_() ->
-	Tests = [
-		<<>>,
-		<<"GET">>,
-		<<"GET /path\r\n">>,
-		<<"GET /path HTTP/1.1">>,
-		<<"GET /path HTTP/1.1\r">>,
-		<<"GET /path HTTP/1.1\n">>,
-		<<"GET /path HTTP/0.9\r\n">>,
-		<<"content-type: text/plain\r\n">>,
-		<<0:80, "\r\n">>
-	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_request_line(V)) end}
-		|| V <- Tests].
+-spec parse_request_line(binary()) -> {binary(), binary(), cow_http1:version(), binary()}.
+parse_request_line(Data) -> cow_http1:parse_request_line(Data).
 
-horse_parse_request_line_get_path() ->
-	horse:repeat(200000,
-		parse_request_line(<<"GET /path HTTP/1.1\r\n">>)
-	).
--endif.
-
-%% @doc Parse the status line.
-
--spec parse_status_line(binary()) -> {version(), status(), binary(), binary()}.
-parse_status_line(<< "HTTP/1.1 200 OK\r\n", Rest/bits >>) ->
-	{'HTTP/1.1', 200, <<"OK">>, Rest};
-parse_status_line(<< "HTTP/1.1 404 Not Found\r\n", Rest/bits >>) ->
-	{'HTTP/1.1', 404, <<"Not Found">>, Rest};
-parse_status_line(<< "HTTP/1.1 500 Internal Server Error\r\n", Rest/bits >>) ->
-	{'HTTP/1.1', 500, <<"Internal Server Error">>, Rest};
-parse_status_line(<< "HTTP/1.1 ", Status/bits >>) ->
-	parse_status_line(Status, 'HTTP/1.1');
-parse_status_line(<< "HTTP/1.0 ", Status/bits >>) ->
-	parse_status_line(Status, 'HTTP/1.0').
-
-parse_status_line(<<H, T, U, " ", Rest/bits>>, Version) ->
-	Status = status_to_integer(H, T, U),
-	{Pos, _} = binary:match(Rest, <<"\r">>),
-	<< StatusStr:Pos/binary, "\r\n", Rest2/bits >> = Rest,
-	{Version, Status, StatusStr, Rest2}.
+-spec parse_status_line(binary()) -> {cow_http1:version(), status(), binary(), binary()}.
+parse_status_line(Data) -> cow_http1:parse_status_line(Data).
 
 -spec status_to_integer(status() | binary()) -> status().
-status_to_integer(Status) when is_integer(Status) ->
-	Status;
-status_to_integer(Status) ->
-	case Status of
-		<<H, T, U>> ->
-			status_to_integer(H, T, U);
-		<<H, T, U, " ", _/bits>> ->
-			status_to_integer(H, T, U)
-	end.
-
-status_to_integer(H, T, U)
-		when $0 =< H, H =< $9, $0 =< T, T =< $9, $0 =< U, U =< $9 ->
-	(H - $0) * 100 + (T - $0) * 10 + (U - $0).
-
--ifdef(TEST).
-parse_status_line_test_() ->
-	Tests = [
-		{<<"HTTP/1.1 200 OK\r\nRest">>,
-			{'HTTP/1.1', 200, <<"OK">>, <<"Rest">>}},
-		{<<"HTTP/1.0 404 Not Found\r\nRest">>,
-			{'HTTP/1.0', 404, <<"Not Found">>, <<"Rest">>}},
-		{<<"HTTP/1.1 500 Something very funny here\r\nRest">>,
-			{'HTTP/1.1', 500, <<"Something very funny here">>, <<"Rest">>}},
-		{<<"HTTP/1.1 200 \r\nRest">>,
-			{'HTTP/1.1', 200, <<>>, <<"Rest">>}}
-	],
-	[{V, fun() -> R = parse_status_line(V) end}
-		|| {V, R} <- Tests].
-
-parse_status_line_error_test_() ->
-	Tests = [
-		<<>>,
-		<<"HTTP/1.1">>,
-		<<"HTTP/1.1 200\r\n">>,
-		<<"HTTP/1.1 200 OK">>,
-		<<"HTTP/1.1 200 OK\r">>,
-		<<"HTTP/1.1 200 OK\n">>,
-		<<"HTTP/0.9 200 OK\r\n">>,
-		<<"HTTP/1.1 42 Answer\r\n">>,
-		<<"HTTP/1.1 999999999 More than OK\r\n">>,
-		<<"content-type: text/plain\r\n">>,
-		<<0:80, "\r\n">>
-	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_status_line(V)) end}
-		|| V <- Tests].
-
-horse_parse_status_line_200() ->
-	horse:repeat(200000,
-		parse_status_line(<<"HTTP/1.1 200 OK\r\n">>)
-	).
-
-horse_parse_status_line_404() ->
-	horse:repeat(200000,
-		parse_status_line(<<"HTTP/1.1 404 Not Found\r\n">>)
-	).
-
-horse_parse_status_line_500() ->
-	horse:repeat(200000,
-		parse_status_line(<<"HTTP/1.1 500 Internal Server Error\r\n">>)
-	).
-
-horse_parse_status_line_other() ->
-	horse:repeat(200000,
-		parse_status_line(<<"HTTP/1.1 416 Requested range not satisfiable\r\n">>)
-	).
--endif.
-
-%% @doc Parse the list of headers.
+status_to_integer(Status) -> cow_http1:status_to_integer(Status).
 
 -spec parse_headers(binary()) -> {[{binary(), binary()}], binary()}.
-parse_headers(Data) ->
-	parse_header(Data, []).
-
-parse_header(<< $\r, $\n, Rest/bits >>, Acc) ->
-	{lists:reverse(Acc), Rest};
-parse_header(Data, Acc) ->
-	parse_hd_name(Data, Acc, <<>>).
-
-parse_hd_name(<< C, Rest/bits >>, Acc, SoFar) ->
-	case C of
-		$: -> parse_hd_before_value(Rest, Acc, SoFar);
-		$\s -> parse_hd_name_ws(Rest, Acc, SoFar);
-		$\t -> parse_hd_name_ws(Rest, Acc, SoFar);
-		_ -> ?LOWER(parse_hd_name, Rest, Acc, SoFar)
-	end.
-
-parse_hd_name_ws(<< C, Rest/bits >>, Acc, Name) ->
-	case C of
-		$: -> parse_hd_before_value(Rest, Acc, Name);
-		$\s -> parse_hd_name_ws(Rest, Acc, Name);
-		$\t -> parse_hd_name_ws(Rest, Acc, Name)
-	end.
-
-parse_hd_before_value(<< $\s, Rest/bits >>, Acc, Name) ->
-	parse_hd_before_value(Rest, Acc, Name);
-parse_hd_before_value(<< $\t, Rest/bits >>, Acc, Name) ->
-	parse_hd_before_value(Rest, Acc, Name);
-parse_hd_before_value(Data, Acc, Name) ->
-	parse_hd_value(Data, Acc, Name, <<>>).
-
-parse_hd_value(<< $\r, Rest/bits >>, Acc, Name, SoFar) ->
-	case Rest of
-		<< $\n, C, Rest2/bits >> when C =:= $\s; C =:= $\t ->
-			parse_hd_value(Rest2, Acc, Name, << SoFar/binary, C >>);
-		<< $\n, Rest2/bits >> ->
-			Value = clean_value_ws_end(SoFar, byte_size(SoFar) - 1),
-			parse_header(Rest2, [{Name, Value}|Acc])
-	end;
-parse_hd_value(<< C, Rest/bits >>, Acc, Name, SoFar) ->
-	parse_hd_value(Rest, Acc, Name, << SoFar/binary, C >>).
-
-%% This function has been copied from cowboy_http.
-clean_value_ws_end(_, -1) ->
-	<<>>;
-clean_value_ws_end(Value, N) ->
-	case binary:at(Value, N) of
-		$\s -> clean_value_ws_end(Value, N - 1);
-		$\t -> clean_value_ws_end(Value, N - 1);
-		_ ->
-			S = N + 1,
-			<< Value2:S/binary, _/bits >> = Value,
-			Value2
-	end.
-
--ifdef(TEST).
-parse_headers_test_() ->
-	Tests = [
-		{<<"\r\nRest">>,
-			{[], <<"Rest">>}},
-		{<<"Server: Erlang/R17  \r\n\r\n">>,
-			{[{<<"server">>, <<"Erlang/R17">>}], <<>>}},
-		{<<"Server: Erlang/R17\r\n"
-			"Date: Sun, 23 Feb 2014 09:30:39 GMT\r\n"
-			"Multiline-Header: why hello!\r\n"
-				" I didn't see you all the way over there!\r\n"
-			"Content-Length: 12\r\n"
-			"Content-Type: text/plain\r\n"
-			"\r\nRest">>,
-			{[{<<"server">>, <<"Erlang/R17">>},
-				{<<"date">>, <<"Sun, 23 Feb 2014 09:30:39 GMT">>},
-				{<<"multiline-header">>,
-					<<"why hello! I didn't see you all the way over there!">>},
-				{<<"content-length">>, <<"12">>},
-				{<<"content-type">>, <<"text/plain">>}],
-				<<"Rest">>}}
-	],
-	[{V, fun() -> R = parse_headers(V) end}
-		|| {V, R} <- Tests].
-
-parse_headers_error_test_() ->
-	Tests = [
-		<<>>,
-		<<"\r">>,
-		<<"Malformed\r\n\r\n">>,
-		<<"content-type: text/plain\r\nMalformed\r\n\r\n">>,
-		<<"HTTP/1.1 200 OK\r\n\r\n">>,
-		<<0:80, "\r\n\r\n">>,
-		<<"content-type: text/plain\r\ncontent-length: 12\r\n">>
-	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_headers(V)) end}
-		|| V <- Tests].
-
-horse_parse_headers() ->
-	horse:repeat(50000,
-		parse_headers(<<"Server: Erlang/R17\r\n"
-			"Date: Sun, 23 Feb 2014 09:30:39 GMT\r\n"
-			"Multiline-Header: why hello!\r\n"
-				" I didn't see you all the way over there!\r\n"
-			"Content-Length: 12\r\n"
-			"Content-Type: text/plain\r\n"
-			"\r\nRest">>)
-	).
--endif.
-
-%% @doc Extract path and query string from a binary,
-%% removing any fragment component.
+parse_headers(Data) -> cow_http1:parse_headers(Data).
 
 -spec parse_fullpath(binary()) -> {binary(), binary()}.
-parse_fullpath(Fullpath) ->
-	parse_fullpath(Fullpath, <<>>).
+parse_fullpath(Fullpath) -> cow_http1:parse_fullpath(Fullpath).
 
-parse_fullpath(<<>>, Path) -> {Path, <<>>};
-parse_fullpath(<< $#, _/bits >>, Path) -> {Path, <<>>};
-parse_fullpath(<< $?, Qs/bits >>, Path) -> parse_fullpath_query(Qs, Path, <<>>);
-parse_fullpath(<< C, Rest/bits >>, SoFar) -> parse_fullpath(Rest, << SoFar/binary, C >>).
+-spec parse_version(binary()) -> cow_http1:version().
+parse_version(Data) -> cow_http1:parse_version(Data).
 
-parse_fullpath_query(<<>>, Path, Query) -> {Path, Query};
-parse_fullpath_query(<< $#, _/bits >>, Path, Query) -> {Path, Query};
-parse_fullpath_query(<< C, Rest/bits >>, Path, SoFar) ->
-	parse_fullpath_query(Rest, Path, << SoFar/binary, C >>).
+-spec request(binary(), iodata(), cow_http1:version(), headers()) -> iodata().
+request(Method, Path, Version, Headers) -> cow_http1:request(Method, Path, Version, Headers).
 
--ifdef(TEST).
-parse_fullpath_test() ->
-	{<<"*">>, <<>>} = parse_fullpath(<<"*">>),
-	{<<"/">>, <<>>} = parse_fullpath(<<"/">>),
-	{<<"/path/to/resource">>, <<>>} = parse_fullpath(<<"/path/to/resource#fragment">>),
-	{<<"/path/to/resource">>, <<>>} = parse_fullpath(<<"/path/to/resource">>),
-	{<<"/">>, <<>>} = parse_fullpath(<<"/?">>),
-	{<<"/">>, <<"q=cowboy">>} = parse_fullpath(<<"/?q=cowboy#fragment">>),
-	{<<"/">>, <<"q=cowboy">>} = parse_fullpath(<<"/?q=cowboy">>),
-	{<<"/path/to/resource">>, <<"q=cowboy">>}
-		= parse_fullpath(<<"/path/to/resource?q=cowboy">>),
-	ok.
--endif.
-
-%% @doc Convert an HTTP version to atom.
-
--spec parse_version(binary()) -> version().
-parse_version(<<"HTTP/1.1">>) -> 'HTTP/1.1';
-parse_version(<<"HTTP/1.0">>) -> 'HTTP/1.0'.
-
--ifdef(TEST).
-parse_version_test() ->
-	'HTTP/1.1' = parse_version(<<"HTTP/1.1">>),
-	'HTTP/1.0' = parse_version(<<"HTTP/1.0">>),
-	{'EXIT', _} = (catch parse_version(<<"HTTP/1.2">>)),
-	ok.
--endif.
-
-%% @doc Return formatted request-line and headers.
-%% @todo Add tests when the corresponding reverse functions are added.
-
--spec request(binary(), iodata(), version(), headers()) -> iodata().
-request(Method, Path, Version, Headers) ->
-	[Method, <<" ">>, Path, <<" ">>, version(Version), <<"\r\n">>,
-		[[N, <<": ">>, V, <<"\r\n">>] || {N, V} <- Headers],
-		<<"\r\n">>].
-
--spec response(status() | binary(), version(), headers()) -> iodata().
-response(Status, Version, Headers) ->
-	[version(Version), <<" ">>, status(Status), <<"\r\n">>,
-		headers(Headers), <<"\r\n">>].
+-spec response(status() | binary(), cow_http1:version(), headers()) -> iodata().
+response(Status, Version, Headers) -> cow_http1:response(Status, Version, Headers).
 
 -spec headers(headers()) -> iodata().
-headers(Headers) ->
-	[[N, <<": ">>, V, <<"\r\n">>] || {N, V} <- Headers].
+headers(Headers) -> cow_http1:headers(Headers).
 
-%% @doc Return the version as a binary.
+-spec version(cow_http1:version()) -> binary().
+version(Version) -> cow_http1:version(Version).
 
--spec version(version()) -> binary().
-version('HTTP/1.1') -> <<"HTTP/1.1">>;
-version('HTTP/1.0') -> <<"HTTP/1.0">>.
+%% Functions used by HTTP/2+.
 
--ifdef(TEST).
-version_test() ->
-	<<"HTTP/1.1">> = version('HTTP/1.1'),
-	<<"HTTP/1.0">> = version('HTTP/1.0'),
-	{'EXIT', _} = (catch version('HTTP/1.2')),
+%% Semantic errors are common to all HTTP versions.
+
+-spec format_semantic_error(atom()) -> atom().
+
+format_semantic_error(connect_invalid_content_length_2xx) ->
+	'Content-length header received in a 2xx response to a CONNECT request. (RFC7230 3.3.2).';
+format_semantic_error(invalid_content_length_header) ->
+	'The content-length header is invalid. (RFC7230 3.3.2)';
+format_semantic_error(invalid_content_length_header_1xx) ->
+	'Content-length header received in a 1xx response. (RFC7230 3.3.2)';
+format_semantic_error(invalid_content_length_header_204) ->
+	'Content-length header received in a 204 response. (RFC7230 3.3.2)';
+format_semantic_error(multiple_content_length_headers) ->
+	'Multiple content-length headers were received. (RFC7230 3.3.2)'.
+
+%% Merge pseudo headers at the start of headers.
+
+-spec merge_pseudo_headers(pseudo_headers(), headers()) -> headers().
+
+merge_pseudo_headers(PseudoHeaders, Headers0) ->
+	lists:foldl(fun
+		({status, Status}, Acc) when is_integer(Status) ->
+			[{<<":status">>, integer_to_binary(Status)}|Acc];
+		({Name, Value}, Acc) ->
+			[{iolist_to_binary([$:, atom_to_binary(Name, latin1)]), Value}|Acc]
+		end, Headers0, maps:to_list(PseudoHeaders)).
+
+%% Process HTTP/2+ headers. This is done after decoding them.
+
+-spec process_headers(headers(), request | push_promise | response | trailers,
+		binary() | undefined, fin(), #{enable_connect_protocol => boolean(), any() => any()})
+	-> {headers, headers(), pseudo_headers(), non_neg_integer() | undefined}
+	| {push_promise, headers(), pseudo_headers()}
+	| {trailers, headers()}
+	| {error, atom()}.
+
+process_headers(Headers0, Type, ReqMethod, IsFin, LocalSettings)
+		when Type =:= request; Type =:= push_promise ->
+	IsExtendedConnectEnabled = maps:get(enable_connect_protocol, LocalSettings, false),
+	case request_pseudo_headers(Headers0, #{}) of
+		%% Extended CONNECT method (HTTP/2: RFC8441, HTTP/3: RFC9220).
+		{ok, PseudoHeaders=#{method := <<"CONNECT">>, scheme := _,
+			authority := _, path := _, protocol := _}, Headers}
+			when IsExtendedConnectEnabled ->
+			regular_headers(Headers, Type, ReqMethod, IsFin, PseudoHeaders);
+		{ok, #{method := <<"CONNECT">>, scheme := _,
+			authority := _, path := _}, _}
+			when IsExtendedConnectEnabled ->
+			{error, extended_connect_missing_protocol};
+		{ok, #{protocol := _}, _} ->
+			{error, invalid_protocol_pseudo_header};
+		%% Normal CONNECT (no scheme/path).
+		{ok, PseudoHeaders = #{method := <<"CONNECT">>, authority := _}, Headers}
+				when map_size(PseudoHeaders) =:= 2 ->
+			regular_headers(Headers, Type, ReqMethod, IsFin, PseudoHeaders);
+		{ok, #{method := <<"CONNECT">>, authority := _}, _} ->
+			{error, connect_invalid_pseudo_header};
+		{ok, #{method := <<"CONNECT">>}, _} ->
+			{error, connect_missing_authority};
+		%% Other requests.
+		{ok, PseudoHeaders = #{method := _, scheme := _, path := _}, Headers} ->
+			regular_headers(Headers, Type, ReqMethod, IsFin, PseudoHeaders);
+		{ok, _, _} ->
+			{error, missing_pseudo_header};
+		Error = {error, _} ->
+			Error
+	end;
+process_headers(Headers0, Type = response, ReqMethod, IsFin, _LocalSettings) ->
+	case response_pseudo_headers(Headers0, #{}) of
+		{ok, PseudoHeaders=#{status := _}, Headers} ->
+			regular_headers(Headers, Type, ReqMethod, IsFin, PseudoHeaders);
+		{ok, _, _} ->
+			{error, missing_pseudo_header};
+		Error = {error, _} ->
+			Error
+	end;
+process_headers(Headers, Type = trailers, ReqMethod, IsFin, _LocalSettings) ->
+	case trailers_have_pseudo_headers(Headers) of
+		false ->
+			regular_headers(Headers, Type, ReqMethod, IsFin, #{});
+		true ->
+			{error, trailer_invalid_pseudo_header}
+	end.
+
+request_pseudo_headers([{<<":method">>, _}|_], #{method := _}) ->
+	{error, multiple_method_pseudo_headers};
+request_pseudo_headers([{<<":method">>, Method}|Tail], PseudoHeaders) ->
+	request_pseudo_headers(Tail, PseudoHeaders#{method => Method});
+request_pseudo_headers([{<<":scheme">>, _}|_], #{scheme := _}) ->
+	{error, multiple_scheme_pseudo_headers};
+request_pseudo_headers([{<<":scheme">>, Scheme}|Tail], PseudoHeaders) ->
+	request_pseudo_headers(Tail, PseudoHeaders#{scheme => Scheme});
+request_pseudo_headers([{<<":authority">>, _}|_], #{authority := _}) ->
+	{error, multiple_authority_pseudo_headers};
+request_pseudo_headers([{<<":authority">>, Authority}|Tail], PseudoHeaders) ->
+	request_pseudo_headers(Tail, PseudoHeaders#{authority => Authority});
+request_pseudo_headers([{<<":path">>, _}|_], #{path := _}) ->
+	{error, multiple_path_pseudo_headers};
+request_pseudo_headers([{<<":path">>, Path}|Tail], PseudoHeaders) ->
+	request_pseudo_headers(Tail, PseudoHeaders#{path => Path});
+request_pseudo_headers([{<<":protocol">>, _}|_], #{protocol := _}) ->
+	{error, multiple_protocol_pseudo_headers};
+request_pseudo_headers([{<<":protocol">>, Protocol}|Tail], PseudoHeaders) ->
+	request_pseudo_headers(Tail, PseudoHeaders#{protocol => Protocol});
+request_pseudo_headers([{<<":", _/bits>>, _}|_], _) ->
+	{error, invalid_pseudo_header};
+request_pseudo_headers(Headers, PseudoHeaders) ->
+	{ok, PseudoHeaders, Headers}.
+
+response_pseudo_headers([{<<":status">>, _}|_], #{status := _}) ->
+	{error, multiple_status_pseudo_headers};
+response_pseudo_headers([{<<":status">>, Status}|Tail], PseudoHeaders) ->
+	try cow_http:status_to_integer(Status) of
+		IntStatus ->
+			response_pseudo_headers(Tail, PseudoHeaders#{status => IntStatus})
+	catch _:_ ->
+		{error, invalid_status_pseudo_header}
+	end;
+response_pseudo_headers([{<<":", _/bits>>, _}|_], _) ->
+	{error, invalid_pseudo_header};
+response_pseudo_headers(Headers, PseudoHeaders) ->
+	{ok, PseudoHeaders, Headers}.
+
+trailers_have_pseudo_headers([]) ->
+	false;
+trailers_have_pseudo_headers([{<<":", _/bits>>, _}|_]) ->
+	true;
+trailers_have_pseudo_headers([_|Tail]) ->
+	trailers_have_pseudo_headers(Tail).
+
+%% Rejecting invalid regular headers might be a bit too strong for clients.
+regular_headers(Headers, Type, ReqMethod, IsFin, PseudoHeaders) ->
+	case regular_headers(Headers, Type) of
+		ok when Type =:= request ->
+			request_expected_size(Headers, IsFin, PseudoHeaders);
+		ok when Type =:= push_promise ->
+			return_push_promise(Headers, PseudoHeaders);
+		ok when Type =:= response ->
+			response_expected_size(Headers, ReqMethod, IsFin, PseudoHeaders);
+		ok when Type =:= trailers ->
+			return_trailers(Headers);
+		Error = {error, _} ->
+			Error
+	end.
+
+regular_headers([{<<>>, _}|_], _) ->
+	{error, empty_header_name};
+regular_headers([{<<":", _/bits>>, _}|_], _) ->
+	{error, pseudo_header_after_regular};
+regular_headers([{<<"connection">>, _}|_], _) ->
+	{error, invalid_connection_header};
+regular_headers([{<<"keep-alive">>, _}|_], _) ->
+	{error, invalid_keep_alive_header};
+regular_headers([{<<"proxy-authenticate">>, _}|_], _) ->
+	{error, invalid_proxy_authenticate_header};
+regular_headers([{<<"proxy-authorization">>, _}|_], _) ->
+	{error, invalid_proxy_authorization_header};
+regular_headers([{<<"transfer-encoding">>, _}|_], _) ->
+	{error, invalid_transfer_encoding_header};
+regular_headers([{<<"upgrade">>, _}|_], _) ->
+	{error, invalid_upgrade_header};
+regular_headers([{<<"te">>, Value}|_], request) when Value =/= <<"trailers">> ->
+	{error, invalid_te_value};
+regular_headers([{<<"te">>, _}|_], Type) when Type =/= request ->
+	{error, invalid_te_header};
+regular_headers([{Name, _}|Tail], Type) ->
+	Pattern = [
+		<<$A>>, <<$B>>, <<$C>>, <<$D>>, <<$E>>, <<$F>>, <<$G>>, <<$H>>, <<$I>>,
+		<<$J>>, <<$K>>, <<$L>>, <<$M>>, <<$N>>, <<$O>>, <<$P>>, <<$Q>>, <<$R>>,
+		<<$S>>, <<$T>>, <<$U>>, <<$V>>, <<$W>>, <<$X>>, <<$Y>>, <<$Z>>
+	],
+	case binary:match(Name, Pattern) of
+		nomatch -> regular_headers(Tail, Type);
+		_ -> {error, uppercase_header_name}
+	end;
+regular_headers([], _) ->
 	ok.
--endif.
 
-%% @doc Return the status code and string as binary.
+request_expected_size(Headers, IsFin, PseudoHeaders) ->
+	case [CL || {<<"content-length">>, CL} <- Headers] of
+		[] when IsFin =:= fin ->
+			return_headers(Headers, PseudoHeaders, 0);
+		[] ->
+			return_headers(Headers, PseudoHeaders, undefined);
+		[<<"0">>] ->
+			return_headers(Headers, PseudoHeaders, 0);
+		[_] when IsFin =:= fin ->
+			{error, non_zero_length_with_fin_flag};
+		[BinLen] ->
+			parse_expected_size(Headers, PseudoHeaders, BinLen);
+		_ ->
+			{error, multiple_content_length_headers}
+	end.
 
--spec status(status() | binary()) -> binary().
-status(100) -> <<"100 Continue">>;
-status(101) -> <<"101 Switching Protocols">>;
-status(102) -> <<"102 Processing">>;
-status(103) -> <<"103 Early Hints">>;
-status(200) -> <<"200 OK">>;
-status(201) -> <<"201 Created">>;
-status(202) -> <<"202 Accepted">>;
-status(203) -> <<"203 Non-Authoritative Information">>;
-status(204) -> <<"204 No Content">>;
-status(205) -> <<"205 Reset Content">>;
-status(206) -> <<"206 Partial Content">>;
-status(207) -> <<"207 Multi-Status">>;
-status(208) -> <<"208 Already Reported">>;
-status(226) -> <<"226 IM Used">>;
-status(300) -> <<"300 Multiple Choices">>;
-status(301) -> <<"301 Moved Permanently">>;
-status(302) -> <<"302 Found">>;
-status(303) -> <<"303 See Other">>;
-status(304) -> <<"304 Not Modified">>;
-status(305) -> <<"305 Use Proxy">>;
-status(306) -> <<"306 Switch Proxy">>;
-status(307) -> <<"307 Temporary Redirect">>;
-status(308) -> <<"308 Permanent Redirect">>;
-status(400) -> <<"400 Bad Request">>;
-status(401) -> <<"401 Unauthorized">>;
-status(402) -> <<"402 Payment Required">>;
-status(403) -> <<"403 Forbidden">>;
-status(404) -> <<"404 Not Found">>;
-status(405) -> <<"405 Method Not Allowed">>;
-status(406) -> <<"406 Not Acceptable">>;
-status(407) -> <<"407 Proxy Authentication Required">>;
-status(408) -> <<"408 Request Timeout">>;
-status(409) -> <<"409 Conflict">>;
-status(410) -> <<"410 Gone">>;
-status(411) -> <<"411 Length Required">>;
-status(412) -> <<"412 Precondition Failed">>;
-status(413) -> <<"413 Request Entity Too Large">>;
-status(414) -> <<"414 Request-URI Too Long">>;
-status(415) -> <<"415 Unsupported Media Type">>;
-status(416) -> <<"416 Requested Range Not Satisfiable">>;
-status(417) -> <<"417 Expectation Failed">>;
-status(418) -> <<"418 I'm a teapot">>;
-status(421) -> <<"421 Misdirected Request">>;
-status(422) -> <<"422 Unprocessable Entity">>;
-status(423) -> <<"423 Locked">>;
-status(424) -> <<"424 Failed Dependency">>;
-status(425) -> <<"425 Unordered Collection">>;
-status(426) -> <<"426 Upgrade Required">>;
-status(428) -> <<"428 Precondition Required">>;
-status(429) -> <<"429 Too Many Requests">>;
-status(431) -> <<"431 Request Header Fields Too Large">>;
-status(451) -> <<"451 Unavailable For Legal Reasons">>;
-status(500) -> <<"500 Internal Server Error">>;
-status(501) -> <<"501 Not Implemented">>;
-status(502) -> <<"502 Bad Gateway">>;
-status(503) -> <<"503 Service Unavailable">>;
-status(504) -> <<"504 Gateway Timeout">>;
-status(505) -> <<"505 HTTP Version Not Supported">>;
-status(506) -> <<"506 Variant Also Negotiates">>;
-status(507) -> <<"507 Insufficient Storage">>;
-status(508) -> <<"508 Loop Detected">>;
-status(510) -> <<"510 Not Extended">>;
-status(511) -> <<"511 Network Authentication Required">>;
-status(B) when is_binary(B) -> B.
+response_expected_size(Headers, ReqMethod, IsFin, PseudoHeaders = #{status := Status}) ->
+	case [CL || {<<"content-length">>, CL} <- Headers] of
+		[] when IsFin =:= fin ->
+			return_headers(Headers, PseudoHeaders, 0);
+		[] ->
+			return_headers(Headers, PseudoHeaders, undefined);
+		[_] when Status >= 100, Status =< 199 ->
+			{error, invalid_content_length_header_1xx};
+		[_] when Status =:= 204 ->
+			{error, invalid_content_length_header_204};
+		[_] when Status >= 200, Status =< 299, ReqMethod =:= <<"CONNECT">> ->
+			{error, connect_invalid_content_length_2xx};
+		%% Responses to HEAD requests, and 304 responses may contain
+		%% a content-length header that must be ignored. (RFC7230 3.3.2)
+		[_] when ReqMethod =:= <<"HEAD">> ->
+			return_headers(Headers, PseudoHeaders, 0);
+		[_] when Status =:= 304 ->
+			return_headers(Headers, PseudoHeaders, 0);
+		[<<"0">>] when IsFin =:= fin ->
+			return_headers(Headers, PseudoHeaders, 0);
+		[_] when IsFin =:= fin ->
+			{error, non_zero_length_with_fin_flag};
+		[BinLen] ->
+			parse_expected_size(Headers, PseudoHeaders, BinLen);
+		_ ->
+			{error, multiple_content_length_headers}
+	end.
+
+parse_expected_size(Headers, PseudoHeaders, BinLen) ->
+	try cow_http_hd:parse_content_length(BinLen) of
+		Len ->
+			return_headers(Headers, PseudoHeaders, Len)
+	catch _:_ ->
+		{error, invalid_content_length_header}
+	end.
+
+return_headers(Headers, PseudoHeaders, Len) ->
+	{headers, Headers, PseudoHeaders, Len}.
+
+return_push_promise(Headers, PseudoHeaders) ->
+	{push_promise, Headers, PseudoHeaders}.
+
+return_trailers(Headers) ->
+	{trailers, Headers}.
+
+%% Remove HTTP/1-specific headers.
+
+-spec remove_http1_headers(headers()) -> headers().
+
+remove_http1_headers(Headers) ->
+	RemoveHeaders0 = [
+		<<"keep-alive">>,
+		<<"proxy-connection">>,
+		<<"transfer-encoding">>,
+		<<"upgrade">>
+	],
+	RemoveHeaders = case lists:keyfind(<<"connection">>, 1, Headers) of
+		false ->
+			RemoveHeaders0;
+		{_, ConnHd} ->
+			%% We do not need to worry about any "close" header because
+			%% that header name is reserved.
+			Connection = cow_http_hd:parse_connection(ConnHd),
+			Connection ++ [<<"connection">>|RemoveHeaders0]
+	end,
+	lists:filter(fun({Name, _}) ->
+		not lists:member(Name, RemoveHeaders)
+	end, Headers).

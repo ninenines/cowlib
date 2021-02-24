@@ -629,6 +629,7 @@ all_ext(<<"pic">>) -> {<<"image">>, <<"x-pict">>, []};
 all_ext(<<"pkg">>) -> {<<"application">>, <<"octet-stream">>, []};
 all_ext(<<"pki">>) -> {<<"application">>, <<"pkixcmp">>, []};
 all_ext(<<"pkipath">>) -> {<<"application">>, <<"pkix-pkipath">>, []};
+all_ext(<<"pkpass">>) -> {<<"application">>, <<"vnd.apple.pkpass">>, []};	
 all_ext(<<"plb">>) -> {<<"application">>, <<"vnd.3gpp.pic-bw-large">>, []};
 all_ext(<<"plc">>) -> {<<"application">>, <<"vnd.mobius.plc">>, []};
 all_ext(<<"plf">>) -> {<<"application">>, <<"vnd.pocketlearn">>, []};

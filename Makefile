@@ -22,7 +22,7 @@ DOC_DEPS = asciideck
 
 TEST_DEPS = $(if $(CI_ERLANG_MK),ci.erlang.mk) base32 horse proper jsx \
 	structured-header-tests uritemplate-tests
-dep_base32 = git https://github.com/dnsimple/base32_erlang master
+dep_base32 = git https://github.com/dnsimple/base32_erlang main
 dep_horse = git https://github.com/ninenines/horse.git master
 dep_jsx = git https://github.com/talentdeficit/jsx v2.10.0
 dep_structured-header-tests = git https://github.com/httpwg/structured-header-tests e614583397e7f65e0082c0fff3929f32a298b9f2

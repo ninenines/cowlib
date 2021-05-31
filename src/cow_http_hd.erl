@@ -3383,29 +3383,19 @@ www_auth_list(<< C, R/bits >>, Acc) when ?IS_WS_COMMA(C) -> www_auth_list(R, Acc
 www_auth_list(<< C, R/bits >>, Acc) when ?IS_TOKEN(C) ->
 	?LOWER(www_auth_scheme, R, Acc, <<>>).
 
-www_auth_basic_before_realm(<< C, R/bits >>, Acc) when ?IS_WS(C) -> www_auth_basic_before_realm(R, Acc);
-www_auth_basic_before_realm(<< "realm=\"", R/bits >>, Acc) -> www_auth_basic(R, Acc, <<>>).
-
-www_auth_basic(<< $", R/bits >>, Acc, Realm) -> www_auth_list_sep(R, [{basic, Realm}|Acc]);
-www_auth_basic(<< $\\, C, R/bits >>, Acc, Realm) when ?IS_VCHAR_OBS(C) -> www_auth_basic(R, Acc, << Realm/binary, C >>);
-www_auth_basic(<< C, R/bits >>, Acc, Realm) when ?IS_VCHAR_OBS(C) -> www_auth_basic(R, Acc, << Realm/binary, C >>).
-
-www_auth_scheme(<< C, R/bits >>, Acc, Scheme) when ?IS_WS(C) ->
-	case Scheme of
-		<<"basic">> -> www_auth_basic_before_realm(R, Acc);
-		<<"bearer">> -> www_auth_params_list(R, Acc, bearer, []);
-		<<"digest">> -> www_auth_params_list(R, Acc, digest, []);
-		_ -> www_auth_params_list(R, Acc, Scheme, [])
-	end;
+www_auth_scheme(<< C, R/bits >>, Acc, Scheme0) when ?IS_WS(C) ->
+	Scheme = case Scheme0 of
+		<<"basic">> -> basic;
+		<<"bearer">> -> bearer;
+		<<"digest">> -> digest;
+		_ -> Scheme0
+	end,
+	www_auth_params_list(R, Acc, Scheme, []);
 www_auth_scheme(<< C, R/bits >>, Acc, Scheme) when ?IS_TOKEN(C) ->
 	?LOWER(www_auth_scheme, R, Acc, Scheme).
 
-www_auth_list_sep(<<>>, Acc) -> lists:reverse(Acc);
-www_auth_list_sep(<< C, R/bits >>, Acc) when ?IS_WS(C) -> www_auth_list_sep(R, Acc);
-www_auth_list_sep(<< $,, R/bits >>, Acc) -> www_auth_list(R, Acc).
-
 www_auth_params_list(<<>>, Acc, Scheme, Params) ->
-	lists:reverse([{Scheme, lists:reverse(nonempty(Params))}|Acc]);
+	lists:reverse([www_auth_tuple(Scheme, nonempty(Params))|Acc]);
 www_auth_params_list(<< C, R/bits >>, Acc, Scheme, Params) when ?IS_WS_COMMA(C) ->
 	www_auth_params_list(R, Acc, Scheme, Params);
 www_auth_params_list(<< "algorithm=", C, R/bits >>, Acc, Scheme, Params) when ?IS_TOKEN(C) ->
@@ -3442,7 +3432,7 @@ www_auth_param(<< $=, C, R/bits >>, Acc, Scheme, Params, K) when ?IS_TOKEN(C) ->
 www_auth_param(<< C, R/bits >>, Acc, Scheme, Params, K) when ?IS_TOKEN(C) ->
 	?LOWER(www_auth_param, R, Acc, Scheme, Params, K);
 www_auth_param(R, Acc, Scheme, Params, NewScheme) ->
-	www_auth_scheme(R, [{Scheme, lists:reverse(Params)}|Acc], NewScheme).
+	www_auth_scheme(R, [www_auth_tuple(Scheme, Params)|Acc], NewScheme).
 
 www_auth_token(<< C, R/bits >>, Acc, Scheme, Params, K, V) when ?IS_TOKEN(C) ->
 	www_auth_token(R, Acc, Scheme, Params, K, << V/binary, C >>);
@@ -3457,18 +3447,25 @@ www_auth_quoted(<< C, R/bits >>, Acc, Scheme, Params, K, V) when ?IS_VCHAR_OBS(C
 	www_auth_quoted(R, Acc, Scheme, Params, K, << V/binary, C >>).
 
 www_auth_params_list_sep(<<>>, Acc, Scheme, Params) ->
-	lists:reverse([{Scheme, lists:reverse(Params)}|Acc]);
+	lists:reverse([www_auth_tuple(Scheme, Params)|Acc]);
 www_auth_params_list_sep(<< C, R/bits >>, Acc, Scheme, Params) when ?IS_WS(C) ->
 	www_auth_params_list_sep(R, Acc, Scheme, Params);
 www_auth_params_list_sep(<< $,, R/bits >>, Acc, Scheme, Params) ->
 	www_auth_params_list_after_sep(R, Acc, Scheme, Params).
 
 www_auth_params_list_after_sep(<<>>, Acc, Scheme, Params) ->
-	lists:reverse([{Scheme, lists:reverse(Params)}|Acc]);
+	lists:reverse([www_auth_tuple(Scheme, Params)|Acc]);
 www_auth_params_list_after_sep(<< C, R/bits >>, Acc, Scheme, Params) when ?IS_WS_COMMA(C) ->
 	www_auth_params_list_after_sep(R, Acc, Scheme, Params);
 www_auth_params_list_after_sep(R, Acc, Scheme, Params) ->
 	www_auth_params_list(R, Acc, Scheme, Params).
+
+www_auth_tuple(basic, Params) ->
+	%% Unknown parameters MUST be ignored. (RFC7617 2)
+	{<<"realm">>, Realm} = lists:keyfind(<<"realm">>, 1, Params),
+	{basic, Realm};
+www_auth_tuple(Scheme, Params) ->
+	{Scheme, lists:reverse(Params)}.
 
 -ifdef(TEST).
 parse_www_authenticate_test_() ->
@@ -3496,6 +3493,18 @@ parse_www_authenticate_test_() ->
 			]}]},
 		{<<"Basic realm=\"WallyWorld\"">>,
 			[{basic, <<"WallyWorld">>}]},
+		%% (RFC7617 2.1)
+		{<<"Basic realm=\"foo\", charset=\"UTF-8\"">>,
+			[{basic, <<"foo">>}]},
+		%% A real-world example.
+		{<<"Basic realm=\"https://123456789012.dkr.ecr.eu-north-1.amazonaws.com/\",service=\"ecr.amazonaws.com\"">>,
+			[{basic, <<"https://123456789012.dkr.ecr.eu-north-1.amazonaws.com/">>}]},
+		{<<"Bearer realm=\"example\", Basic realm=\"foo\", charset=\"UTF-8\"">>,
+			[{bearer, [{<<"realm">>, <<"example">>}]},
+			{basic, <<"foo">>}]},
+		{<<"Basic realm=\"foo\", foo=\"bar\", charset=\"UTF-8\", Bearer realm=\"example\",foo=\"bar\"">>,
+			[{basic, <<"foo">>},
+			{bearer, [{<<"realm">>, <<"example">>}, {<<"foo">>,<<"bar">>}]}]},
 		{<<"Digest realm=\"testrealm@host.com\", qop=\"auth,auth-int\", "
 				"nonce=\"dcd98b7102dd2f0e8b11d0f600bfb0c093\", "
 				"opaque=\"5ccc069c403ebaf9f0171e9517f40e41\"">>,

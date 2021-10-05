@@ -135,6 +135,13 @@ negotiate_permessage_deflate1(Params, Extensions, Opts) ->
 			ignore;
 		{#{client_max_window_bits := CB}, _} when CB > ClientMaxWindowBits ->
 			ignore;
+		%% When the server requires a client_max_window_bits lower than the
+		%% default, but the client does not support the parameter (the client
+		%% didn't send the parameter), fail the negotiation. (RFC7692 7.1.2.2)
+		{Negotiated, _} when
+				not is_map_key(client_max_window_bits_set, Negotiated),
+				ClientMaxWindowBits < 15 ->
+			ignore;
 		{Negotiated, RespParams2} ->
 			%% We add the configured max window bits if necessary.
 			RespParams = case Negotiated of
@@ -167,12 +174,14 @@ negotiate_params([{<<"client_max_window_bits">>, Max}|Tail], Negotiated, RespPar
 		error ->
 			ignore;
 		CB when CB =< CB0 ->
-			negotiate_params(Tail, Negotiated#{client_max_window_bits => CB},
+			negotiate_params(Tail, Negotiated#{
+				client_max_window_bits => CB,
+				client_max_window_bits_set => true},
 				[<<"; client_max_window_bits=">>, Max|RespParams]);
 		%% When the client sends window bits larger than the server wants
 		%% to use, we use what the server defined.
 		_ ->
-			negotiate_params(Tail, Negotiated,
+			negotiate_params(Tail, Negotiated#{client_max_window_bits_set => true},
 				[<<"; client_max_window_bits=">>, integer_to_binary(CB0)|RespParams])
 	end;
 negotiate_params([{<<"server_max_window_bits">>, Max}|Tail], Negotiated, RespParams) ->

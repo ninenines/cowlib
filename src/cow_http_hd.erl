@@ -1169,7 +1169,8 @@ cache_directive(<< $=, $", R/bits >>, Acc, T)
 	cache_directive_fields_list(R, Acc, T, []);
 cache_directive(<< $=, C, R/bits >>, Acc, T)
 		when ?IS_DIGIT(C), (T =:= <<"max-age">>) or (T =:= <<"max-stale">>)
-			or (T =:= <<"min-fresh">>) or (T =:= <<"s-maxage">>) ->
+			or (T =:= <<"min-fresh">>) or (T =:= <<"s-maxage">>)
+			or (T =:= <<"stale-while-revalidate">>) or (T =:= <<"stale-if-error">>) ->
 	cache_directive_delta(R, Acc, T, (C - $0));
 cache_directive(<< $=, $", R/bits >>, Acc, T) -> cache_directive_quoted_string(R, Acc, T, <<>>);
 cache_directive(<< $=, C, R/bits >>, Acc, T) when ?IS_TOKEN(C) -> cache_directive_token(R, Acc, T, << C >>);
@@ -1211,14 +1212,18 @@ cache_directive_unreserved_token() ->
 	?SUCHTHAT(T,
 		token(),
 		T =/= <<"max-age">> andalso T =/= <<"max-stale">> andalso T =/= <<"min-fresh">>
-			andalso T =/= <<"s-maxage">> andalso T =/= <<"no-cache">> andalso T =/= <<"private">>).
+			andalso T =/= <<"s-maxage">> andalso T =/= <<"no-cache">> andalso T =/= <<"private">>
+			andalso T =/= <<"stale-while-revalidate">> andalso T =/= <<"stale-if-error">>).
 
 cache_directive() ->
 	oneof([
 		token(),
 		{cache_directive_unreserved_token(), token()},
 		{cache_directive_unreserved_token(), quoted_string()},
-		{elements([<<"max-age">>, <<"max-stale">>, <<"min-fresh">>, <<"s-maxage">>]), non_neg_integer()},
+		{elements([
+				<<"max-age">>, <<"max-stale">>, <<"min-fresh">>, <<"s-maxage">>,
+				<<"stale-while-revalidate">>, <<"stale-if-error">>
+		]), non_neg_integer()},
 		{fields, elements([<<"no-cache">>, <<"private">>]), small_list(token())}
 	]).
 
@@ -1260,7 +1265,13 @@ parse_cache_control_test_() ->
 		{<<"max-age=30">>, [{<<"max-age">>, 30}]},
 		{<<"private, community=\"UCI\"">>, [<<"private">>, {<<"community">>, <<"UCI">>}]},
 		{<<"private=\"Content-Type, Content-Encoding, Content-Language\"">>,
-			[{<<"private">>, [<<"content-type">>, <<"content-encoding">>, <<"content-language">>]}]}
+			[{<<"private">>, [<<"content-type">>, <<"content-encoding">>, <<"content-language">>]}]},
+		%% RFC5861 3.1.
+		{<<"max-age=600, stale-while-revalidate=30">>,
+			[{<<"max-age">>, 600}, {<<"stale-while-revalidate">>, 30}]},
+		%% RFC5861 4.1.
+		{<<"max-age=600, stale-if-error=1200">>,
+			[{<<"max-age">>, 600}, {<<"stale-if-error">>, 1200}]}
 	],
 	[{V, fun() -> R = parse_cache_control(V) end} || {V, R} <- Tests].
 
@@ -3493,7 +3504,7 @@ parse_www_authenticate_test_() ->
 			]}]},
 		{<<"Basic realm=\"WallyWorld\"">>,
 			[{basic, <<"WallyWorld">>}]},
-		%% (RFC7617 2.1)
+		%% RFC7617 2.1.
 		{<<"Basic realm=\"foo\", charset=\"UTF-8\"">>,
 			[{basic, <<"foo">>}]},
 		%% A real-world example.

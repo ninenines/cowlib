@@ -1223,7 +1223,7 @@ cache_directive() ->
 		{elements(
        [<<"max-age">>, <<"max-stale">>, <<"min-fresh">>, <<"s-maxage">>, <<"stale-while-revalidate">>, <<"stale-if-error">>]),
        non_neg_integer()
-    },
+		},
 		{fields, elements([<<"no-cache">>, <<"private">>]), small_list(token())}
 	]).
 

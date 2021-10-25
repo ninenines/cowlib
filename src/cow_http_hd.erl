@@ -1221,8 +1221,8 @@ cache_directive() ->
 		{cache_directive_unreserved_token(), token()},
 		{cache_directive_unreserved_token(), quoted_string()},
 		{elements(
-      [<<"max-age">>, <<"max-stale">>, <<"min-fresh">>, <<"s-maxage">>, <<"stale-while-revalidate">>, <<"stale-if-error">>]),
-      non_neg_integer()
+       [<<"max-age">>, <<"max-stale">>, <<"min-fresh">>, <<"s-maxage">>, <<"stale-while-revalidate">>, <<"stale-if-error">>]),
+     non_neg_integer()
     },
 		{fields, elements([<<"no-cache">>, <<"private">>]), small_list(token())}
 	]).

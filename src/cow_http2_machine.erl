@@ -37,6 +37,7 @@
 -export([get_stream_local_buffer_size/2]).
 -export([get_stream_local_state/2]).
 -export([get_stream_remote_state/2]).
+-export([is_remote_concurrency_limit_reached/1]).
 -export([is_lingering_stream/2]).
 
 -type opts() :: #{
@@ -1483,6 +1484,26 @@ get_stream_remote_state(StreamID, State=#http2_machine{mode=Mode,
 		undefined ->
 			{error, not_found}
 	end.
+
+%% Check if we are allowed to initiate a new stream according to the remote
+%% setting MAX_CONCURRENT_STREAMS.
+
+-spec is_remote_concurrency_limit_reached(http2_machine()) -> boolean().
+is_remote_concurrency_limit_reached(State=#http2_machine{
+		remote_settings=RemoteSettings, streams=Streams}) ->
+	MaxConcurrentStreams = maps:get(max_concurrent_streams, RemoteSettings, infinity),
+	%% We care about local streams, but first check the total number of
+	%% streams because it's cheaper.
+	MaxConcurrentStreams =/= infinity andalso
+		map_size(Streams) >= MaxConcurrentStreams andalso
+		count_local_streams(State) >= MaxConcurrentStreams.
+
+count_local_streams(#http2_machine{mode=Mode, streams=Streams}) ->
+	maps:fold(fun(StreamId, _Stream, Sum) when ?IS_LOCAL(Mode, StreamId) ->
+			Sum + 1;
+		(_, _, Sum) ->
+			Sum
+	end, 0, Streams).
 
 %% Query whether the stream was reset recently by the remote endpoint.
 

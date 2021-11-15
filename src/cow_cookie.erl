@@ -351,7 +351,7 @@ setcookie(Name, Value, Opts) ->
 			<<$\s>>, <<$\t>>, <<$\r>>, <<$\n>>, <<$\013>>, <<$\014>>]),
 	nomatch = binary:match(iolist_to_binary(Value), [<<$,>>, <<$;>>,
 			<<$\s>>, <<$\t>>, <<$\r>>, <<$\n>>, <<$\013>>, <<$\014>>]),
-	[Name, <<"=">>, Value, <<"; Version=1">>, attributes(maps:to_list(Opts))].
+	[Name, <<"=">>, Value, attributes(maps:to_list(Opts))].
 
 attributes([]) -> [];
 attributes([{domain, Domain}|Tail]) -> [<<"; Domain=">>, Domain|attributes(Tail)];
@@ -381,26 +381,26 @@ setcookie_test_() ->
 	Tests = [
 		{<<"Customer">>, <<"WILE_E_COYOTE">>,
 			#{http_only => true, domain => <<"acme.com">>},
-			<<"Customer=WILE_E_COYOTE; Version=1; "
+			<<"Customer=WILE_E_COYOTE; "
 				"Domain=acme.com; HttpOnly">>},
 		{<<"Customer">>, <<"WILE_E_COYOTE">>,
 			#{path => <<"/acme">>},
-			<<"Customer=WILE_E_COYOTE; Version=1; Path=/acme">>},
+			<<"Customer=WILE_E_COYOTE; Path=/acme">>},
 		{<<"Customer">>, <<"WILE_E_COYOTE">>,
 			#{secure => true},
-			<<"Customer=WILE_E_COYOTE; Version=1; Secure">>},
+			<<"Customer=WILE_E_COYOTE; Secure">>},
 		{<<"Customer">>, <<"WILE_E_COYOTE">>,
 			#{secure => false, http_only => false},
-			<<"Customer=WILE_E_COYOTE; Version=1">>},
+			<<"Customer=WILE_E_COYOTE">>},
 		{<<"Customer">>, <<"WILE_E_COYOTE">>,
 			#{same_site => lax},
-			<<"Customer=WILE_E_COYOTE; Version=1; SameSite=Lax">>},
+			<<"Customer=WILE_E_COYOTE; SameSite=Lax">>},
 		{<<"Customer">>, <<"WILE_E_COYOTE">>,
 			#{same_site => strict},
-			<<"Customer=WILE_E_COYOTE; Version=1; SameSite=Strict">>},
+			<<"Customer=WILE_E_COYOTE; SameSite=Strict">>},
 		{<<"Customer">>, <<"WILE_E_COYOTE">>,
 			#{path => <<"/acme">>, badoption => <<"negatory">>},
-			<<"Customer=WILE_E_COYOTE; Version=1; Path=/acme">>}
+			<<"Customer=WILE_E_COYOTE; Path=/acme">>}
 	],
 	[{R, fun() -> R = iolist_to_binary(setcookie(N, V, O)) end}
 		|| {N, V, O, R} <- Tests].
@@ -411,7 +411,6 @@ setcookie_max_age_test() ->
 			setcookie(N, V, O)), <<";">>, [global])
 	end,
 	[<<"Customer=WILE_E_COYOTE">>,
-		<<" Version=1">>,
 		<<" Expires=", _/binary>>,
 		<<" Max-Age=111">>,
 		<<" Secure">>] = F(<<"Customer">>, <<"WILE_E_COYOTE">>,
@@ -420,7 +419,6 @@ setcookie_max_age_test() ->
 		{'EXIT', {{badarg, {max_age, -111}}, _}} -> ok
 	end,
 	[<<"Customer=WILE_E_COYOTE">>,
-		<<" Version=1">>,
 		<<" Expires=", _/binary>>,
 		<<" Max-Age=86417">>] = F(<<"Customer">>, <<"WILE_E_COYOTE">>,
 			 #{max_age => 86417}),

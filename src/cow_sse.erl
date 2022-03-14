@@ -63,7 +63,7 @@ parse(Data0, State=#state{state_name=bom, buffer=Buffer}) ->
 		%% Skip the BOM.
 		<< 16#fe, 16#ff, Data/bits >> ->
 			parse_event(Data, State#state{state_name=events, buffer= <<>>});
-		%% Not enough data to know wether we have a BOM.
+		%% Not enough data to know whether we have a BOM.
 		<< 16#fe >> ->
 			{more, State#state{buffer=Data1}};
 		<<>> ->

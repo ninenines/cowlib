@@ -173,17 +173,32 @@ parse_cookie_error_test_() ->
 	-> {ok, binary(), binary(), cookie_attrs()}
 	| ignore.
 parse_set_cookie(SetCookie) ->
-	{NameValuePair, UnparsedAttrs} = take_until_semicolon(SetCookie, <<>>),
-	{Name, Value} = case binary:split(NameValuePair, <<$=>>) of
-		[Value0] -> {<<>>, trim(Value0)};
-		[Name0, Value0] -> {trim(Name0), trim(Value0)}
-	end,
-	case {Name, Value} of
-		{<<>>, <<>>} ->
+	case has_non_ws_ctl(SetCookie) of
+		true ->
 			ignore;
-		_ ->
-			Attrs = parse_set_cookie_attrs(UnparsedAttrs, #{}),
-			{ok, Name, Value, Attrs}
+		false ->
+			{NameValuePair, UnparsedAttrs} = take_until_semicolon(SetCookie, <<>>),
+			{Name, Value} = case binary:split(NameValuePair, <<$=>>) of
+				[Value0] -> {<<>>, trim(Value0)};
+				[Name0, Value0] -> {trim(Name0), trim(Value0)}
+			end,
+			case {Name, Value} of
+				{<<>>, <<>>} ->
+					ignore;
+				_ ->
+					Attrs = parse_set_cookie_attrs(UnparsedAttrs, #{}),
+					{ok, Name, Value, Attrs}
+			end
+	end.
+
+has_non_ws_ctl(<<>>) ->
+	false;
+has_non_ws_ctl(<<C,R/bits>>) ->
+	if
+		C =< 16#08 -> true;
+		C >= 16#0A, C =< 16#1F -> true;
+		C =:= 16#7F -> true;
+		true -> has_non_ws_ctl(R)
 	end.
 
 parse_set_cookie_attrs(<<>>, Attrs) ->
@@ -194,13 +209,18 @@ parse_set_cookie_attrs(<<$;,Rest0/bits>>, Attrs) ->
 		[Name0] -> {trim(Name0), <<>>};
 		[Name0, Value0] -> {trim(Name0), trim(Value0)}
 	end,
-	case parse_set_cookie_attr(?LOWER(Name), Value) of
-		{ok, AttrName, AttrValue} ->
-			parse_set_cookie_attrs(Rest, Attrs#{AttrName => AttrValue});
-		{ignore, AttrName} ->
-			parse_set_cookie_attrs(Rest, maps:remove(AttrName, Attrs));
-		ignore ->
-			parse_set_cookie_attrs(Rest, Attrs)
+	if
+		byte_size(Value) > 1024 ->
+			parse_set_cookie_attrs(Rest, Attrs);
+		true ->
+			case parse_set_cookie_attr(?LOWER(Name), Value) of
+				{ok, AttrName, AttrValue} ->
+					parse_set_cookie_attrs(Rest, Attrs#{AttrName => AttrValue});
+				{ignore, AttrName} ->
+					parse_set_cookie_attrs(Rest, maps:remove(AttrName, Attrs));
+				ignore ->
+					parse_set_cookie_attrs(Rest, Attrs)
+			end
 	end.
 
 take_until_semicolon(Rest = <<$;,_/bits>>, Acc) -> {Acc, Rest};

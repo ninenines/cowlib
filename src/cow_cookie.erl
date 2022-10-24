@@ -26,7 +26,7 @@
 	path => binary(),
 	secure => true,
 	http_only => true,
-	same_site => strict | lax | none
+	same_site => default | none | strict | lax
 }.
 -export_type([cookie_attrs/0]).
 
@@ -35,7 +35,7 @@
 	http_only => boolean(),
 	max_age => non_neg_integer(),
 	path => binary(),
-	same_site => strict | lax | none,
+	same_site => default | none | strict | lax,
 	secure => boolean()
 }.
 -export_type([cookie_opts/0]).
@@ -274,16 +274,15 @@ parse_set_cookie_attr(<<"httponly">>, _) ->
 	{ok, http_only, true};
 parse_set_cookie_attr(<<"samesite">>, Value) ->
 	case ?LOWER(Value) of
+		<<"none">> ->
+			{ok, same_site, none};
 		<<"strict">> ->
 			{ok, same_site, strict};
 		<<"lax">> ->
 			{ok, same_site, lax};
-		%% Clients may have different defaults than "None".
-		<<"none">> ->
-			{ok, same_site, none};
 		%% Unknown values and lack of value are equivalent.
 		_ ->
-			ignore
+			{ok, same_site, default}
 	end;
 parse_set_cookie_attr(_, _) ->
 	ignore.
@@ -302,6 +301,10 @@ parse_set_cookie_test_() ->
 			{ok, <<"a">>, <<"b">>, #{domain => <<"foo.example.org">>}}},
 		{<<"a=b; Path=/path/to/resource; Path=/">>,
 			{ok, <<"a">>, <<"b">>, #{path => <<"/">>}}},
+		{<<"a=b; SameSite=UnknownValue">>, {ok, <<"a">>, <<"b">>, #{same_site => default}}},
+		{<<"a=b; SameSite=None">>, {ok, <<"a">>, <<"b">>, #{same_site => none}}},
+		{<<"a=b; SameSite=Lax">>, {ok, <<"a">>, <<"b">>, #{same_site => lax}}},
+		{<<"a=b; SameSite=Strict">>, {ok, <<"a">>, <<"b">>, #{same_site => strict}}},
 		{<<"a=b; SameSite=Lax; SameSite=Strict">>,
 			{ok, <<"a">>, <<"b">>, #{same_site => strict}}}
 	],
@@ -369,9 +372,10 @@ attributes([Opt={max_age, _}|_]) ->
 attributes([{path, Path}|Tail]) -> [<<"; Path=">>, Path|attributes(Tail)];
 attributes([{secure, false}|Tail]) -> attributes(Tail);
 attributes([{secure, true}|Tail]) -> [<<"; Secure">>|attributes(Tail)];
+attributes([{same_site, default}|Tail]) -> attributes(Tail);
+attributes([{same_site, none}|Tail]) -> [<<"; SameSite=None">>|attributes(Tail)];
 attributes([{same_site, lax}|Tail]) -> [<<"; SameSite=Lax">>|attributes(Tail)];
 attributes([{same_site, strict}|Tail]) -> [<<"; SameSite=Strict">>|attributes(Tail)];
-attributes([{same_site, none}|Tail]) -> [<<"; SameSite=None">>|attributes(Tail)];
 %% Skip unknown options.
 attributes([_|Tail]) -> attributes(Tail).
 
@@ -392,6 +396,12 @@ setcookie_test_() ->
 		{<<"Customer">>, <<"WILE_E_COYOTE">>,
 			#{secure => false, http_only => false},
 			<<"Customer=WILE_E_COYOTE">>},
+		{<<"Customer">>, <<"WILE_E_COYOTE">>,
+			#{same_site => default},
+			<<"Customer=WILE_E_COYOTE">>},
+		{<<"Customer">>, <<"WILE_E_COYOTE">>,
+			#{same_site => none},
+			<<"Customer=WILE_E_COYOTE; SameSite=None">>},
 		{<<"Customer">>, <<"WILE_E_COYOTE">>,
 			#{same_site => lax},
 			<<"Customer=WILE_E_COYOTE; SameSite=Lax">>},

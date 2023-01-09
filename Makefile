@@ -39,10 +39,6 @@ AUTO_CI_HIPE ?= OTP-LATEST
 # AUTO_CI_ERLLVM ?= OTP-LATEST
 AUTO_CI_WINDOWS ?= OTP-21+
 
-# Always rebuild from scratch in CI because OTP-25.0+ can't use the older build.
-
-ci-setup:: distclean
-
 # Hex configuration.
 
 define HEX_TARBALL_EXTRA_METADATA
@@ -59,6 +55,11 @@ endef
 # Standard targets.
 
 include erlang.mk
+
+# Always rebuild from scratch in CI because OTP-25.0+ can't use the older build.
+
+ci-setup:: distclean-deps
+	-$(verbose) rm -rf $(ERLANG_MK_TMP)/rebar
 
 # Compile options.
 

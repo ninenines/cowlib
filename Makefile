@@ -39,6 +39,10 @@ AUTO_CI_HIPE ?= OTP-LATEST
 # AUTO_CI_ERLLVM ?= OTP-LATEST
 AUTO_CI_WINDOWS ?= OTP-21+
 
+# Always rebuild deps in CI because OTP-25.0+ can't use the older build.
+
+ci-setup:: distclean-deps
+
 # Hex configuration.
 
 define HEX_TARBALL_EXTRA_METADATA
@@ -59,12 +63,6 @@ include erlang.mk
 # Compile options.
 
 TEST_ERLC_OPTS += +'{parse_transform, eunit_autoexport}' +'{parse_transform, horse_autoexport}'
-
-# Always rebuild proper/horse because OTP-25.0+ can't use the older build.
-
-ci-setup::
-	-$(MAKE) -C $(DEPS_DIR)/horse clean
-	-$(MAKE) -C $(DEPS_DIR)/proper clean
 
 # Mimetypes module generator.
 

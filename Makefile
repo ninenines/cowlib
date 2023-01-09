@@ -60,10 +60,11 @@ include erlang.mk
 
 TEST_ERLC_OPTS += +'{parse_transform, eunit_autoexport}' +'{parse_transform, horse_autoexport}'
 
-# Always rebuild horse because OTP-25.0+ can't use the older build.
+# Always rebuild proper/horse because OTP-25.0+ can't use the older build.
 
 ci-setup::
 	-$(MAKE) -C $(DEPS_DIR)/horse clean
+	-$(MAKE) -C $(DEPS_DIR)/proper clean
 
 # Mimetypes module generator.
 

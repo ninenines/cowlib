@@ -204,8 +204,7 @@ parse(<< 4:24, 3:8, _:9, 0:31, _/bits >>) ->
 	{connection_error, protocol_error, 'RST_STREAM frames MUST be associated with a stream. (RFC7540 6.4)'};
 parse(<< 4:24, 3:8, _:9, StreamID:31, ErrorCode:32, Rest/bits >>) ->
 	{ok, {rst_stream, StreamID, parse_error_code(ErrorCode)}, Rest};
-%% @todo same as priority
-parse(<< _:24, 3:8, _:9, _:31, _/bits >>) ->
+parse(<< BadLen:24, 3:8, _:9, _:31, _/bits >>) when BadLen =/= 4 ->
 	{connection_error, frame_size_error, 'RST_STREAM frames MUST be 4 bytes wide. (RFC7540 6.4)'};
 %%
 %% SETTINGS frames.

@@ -37,6 +37,70 @@
 	dyn_table = [] :: [{pos_integer(), {binary(), binary()}}]
 }).
 
+-define(STATIC_HEADERS, [
+		{<<":authority">>, <<>>},
+		{<<":method">>, <<"GET">>},
+		{<<":method">>, <<"POST">>},
+		{<<":path">>, <<"/">>},
+		{<<":path">>, <<"/index.html">>},
+		{<<":scheme">>, <<"http">>},
+		{<<":scheme">>, <<"https">>},
+		{<<":status">>, <<"200">>},
+		{<<":status">>, <<"204">>},
+		{<<":status">>, <<"206">>},
+		{<<":status">>, <<"304">>},
+		{<<":status">>, <<"400">>},
+		{<<":status">>, <<"404">>},
+		{<<":status">>, <<"500">>},
+		{<<"accept-charset">>, <<>>},
+		{<<"accept-encoding">>, <<"gzip, deflate">>},
+		{<<"accept-language">>, <<>>},
+		{<<"accept-ranges">>, <<>>},
+		{<<"accept">>, <<>>},
+		{<<"access-control-allow-origin">>, <<>>},
+		{<<"age">>, <<>>},
+		{<<"allow">>, <<>>},
+		{<<"authorization">>, <<>>},
+		{<<"cache-control">>, <<>>},
+		{<<"content-disposition">>, <<>>},
+		{<<"content-encoding">>, <<>>},
+		{<<"content-language">>, <<>>},
+		{<<"content-length">>, <<>>},
+		{<<"content-location">>, <<>>},
+		{<<"content-range">>, <<>>},
+		{<<"content-type">>, <<>>},
+		{<<"cookie">>, <<>>},
+		{<<"date">>, <<>>},
+		{<<"etag">>, <<>>},
+		{<<"expect">>, <<>>},
+		{<<"expires">>, <<>>},
+		{<<"from">>, <<>>},
+		{<<"host">>, <<>>},
+		{<<"if-match">>, <<>>},
+		{<<"if-modified-since">>, <<>>},
+		{<<"if-none-match">>, <<>>},
+		{<<"if-range">>, <<>>},
+		{<<"if-unmodified-since">>, <<>>},
+		{<<"last-modified">>, <<>>},
+		{<<"link">>, <<>>},
+		{<<"location">>, <<>>},
+		{<<"max-forwards">>, <<>>},
+		{<<"proxy-authenticate">>, <<>>},
+		{<<"proxy-authorization">>, <<>>},
+		{<<"range">>, <<>>},
+		{<<"referer">>, <<>>},
+		{<<"refresh">>, <<>>},
+		{<<"retry-after">>, <<>>},
+		{<<"server">>, <<>>},
+		{<<"set-cookie">>, <<>>},
+		{<<"strict-transport-security">>, <<>>},
+		{<<"transfer-encoding">>, <<>>},
+		{<<"user-agent">>, <<>>},
+		{<<"vary">>, <<>>},
+		{<<"via">>, <<>>},
+		{<<"www-authenticate">>, <<>>}
+	]).
+
 -opaque state() :: #state{}.
 -export_type([state/0]).
 
@@ -553,6 +617,11 @@ encode([{Name, Value0}|Tail], State, HuffmanOpt, Acc) ->
 	end,
 	Header = {Name, Value},
 	case table_find(Header, State) of
+		%% Literal header field representation: new name.
+		{_, not_found} ->
+			State2 = table_insert(Header, State),
+			encode(Tail, State2, HuffmanOpt,
+				[[<< 0:1, 1:1, 0:6 >>|[enc_str(Name, HuffmanOpt)|enc_str(Value, HuffmanOpt)]]|Acc]);
 		%% Indexed header field representation.
 		{field, Index} ->
 			encode(Tail, State, HuffmanOpt,
@@ -561,12 +630,7 @@ encode([{Name, Value0}|Tail], State, HuffmanOpt, Acc) ->
 		{name, Index} ->
 			State2 = table_insert(Header, State),
 			encode(Tail, State2, HuffmanOpt,
-				[[enc_int6(Index, 2#01)|enc_str(Value, HuffmanOpt)]|Acc]);
-		%% Literal header field representation: new name.
-		not_found ->
-			State2 = table_insert(Header, State),
-			encode(Tail, State2, HuffmanOpt,
-				[[<< 0:1, 1:1, 0:6 >>|[enc_str(Name, HuffmanOpt)|enc_str(Value, HuffmanOpt)]]|Acc])
+				[[enc_int6(Index, 2#01)|enc_str(Value, HuffmanOpt)]|Acc])
 	end.
 
 %% Encode an integer.
@@ -1132,274 +1196,92 @@ do_horse_encode_huffman() ->
 %% Static and dynamic tables.
 
 %% @todo There must be a more efficient way.
-table_find(Header = {Name, _}, State) ->
-	case table_find_field(Header, State) of
-		not_found ->
-			case table_find_name(Name, State) of
-				NotFound = not_found ->
-					NotFound;
-				Found ->
-					{name, Found}
-			end;
+table_find(Header = {Name, _}, #state{dyn_table=DynamicTable}) ->
+	case table_find_index_by_field(Header, DynamicTable) of
+		{_, not_found} ->
+			table_find_index_by_name(Name, DynamicTable);
 		Found ->
-			{field, Found}
+			Found
 	end.
-
-table_find_field({<<":authority">>, <<>>}, _) -> 1;
-table_find_field({<<":method">>, <<"GET">>}, _) -> 2;
-table_find_field({<<":method">>, <<"POST">>}, _) -> 3;
-table_find_field({<<":path">>, <<"/">>}, _) -> 4;
-table_find_field({<<":path">>, <<"/index.html">>}, _) -> 5;
-table_find_field({<<":scheme">>, <<"http">>}, _) -> 6;
-table_find_field({<<":scheme">>, <<"https">>}, _) -> 7;
-table_find_field({<<":status">>, <<"200">>}, _) -> 8;
-table_find_field({<<":status">>, <<"204">>}, _) -> 9;
-table_find_field({<<":status">>, <<"206">>}, _) -> 10;
-table_find_field({<<":status">>, <<"304">>}, _) -> 11;
-table_find_field({<<":status">>, <<"400">>}, _) -> 12;
-table_find_field({<<":status">>, <<"404">>}, _) -> 13;
-table_find_field({<<":status">>, <<"500">>}, _) -> 14;
-table_find_field({<<"accept-charset">>, <<>>}, _) -> 15;
-table_find_field({<<"accept-encoding">>, <<"gzip, deflate">>}, _) -> 16;
-table_find_field({<<"accept-language">>, <<>>}, _) -> 17;
-table_find_field({<<"accept-ranges">>, <<>>}, _) -> 18;
-table_find_field({<<"accept">>, <<>>}, _) -> 19;
-table_find_field({<<"access-control-allow-origin">>, <<>>}, _) -> 20;
-table_find_field({<<"age">>, <<>>}, _) -> 21;
-table_find_field({<<"allow">>, <<>>}, _) -> 22;
-table_find_field({<<"authorization">>, <<>>}, _) -> 23;
-table_find_field({<<"cache-control">>, <<>>}, _) -> 24;
-table_find_field({<<"content-disposition">>, <<>>}, _) -> 25;
-table_find_field({<<"content-encoding">>, <<>>}, _) -> 26;
-table_find_field({<<"content-language">>, <<>>}, _) -> 27;
-table_find_field({<<"content-length">>, <<>>}, _) -> 28;
-table_find_field({<<"content-location">>, <<>>}, _) -> 29;
-table_find_field({<<"content-range">>, <<>>}, _) -> 30;
-table_find_field({<<"content-type">>, <<>>}, _) -> 31;
-table_find_field({<<"cookie">>, <<>>}, _) -> 32;
-table_find_field({<<"date">>, <<>>}, _) -> 33;
-table_find_field({<<"etag">>, <<>>}, _) -> 34;
-table_find_field({<<"expect">>, <<>>}, _) -> 35;
-table_find_field({<<"expires">>, <<>>}, _) -> 36;
-table_find_field({<<"from">>, <<>>}, _) -> 37;
-table_find_field({<<"host">>, <<>>}, _) -> 38;
-table_find_field({<<"if-match">>, <<>>}, _) -> 39;
-table_find_field({<<"if-modified-since">>, <<>>}, _) -> 40;
-table_find_field({<<"if-none-match">>, <<>>}, _) -> 41;
-table_find_field({<<"if-range">>, <<>>}, _) -> 42;
-table_find_field({<<"if-unmodified-since">>, <<>>}, _) -> 43;
-table_find_field({<<"last-modified">>, <<>>}, _) -> 44;
-table_find_field({<<"link">>, <<>>}, _) -> 45;
-table_find_field({<<"location">>, <<>>}, _) -> 46;
-table_find_field({<<"max-forwards">>, <<>>}, _) -> 47;
-table_find_field({<<"proxy-authenticate">>, <<>>}, _) -> 48;
-table_find_field({<<"proxy-authorization">>, <<>>}, _) -> 49;
-table_find_field({<<"range">>, <<>>}, _) -> 50;
-table_find_field({<<"referer">>, <<>>}, _) -> 51;
-table_find_field({<<"refresh">>, <<>>}, _) -> 52;
-table_find_field({<<"retry-after">>, <<>>}, _) -> 53;
-table_find_field({<<"server">>, <<>>}, _) -> 54;
-table_find_field({<<"set-cookie">>, <<>>}, _) -> 55;
-table_find_field({<<"strict-transport-security">>, <<>>}, _) -> 56;
-table_find_field({<<"transfer-encoding">>, <<>>}, _) -> 57;
-table_find_field({<<"user-agent">>, <<>>}, _) -> 58;
-table_find_field({<<"vary">>, <<>>}, _) -> 59;
-table_find_field({<<"via">>, <<>>}, _) -> 60;
-table_find_field({<<"www-authenticate">>, <<>>}, _) -> 61;
-table_find_field(Header, #state{dyn_table=DynamicTable}) ->
-	table_find_field_dyn(Header, DynamicTable, 62).
+table_find_index_by_field(Header, DynamicTable) ->
+	case find_index_in_static(Header) of
+		not_found ->
+			{field, table_find_field_dyn(Header, DynamicTable, length(?STATIC_HEADERS) + 1)};
+		Index ->
+			{field, Index}
+	end.
+table_find_index_by_name(Name, DynamicTable) ->
+	case find_index_in_static(Name) of
+		not_found ->
+			{name, table_find_name_dyn(Name, DynamicTable, length(?STATIC_HEADERS) + 1)};
+		Index ->
+			{name, Index}
+	end.
 
 table_find_field_dyn(_, [], _) -> not_found;
 table_find_field_dyn(Header, [{_, Header}|_], Index) -> Index;
 table_find_field_dyn(Header, [_|Tail], Index) -> table_find_field_dyn(Header, Tail, Index + 1).
 
-table_find_name(<<":authority">>, _) -> 1;
-table_find_name(<<":method">>, _) -> 2;
-table_find_name(<<":path">>, _) -> 4;
-table_find_name(<<":scheme">>, _) -> 6;
-table_find_name(<<":status">>, _) -> 8;
-table_find_name(<<"accept-charset">>, _) -> 15;
-table_find_name(<<"accept-encoding">>, _) -> 16;
-table_find_name(<<"accept-language">>, _) -> 17;
-table_find_name(<<"accept-ranges">>, _) -> 18;
-table_find_name(<<"accept">>, _) -> 19;
-table_find_name(<<"access-control-allow-origin">>, _) -> 20;
-table_find_name(<<"age">>, _) -> 21;
-table_find_name(<<"allow">>, _) -> 22;
-table_find_name(<<"authorization">>, _) -> 23;
-table_find_name(<<"cache-control">>, _) -> 24;
-table_find_name(<<"content-disposition">>, _) -> 25;
-table_find_name(<<"content-encoding">>, _) -> 26;
-table_find_name(<<"content-language">>, _) -> 27;
-table_find_name(<<"content-length">>, _) -> 28;
-table_find_name(<<"content-location">>, _) -> 29;
-table_find_name(<<"content-range">>, _) -> 30;
-table_find_name(<<"content-type">>, _) -> 31;
-table_find_name(<<"cookie">>, _) -> 32;
-table_find_name(<<"date">>, _) -> 33;
-table_find_name(<<"etag">>, _) -> 34;
-table_find_name(<<"expect">>, _) -> 35;
-table_find_name(<<"expires">>, _) -> 36;
-table_find_name(<<"from">>, _) -> 37;
-table_find_name(<<"host">>, _) -> 38;
-table_find_name(<<"if-match">>, _) -> 39;
-table_find_name(<<"if-modified-since">>, _) -> 40;
-table_find_name(<<"if-none-match">>, _) -> 41;
-table_find_name(<<"if-range">>, _) -> 42;
-table_find_name(<<"if-unmodified-since">>, _) -> 43;
-table_find_name(<<"last-modified">>, _) -> 44;
-table_find_name(<<"link">>, _) -> 45;
-table_find_name(<<"location">>, _) -> 46;
-table_find_name(<<"max-forwards">>, _) -> 47;
-table_find_name(<<"proxy-authenticate">>, _) -> 48;
-table_find_name(<<"proxy-authorization">>, _) -> 49;
-table_find_name(<<"range">>, _) -> 50;
-table_find_name(<<"referer">>, _) -> 51;
-table_find_name(<<"refresh">>, _) -> 52;
-table_find_name(<<"retry-after">>, _) -> 53;
-table_find_name(<<"server">>, _) -> 54;
-table_find_name(<<"set-cookie">>, _) -> 55;
-table_find_name(<<"strict-transport-security">>, _) -> 56;
-table_find_name(<<"transfer-encoding">>, _) -> 57;
-table_find_name(<<"user-agent">>, _) -> 58;
-table_find_name(<<"vary">>, _) -> 59;
-table_find_name(<<"via">>, _) -> 60;
-table_find_name(<<"www-authenticate">>, _) -> 61;
-table_find_name(Name, #state{dyn_table=DynamicTable}) ->
-	table_find_name_dyn(Name, DynamicTable, 62).
-
 table_find_name_dyn(_, [], _) -> not_found;
 table_find_name_dyn(Name, [{Name, _}|_], Index) -> Index;
 table_find_name_dyn(Name, [_|Tail], Index) -> table_find_name_dyn(Name, Tail, Index + 1).
 
-table_get(1, _) -> {<<":authority">>, <<>>};
-table_get(2, _) -> {<<":method">>, <<"GET">>};
-table_get(3, _) -> {<<":method">>, <<"POST">>};
-table_get(4, _) -> {<<":path">>, <<"/">>};
-table_get(5, _) -> {<<":path">>, <<"/index.html">>};
-table_get(6, _) -> {<<":scheme">>, <<"http">>};
-table_get(7, _) -> {<<":scheme">>, <<"https">>};
-table_get(8, _) -> {<<":status">>, <<"200">>};
-table_get(9, _) -> {<<":status">>, <<"204">>};
-table_get(10, _) -> {<<":status">>, <<"206">>};
-table_get(11, _) -> {<<":status">>, <<"304">>};
-table_get(12, _) -> {<<":status">>, <<"400">>};
-table_get(13, _) -> {<<":status">>, <<"404">>};
-table_get(14, _) -> {<<":status">>, <<"500">>};
-table_get(15, _) -> {<<"accept-charset">>, <<>>};
-table_get(16, _) -> {<<"accept-encoding">>, <<"gzip, deflate">>};
-table_get(17, _) -> {<<"accept-language">>, <<>>};
-table_get(18, _) -> {<<"accept-ranges">>, <<>>};
-table_get(19, _) -> {<<"accept">>, <<>>};
-table_get(20, _) -> {<<"access-control-allow-origin">>, <<>>};
-table_get(21, _) -> {<<"age">>, <<>>};
-table_get(22, _) -> {<<"allow">>, <<>>};
-table_get(23, _) -> {<<"authorization">>, <<>>};
-table_get(24, _) -> {<<"cache-control">>, <<>>};
-table_get(25, _) -> {<<"content-disposition">>, <<>>};
-table_get(26, _) -> {<<"content-encoding">>, <<>>};
-table_get(27, _) -> {<<"content-language">>, <<>>};
-table_get(28, _) -> {<<"content-length">>, <<>>};
-table_get(29, _) -> {<<"content-location">>, <<>>};
-table_get(30, _) -> {<<"content-range">>, <<>>};
-table_get(31, _) -> {<<"content-type">>, <<>>};
-table_get(32, _) -> {<<"cookie">>, <<>>};
-table_get(33, _) -> {<<"date">>, <<>>};
-table_get(34, _) -> {<<"etag">>, <<>>};
-table_get(35, _) -> {<<"expect">>, <<>>};
-table_get(36, _) -> {<<"expires">>, <<>>};
-table_get(37, _) -> {<<"from">>, <<>>};
-table_get(38, _) -> {<<"host">>, <<>>};
-table_get(39, _) -> {<<"if-match">>, <<>>};
-table_get(40, _) -> {<<"if-modified-since">>, <<>>};
-table_get(41, _) -> {<<"if-none-match">>, <<>>};
-table_get(42, _) -> {<<"if-range">>, <<>>};
-table_get(43, _) -> {<<"if-unmodified-since">>, <<>>};
-table_get(44, _) -> {<<"last-modified">>, <<>>};
-table_get(45, _) -> {<<"link">>, <<>>};
-table_get(46, _) -> {<<"location">>, <<>>};
-table_get(47, _) -> {<<"max-forwards">>, <<>>};
-table_get(48, _) -> {<<"proxy-authenticate">>, <<>>};
-table_get(49, _) -> {<<"proxy-authorization">>, <<>>};
-table_get(50, _) -> {<<"range">>, <<>>};
-table_get(51, _) -> {<<"referer">>, <<>>};
-table_get(52, _) -> {<<"refresh">>, <<>>};
-table_get(53, _) -> {<<"retry-after">>, <<>>};
-table_get(54, _) -> {<<"server">>, <<>>};
-table_get(55, _) -> {<<"set-cookie">>, <<>>};
-table_get(56, _) -> {<<"strict-transport-security">>, <<>>};
-table_get(57, _) -> {<<"transfer-encoding">>, <<>>};
-table_get(58, _) -> {<<"user-agent">>, <<>>};
-table_get(59, _) -> {<<"vary">>, <<>>};
-table_get(60, _) -> {<<"via">>, <<>>};
-table_get(61, _) -> {<<"www-authenticate">>, <<>>};
-table_get(Index, #state{dyn_table=DynamicTable}) ->
-	{_, Header} = lists:nth(Index - 61, DynamicTable),
-	Header.
+find_index_in_static(Field) when is_binary(Field) ->
+	case lists:keyfind(Field, 1, ?STATIC_HEADERS) of
+		false ->
+			not_found;
+		Header ->
+			find_index_in_static(?STATIC_HEADERS, Header, 1)
+	end;
+find_index_in_static(Header) when is_tuple(Header) ->
+	case lists:member(Header, ?STATIC_HEADERS) of
+		true ->
+			find_index_in_static(?STATIC_HEADERS, Header, 1);
+		false ->
+			not_found
+	end;
+find_index_in_static(_) ->
+	not_found.
 
-table_get_name(1, _) -> <<":authority">>;
-table_get_name(2, _) -> <<":method">>;
-table_get_name(3, _) -> <<":method">>;
-table_get_name(4, _) -> <<":path">>;
-table_get_name(5, _) -> <<":path">>;
-table_get_name(6, _) -> <<":scheme">>;
-table_get_name(7, _) -> <<":scheme">>;
-table_get_name(8, _) -> <<":status">>;
-table_get_name(9, _) -> <<":status">>;
-table_get_name(10, _) -> <<":status">>;
-table_get_name(11, _) -> <<":status">>;
-table_get_name(12, _) -> <<":status">>;
-table_get_name(13, _) -> <<":status">>;
-table_get_name(14, _) -> <<":status">>;
-table_get_name(15, _) -> <<"accept-charset">>;
-table_get_name(16, _) -> <<"accept-encoding">>;
-table_get_name(17, _) -> <<"accept-language">>;
-table_get_name(18, _) -> <<"accept-ranges">>;
-table_get_name(19, _) -> <<"accept">>;
-table_get_name(20, _) -> <<"access-control-allow-origin">>;
-table_get_name(21, _) -> <<"age">>;
-table_get_name(22, _) -> <<"allow">>;
-table_get_name(23, _) -> <<"authorization">>;
-table_get_name(24, _) -> <<"cache-control">>;
-table_get_name(25, _) -> <<"content-disposition">>;
-table_get_name(26, _) -> <<"content-encoding">>;
-table_get_name(27, _) -> <<"content-language">>;
-table_get_name(28, _) -> <<"content-length">>;
-table_get_name(29, _) -> <<"content-location">>;
-table_get_name(30, _) -> <<"content-range">>;
-table_get_name(31, _) -> <<"content-type">>;
-table_get_name(32, _) -> <<"cookie">>;
-table_get_name(33, _) -> <<"date">>;
-table_get_name(34, _) -> <<"etag">>;
-table_get_name(35, _) -> <<"expect">>;
-table_get_name(36, _) -> <<"expires">>;
-table_get_name(37, _) -> <<"from">>;
-table_get_name(38, _) -> <<"host">>;
-table_get_name(39, _) -> <<"if-match">>;
-table_get_name(40, _) -> <<"if-modified-since">>;
-table_get_name(41, _) -> <<"if-none-match">>;
-table_get_name(42, _) -> <<"if-range">>;
-table_get_name(43, _) -> <<"if-unmodified-since">>;
-table_get_name(44, _) -> <<"last-modified">>;
-table_get_name(45, _) -> <<"link">>;
-table_get_name(46, _) -> <<"location">>;
-table_get_name(47, _) -> <<"max-forwards">>;
-table_get_name(48, _) -> <<"proxy-authenticate">>;
-table_get_name(49, _) -> <<"proxy-authorization">>;
-table_get_name(50, _) -> <<"range">>;
-table_get_name(51, _) -> <<"referer">>;
-table_get_name(52, _) -> <<"refresh">>;
-table_get_name(53, _) -> <<"retry-after">>;
-table_get_name(54, _) -> <<"server">>;
-table_get_name(55, _) -> <<"set-cookie">>;
-table_get_name(56, _) -> <<"strict-transport-security">>;
-table_get_name(57, _) -> <<"transfer-encoding">>;
-table_get_name(58, _) -> <<"user-agent">>;
-table_get_name(59, _) -> <<"vary">>;
-table_get_name(60, _) -> <<"via">>;
-table_get_name(61, _) -> <<"www-authenticate">>;
-table_get_name(Index, #state{dyn_table=DynamicTable}) ->
-	{_, {Name, _}} = lists:nth(Index - 61, DynamicTable),
+find_index_in_static([], _, _) ->
+	not_found;
+find_index_in_static([CurrentHeader | Rest], Header, Index) ->
+	case CurrentHeader of
+		Header ->
+			Index;
+		_ ->
+			find_index_in_static(Rest, Header, Index + 1)
+	end.
+
+get_header(Index, List) when is_integer(Index) andalso Index > 0 andalso Index =< length(List) ->
+	lists:nth(Index, List);
+get_header(_, _) ->
+	{<<>>, <<>>}.
+
+get_header_in_static(Index) ->
+	get_header(Index, ?STATIC_HEADERS).
+
+get_header_in_dynamic(Index, DynamicTable) when is_integer(Index) ->
+	{_, Header} = get_header(Index - length(?STATIC_HEADERS), DynamicTable),
+	case Header of
+		<<>> -> {<<>>, <<>>};
+		_ -> Header
+	end;
+get_header_in_dynamic(_, _) ->
+	{<<>>, <<>>}.
+
+table_get(Index, #state{dyn_table=DynamicTable}) when is_integer(Index) ->
+	case get_header_in_static(Index) of
+		{<<>>, <<>>} ->
+			get_header_in_dynamic(Index, DynamicTable);
+		Found ->
+			Found
+	end;
+table_get(_, _) ->
+	{<<>>, <<>>}.
+
+table_get_name(Index, State) ->
+	{Name, _} = table_get(Index, State),
 	Name.
 
 table_insert(Entry = {Name, Value}, State=#state{size=Size, max_size=MaxSize, dyn_table=DynamicTable}) ->

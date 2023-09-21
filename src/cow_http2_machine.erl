@@ -1647,13 +1647,22 @@ get_stream_remote_state(StreamID, State=#http2_machine{mode=Mode,
 %% Check if we are allowed to initiate a new stream according to the remote
 %% setting MAX_CONCURRENT_STREAMS.
 
-is_remote_concurrency_limit_reached(#http2_machine{
+-spec is_remote_concurrency_limit_reached(http2_machine()) -> boolean().
+is_remote_concurrency_limit_reached(State=#http2_machine{
 		remote_settings=RemoteSettings, streams=Streams}) ->
 	MaxConcurrentStreams = maps:get(max_concurrent_streams, RemoteSettings, infinity),
-	%% TODO: Count only locally initiated streams. By counting all streams,
-	%%       we're on the safe side. For a client, this only matters if push
-	%%       is used.
-	map_size(Streams) >= MaxConcurrentStreams.
+	%% We care about local streams, but first check the total number of
+	%% streams because it's cheaper.
+	map_size(Streams) >= MaxConcurrentStreams andalso
+		count_local_streams(State) >= MaxConcurrentStreams.
+
+-spec count_local_streams(http2_machine()) -> non_neg_integer().
+count_local_streams(#http2_machine{mode=Mode, streams=Streams}) ->
+	lists:foldl(fun(#stream{id=Id}, Sum) when ?IS_LOCAL(Mode, Id) ->
+			Sum + 1;
+		(_, Sum) ->
+			Sum
+	end, 0, Streams).
 
 %% Query whether the stream was reset recently by the remote endpoint.
 

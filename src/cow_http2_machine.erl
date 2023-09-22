@@ -1653,7 +1653,8 @@ is_remote_concurrency_limit_reached(State=#http2_machine{
 	MaxConcurrentStreams = maps:get(max_concurrent_streams, RemoteSettings, infinity),
 	%% We care about local streams, but first check the total number of
 	%% streams because it's cheaper.
-	map_size(Streams) >= MaxConcurrentStreams andalso
+	MaxConcurrentStreams =/= infinity andalso
+		map_size(Streams) >= MaxConcurrentStreams andalso
 		count_local_streams(State) >= MaxConcurrentStreams.
 
 -spec count_local_streams(http2_machine()) -> non_neg_integer().

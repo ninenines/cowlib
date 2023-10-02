@@ -1658,11 +1658,11 @@ is_remote_concurrency_limit_reached(State=#http2_machine{
 		count_local_streams(State) >= MaxConcurrentStreams.
 
 count_local_streams(#http2_machine{mode=Mode, streams=Streams}) ->
-	lists:foldl(fun(StreamId, Sum) when ?IS_LOCAL(Mode, StreamId) ->
+	maps:fold(fun(StreamId, _Stream, Sum) when ?IS_LOCAL(Mode, StreamId) ->
 			Sum + 1;
-		(_, Sum) ->
+		(_, _, Sum) ->
 			Sum
-	end, 0, maps:keys(Streams)).
+	end, 0, Streams).
 
 %% Query whether the stream was reset recently by the remote endpoint.
 

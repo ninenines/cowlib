@@ -1657,7 +1657,6 @@ is_remote_concurrency_limit_reached(State=#http2_machine{
 		map_size(Streams) >= MaxConcurrentStreams andalso
 		count_local_streams(State) >= MaxConcurrentStreams.
 
--spec count_local_streams(http2_machine()) -> non_neg_integer().
 count_local_streams(#http2_machine{mode=Mode, streams=Streams}) ->
 	lists:foldl(fun(StreamId, Sum) when ?IS_LOCAL(Mode, StreamId) ->
 			Sum + 1;

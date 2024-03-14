@@ -2,7 +2,7 @@
 
 PROJECT = cowlib
 PROJECT_DESCRIPTION = Support library for manipulating Web protocols.
-PROJECT_VERSION = 2.12.1
+PROJECT_VERSION = 2.13.0
 
 # Options.
 
@@ -45,7 +45,7 @@ define HEX_TARBALL_EXTRA_METADATA
 #{
 	licenses => [<<"ISC">>],
 	links => #{
-		<<"Function reference">> => <<"https://ninenines.eu/docs/en/cowlib/2.12/manual/">>,
+		<<"Function reference">> => <<"https://ninenines.eu/docs/en/cowlib/2.13/manual/">>,
 		<<"GitHub">> => <<"https://github.com/ninenines/cowlib">>,
 		<<"Sponsor">> => <<"https://github.com/sponsors/essen">>
 	}

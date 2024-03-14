@@ -49,6 +49,7 @@
 	max_concurrent_streams => non_neg_integer() | infinity,
 	max_decode_table_size => non_neg_integer(),
 	max_encode_table_size => non_neg_integer(),
+	max_fragmented_header_block_size => 16384..16#7fffffff,
 	max_frame_size_received => 16384..16777215,
 	max_frame_size_sent => 16384..16777215 | infinity,
 	max_stream_window_size => 0..16#7fffffff,
@@ -1049,31 +1050,60 @@ unexpected_continuation_frame(#continuation{}, State) ->
 continuation_frame(#continuation{id=StreamID, head=head_fin, data=HeaderFragment1},
 		State=#http2_machine{state={continuation, Type,
 			Frame=#headers{id=StreamID, data=HeaderFragment0}}}) ->
-	HeaderData = <<HeaderFragment0/binary, HeaderFragment1/binary>>,
-	headers_decode(Frame#headers{head=head_fin, data=HeaderData},
-		State#http2_machine{state=normal}, Type, stream_get(StreamID, State));
+	case continuation_frame_append(HeaderFragment0, HeaderFragment1, State) of
+		{ok, HeaderData} ->
+			headers_decode(Frame#headers{head=head_fin, data=HeaderData},
+				State#http2_machine{state=normal}, Type, stream_get(StreamID, State));
+		Error ->
+			Error
+	end;
 continuation_frame(#continuation{id=StreamID, head=head_fin, data=HeaderFragment1},
 		State=#http2_machine{state={continuation, Type, #push_promise{
 			id=StreamID, promised_id=PromisedStreamID, data=HeaderFragment0}}}) ->
-	HeaderData = <<HeaderFragment0/binary, HeaderFragment1/binary>>,
-	headers_decode(#headers{id=PromisedStreamID, fin=fin, head=head_fin, data=HeaderData},
-		State#http2_machine{state=normal}, Type, undefined);
+	case continuation_frame_append(HeaderFragment0, HeaderFragment1, State) of
+		{ok, HeaderData} ->
+			headers_decode(#headers{id=PromisedStreamID, fin=fin,
+				head=head_fin, data=HeaderData},
+				State#http2_machine{state=normal}, Type, undefined);
+		Error ->
+			Error
+	end;
 continuation_frame(#continuation{id=StreamID, data=HeaderFragment1},
-		State=#http2_machine{state={continuation, Type, ContinuedFrame0}})
-		when element(2, ContinuedFrame0) =:= StreamID ->
-	ContinuedFrame = case ContinuedFrame0 of
+		State=#http2_machine{state={continuation, Type, ContinuedFrame}})
+		when element(2, ContinuedFrame) =:= StreamID ->
+	case ContinuedFrame of
 		#headers{data=HeaderFragment0} ->
-			HeaderData = <<HeaderFragment0/binary, HeaderFragment1/binary>>,
-			ContinuedFrame0#headers{data=HeaderData};
+			case continuation_frame_append(HeaderFragment0, HeaderFragment1, State) of
+				{ok, HeaderData} ->
+					{ok, State#http2_machine{state={continuation, Type,
+						ContinuedFrame#headers{data=HeaderData}}}};
+				Error ->
+					Error
+			end;
 		#push_promise{data=HeaderFragment0} ->
-			HeaderData = <<HeaderFragment0/binary, HeaderFragment1/binary>>,
-			ContinuedFrame0#push_promise{data=HeaderData}
-	end,
-	{ok, State#http2_machine{state={continuation, Type, ContinuedFrame}}};
+			case continuation_frame_append(HeaderFragment0, HeaderFragment1, State) of
+				{ok, HeaderData} ->
+					{ok, State#http2_machine{state={continuation, Type,
+						ContinuedFrame#push_promise{data=HeaderData}}}};
+				Error ->
+					Error
+			end
+	end;
 continuation_frame(_F, State) ->
 	{error, {connection_error, protocol_error,
 		'An invalid frame was received in the middle of a header block. (RFC7540 6.2)'},
 		State}.
+
+continuation_frame_append(Fragment0, Fragment1, State=#http2_machine{opts=Opts}) ->
+	MaxSize = maps:get(max_fragmented_header_block_size, Opts, 32768),
+	case byte_size(Fragment0) + byte_size(Fragment1) =< MaxSize of
+		true ->
+			{ok, <<Fragment0/binary, Fragment1/binary>>};
+		false ->
+			{error, {connection_error, enhance_your_calm,
+				'Larger fragmented header block size than we are willing to accept.'},
+				State}
+	end.
 
 %% Ignored frames.
 

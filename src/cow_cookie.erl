@@ -58,13 +58,13 @@ parse_cookie(<< $,, Rest/binary >>, Acc) ->
 	parse_cookie(Rest, Acc);
 parse_cookie(<< $;, Rest/binary >>, Acc) ->
 	parse_cookie(Rest, Acc);
+parse_cookie(<< $=, Rest/binary >>, Acc) ->
+	parse_cookie(Rest, Acc);
 parse_cookie(Cookie, Acc) ->
 	parse_cookie_name(Cookie, Acc, <<>>).
 
 parse_cookie_name(<<>>, Acc, Name) ->
 	lists:reverse([{<<>>, parse_cookie_trim(Name)}|Acc]);
-parse_cookie_name(<< $=, _/binary >>, _, <<>>) ->
-	error(badarg);
 parse_cookie_name(<< $=, Rest/binary >>, Acc, Name) ->
 	parse_cookie_value(Rest, Acc, Name, <<>>);
 parse_cookie_name(<< $,, _/binary >>, _, _) ->

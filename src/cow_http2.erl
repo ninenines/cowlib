@@ -43,8 +43,13 @@
 -export_type([head_fin/0]).
 
 -type exclusive() :: exclusive | shared.
+-export_type([exclusive/0]).
+
 -type weight() :: 1..256.
+-export_type([weight/0]).
+
 -type settings() :: map().
+-export_type([settings/0]).
 
 -type error() :: no_error
 	| protocol_error

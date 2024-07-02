@@ -1,4 +1,4 @@
-%% Copyright (c) 2016-2023, Loïc Hoguin <essen@ninenines.eu>
+%% Copyright (c) 2016-2024, Loïc Hoguin <essen@ninenines.eu>
 %%
 %% Permission to use, copy, modify, and/or distribute this software for any
 %% purpose with or without fee is hereby granted, provided that the above
@@ -14,121 +14,103 @@
 
 -module(cow_uri).
 
+-include("cow_inline.hrl").
+
 -export([urldecode/1]).
 -export([urlencode/1]).
 
-%% @doc Decode a percent encoded string. (RFC3986 2.1)
+%% Decode a percent encoded string. (RFC3986 2.1)
+%%
+%% Inspiration for some of the optimisations done here come
+%% from the new `json` module as it was in mid-2024.
+%%
+%% Possible input includes:
+%%
+%% * nothing encoded (no % character):
+%%   We want to return the binary as-is to avoid an allocation.
+%%
+%% * small number of encoded characters:
+%%   We can "skip" words of text.
+%%
+%% * mostly encoded characters (non-ascii languages)
+%%   We can decode characters in bulk.
 
--spec urldecode(B) -> B when B::binary().
-urldecode(B) ->
-	urldecode(B, <<>>).
+-define(IS_PLAIN(C), (
+	(C =:= $!) orelse (C =:= $$) orelse (C =:= $&) orelse (C =:= $') orelse
+	(C =:= $() orelse (C =:= $)) orelse (C =:= $*) orelse (C =:= $+) orelse
+	(C =:= $,) orelse (C =:= $-) orelse (C =:= $.) orelse (C =:= $0) orelse
+	(C =:= $1) orelse (C =:= $2) orelse (C =:= $3) orelse (C =:= $4) orelse
+	(C =:= $5) orelse (C =:= $6) orelse (C =:= $7) orelse (C =:= $8) orelse
+	(C =:= $9) orelse (C =:= $:) orelse (C =:= $;) orelse (C =:= $=) orelse
+	(C =:= $@) orelse (C =:= $A) orelse (C =:= $B) orelse (C =:= $C) orelse
+	(C =:= $D) orelse (C =:= $E) orelse (C =:= $F) orelse (C =:= $G) orelse
+	(C =:= $H) orelse (C =:= $I) orelse (C =:= $J) orelse (C =:= $K) orelse
+	(C =:= $L) orelse (C =:= $M) orelse (C =:= $N) orelse (C =:= $O) orelse
+	(C =:= $P) orelse (C =:= $Q) orelse (C =:= $R) orelse (C =:= $S) orelse
+	(C =:= $T) orelse (C =:= $U) orelse (C =:= $V) orelse (C =:= $W) orelse
+	(C =:= $X) orelse (C =:= $Y) orelse (C =:= $Z) orelse (C =:= $_) orelse
+	(C =:= $a) orelse (C =:= $b) orelse (C =:= $c) orelse (C =:= $d) orelse
+	(C =:= $e) orelse (C =:= $f) orelse (C =:= $g) orelse (C =:= $h) orelse
+	(C =:= $i) orelse (C =:= $j) orelse (C =:= $k) orelse (C =:= $l) orelse
+	(C =:= $m) orelse (C =:= $n) orelse (C =:= $o) orelse (C =:= $p) orelse
+	(C =:= $q) orelse (C =:= $r) orelse (C =:= $s) orelse (C =:= $t) orelse
+	(C =:= $u) orelse (C =:= $v) orelse (C =:= $w) orelse (C =:= $x) orelse
+	(C =:= $y) orelse (C =:= $z) orelse (C =:= $~)
+)).
 
-urldecode(<< $%, H, L, Rest/bits >>, Acc) ->
-	C = (unhex(H) bsl 4 bor unhex(L)),
-	urldecode(Rest, << Acc/bits, C >>);
-urldecode(<< $!, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $! >>);
-urldecode(<< $$, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $$ >>);
-urldecode(<< $&, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $& >>);
-urldecode(<< $', Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $' >>);
-urldecode(<< $(, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $( >>);
-urldecode(<< $), Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $) >>);
-urldecode(<< $*, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $* >>);
-urldecode(<< $+, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $+ >>);
-urldecode(<< $,, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $, >>);
-urldecode(<< $-, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $- >>);
-urldecode(<< $., Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $. >>);
-urldecode(<< $0, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $0 >>);
-urldecode(<< $1, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $1 >>);
-urldecode(<< $2, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $2 >>);
-urldecode(<< $3, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $3 >>);
-urldecode(<< $4, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $4 >>);
-urldecode(<< $5, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $5 >>);
-urldecode(<< $6, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $6 >>);
-urldecode(<< $7, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $7 >>);
-urldecode(<< $8, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $8 >>);
-urldecode(<< $9, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $9 >>);
-urldecode(<< $:, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $: >>);
-urldecode(<< $;, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $; >>);
-urldecode(<< $=, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $= >>);
-urldecode(<< $@, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $@ >>);
-urldecode(<< $A, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $A >>);
-urldecode(<< $B, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $B >>);
-urldecode(<< $C, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $C >>);
-urldecode(<< $D, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $D >>);
-urldecode(<< $E, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $E >>);
-urldecode(<< $F, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $F >>);
-urldecode(<< $G, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $G >>);
-urldecode(<< $H, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $H >>);
-urldecode(<< $I, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $I >>);
-urldecode(<< $J, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $J >>);
-urldecode(<< $K, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $K >>);
-urldecode(<< $L, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $L >>);
-urldecode(<< $M, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $M >>);
-urldecode(<< $N, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $N >>);
-urldecode(<< $O, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $O >>);
-urldecode(<< $P, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $P >>);
-urldecode(<< $Q, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $Q >>);
-urldecode(<< $R, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $R >>);
-urldecode(<< $S, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $S >>);
-urldecode(<< $T, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $T >>);
-urldecode(<< $U, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $U >>);
-urldecode(<< $V, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $V >>);
-urldecode(<< $W, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $W >>);
-urldecode(<< $X, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $X >>);
-urldecode(<< $Y, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $Y >>);
-urldecode(<< $Z, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $Z >>);
-urldecode(<< $_, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $_ >>);
-urldecode(<< $a, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $a >>);
-urldecode(<< $b, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $b >>);
-urldecode(<< $c, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $c >>);
-urldecode(<< $d, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $d >>);
-urldecode(<< $e, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $e >>);
-urldecode(<< $f, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $f >>);
-urldecode(<< $g, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $g >>);
-urldecode(<< $h, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $h >>);
-urldecode(<< $i, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $i >>);
-urldecode(<< $j, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $j >>);
-urldecode(<< $k, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $k >>);
-urldecode(<< $l, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $l >>);
-urldecode(<< $m, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $m >>);
-urldecode(<< $n, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $n >>);
-urldecode(<< $o, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $o >>);
-urldecode(<< $p, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $p >>);
-urldecode(<< $q, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $q >>);
-urldecode(<< $r, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $r >>);
-urldecode(<< $s, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $s >>);
-urldecode(<< $t, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $t >>);
-urldecode(<< $u, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $u >>);
-urldecode(<< $v, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $v >>);
-urldecode(<< $w, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $w >>);
-urldecode(<< $x, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $x >>);
-urldecode(<< $y, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $y >>);
-urldecode(<< $z, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $z >>);
-urldecode(<< $~, Rest/bits >>, Acc) -> urldecode(Rest, << Acc/bits, $~ >>);
-urldecode(<<>>, Acc) -> Acc.
+urldecode(Binary) ->
+	skip_dec(Binary, Binary, 0).
 
-unhex($0) ->  0;
-unhex($1) ->  1;
-unhex($2) ->  2;
-unhex($3) ->  3;
-unhex($4) ->  4;
-unhex($5) ->  5;
-unhex($6) ->  6;
-unhex($7) ->  7;
-unhex($8) ->  8;
-unhex($9) ->  9;
-unhex($A) -> 10;
-unhex($B) -> 11;
-unhex($C) -> 12;
-unhex($D) -> 13;
-unhex($E) -> 14;
-unhex($F) -> 15;
-unhex($a) -> 10;
-unhex($b) -> 11;
-unhex($c) -> 12;
-unhex($d) -> 13;
-unhex($e) -> 14;
-unhex($f) -> 15.
+%% This functions helps avoid a binary allocation when
+%% there is nothing to decode.
+skip_dec(Binary, Orig, Len) ->
+	case Binary of
+		<<C1, C2, C3, C4, Rest/bits>>
+				when ?IS_PLAIN(C1) andalso ?IS_PLAIN(C2)
+				andalso ?IS_PLAIN(C3) andalso ?IS_PLAIN(C4) ->
+			skip_dec(Rest, Orig, Len + 4);
+		_ ->
+			dec(Binary, [], Orig, 0, Len)
+	end.
+
+%% This clause helps speed up decoding of highly encoded values.
+dec(<<$%, H1, L1, $%, H2, L2, $%, H3, L3, $%, H4, L4, Rest/bits>>, Acc, Orig, Skip, Len) ->
+	C1 = ?UNHEX(H1, L1),
+	C2 = ?UNHEX(H2, L2),
+	C3 = ?UNHEX(H3, L3),
+	C4 = ?UNHEX(H4, L4),
+	case Len of
+		0 ->
+			dec(Rest, [Acc|<<C1, C2, C3, C4>>], Orig, Skip + 12, 0);
+		_ ->
+			Part = binary_part(Orig, Skip, Len),
+			dec(Rest, [Acc, Part|<<C1, C2, C3, C4>>], Orig, Skip + Len + 12, 0)
+	end;
+dec(<<$%, H, L, Rest/bits>>, Acc, Orig, Skip, Len) ->
+	C = ?UNHEX(H, L),
+	case Len of
+		0 ->
+			dec(Rest, [Acc|<<C>>], Orig, Skip + 3, 0);
+		_ ->
+			Part = binary_part(Orig, Skip, Len),
+			dec(Rest, [Acc, Part|<<C>>], Orig, Skip + Len + 3, 0)
+	end;
+%% This clause helps speed up decoding of barely encoded values.
+dec(<<C1, C2, C3, C4, Rest/bits>>, Acc, Orig, Skip, Len)
+				when ?IS_PLAIN(C1) andalso ?IS_PLAIN(C2)
+				andalso ?IS_PLAIN(C3) andalso ?IS_PLAIN(C4) ->
+	dec(Rest, Acc, Orig, Skip, Len + 4);
+dec(<<C, Rest/bits>>, Acc, Orig, Skip, Len) when ?IS_PLAIN(C) ->
+	dec(Rest, Acc, Orig, Skip, Len + 1);
+dec(<<>>, _, Orig, 0, _) ->
+	Orig;
+dec(<<>>, Acc, _, _, 0) ->
+	iolist_to_binary(Acc);
+dec(<<>>, Acc, Orig, Skip, Len) ->
+	Part = binary_part(Orig, Skip, Len),
+	iolist_to_binary([Acc|Part]);
+dec(_, _, Orig, Skip, Len) ->
+	error({invalid_byte, binary:at(Orig, Skip + Len)}).
 
 -ifdef(TEST).
 urldecode_test_() ->
@@ -178,6 +160,18 @@ horse_urldecode_jp_hex() ->
 		urldecode(<<"%E3%83%84%E3%82%A4%E3%83%B3%E3%82%BD%E3%82%A6%E3%83"
 			"%AB%E3%80%9C%E8%BC%AA%E5%BB%BB%E3%81%99%E3%82%8B%E6%97%8B%E5"
 			"%BE%8B%E3%80%9C">>)
+	).
+
+horse_urldecode_jp_mixed_hex() ->
+	horse:repeat(100000,
+		urldecode(<<"%E3%83%84%E3%82%A4%E3%83%B3%E3%82%BD%E3123%82%A6%E3%83"
+			"%AB%E3%80%9C%E8%BC%AA%E5%BB%BB%E3%81%99%E3%82%8B%E6%97%8B%E5"
+			"%BE%8B%E3%80%9C">>)
+	).
+
+horse_urldecode_worst_case_hex() ->
+	horse:repeat(100000,
+		urldecode(<<"%e3%83123%84%e3123%82%a4123%e3%83123%b3%e3123%82%bd123">>)
 	).
 -endif.
 

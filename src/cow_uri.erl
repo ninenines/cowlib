@@ -102,7 +102,8 @@ dec(<<C1, C2, C3, C4, Rest/bits>>, Acc, Orig, Skip, Len)
 		when ?IS_PLAIN(C1) andalso ?IS_PLAIN(C2)
 		andalso ?IS_PLAIN(C3) andalso ?IS_PLAIN(C4) ->
 	dec(Rest, Acc, Orig, Skip, Len + 4);
-dec(<<C, Rest/bits>>, Acc, Orig, Skip, Len) when ?IS_PLAIN(C) ->
+dec(<<C, Rest/bits>>, Acc, Orig, Skip, Len)
+		when ?IS_PLAIN(C) ->
 	dec(Rest, Acc, Orig, Skip, Len + 1);
 dec(<<>>, _, Orig, 0, _) ->
 	Orig;
@@ -200,7 +201,8 @@ enc(<<C1, C2, C3, C4, Rest/bits>>, Acc, Orig, Skip, Len)
 		when ?IS_PLAIN(C1) andalso ?IS_PLAIN(C2)
 		andalso ?IS_PLAIN(C3) andalso ?IS_PLAIN(C4) ->
 	enc(Rest, Acc, Orig, Skip, Len + 4);
-enc(<<C, Rest/bits>>, Acc, Orig, Skip, Len) when ?IS_PLAIN(C) ->
+enc(<<C, Rest/bits>>, Acc, Orig, Skip, Len)
+		when ?IS_PLAIN(C) ->
 	enc(Rest, Acc, Orig, Skip, Len + 1);
 enc(<<C1, C2, C3, C4, Rest/bits>>, Acc, Orig, Skip, Len)
 		when (not ?IS_PLAIN(C2)) andalso (not ?IS_PLAIN(C3))

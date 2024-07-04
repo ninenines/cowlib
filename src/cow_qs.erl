@@ -1,4 +1,4 @@
-%% Copyright (c) 2013-2023, Loïc Hoguin <essen@ninenines.eu>
+%% Copyright (c) 2013-2024, Loïc Hoguin <essen@ninenines.eu>
 %%
 %% Permission to use, copy, modify, and/or distribute this software for any
 %% purpose with or without fee is hereby granted, provided that the above
@@ -19,49 +19,60 @@
 -export([urldecode/1]).
 -export([urlencode/1]).
 
+-include("cow_inline.hrl").
+
 -type qs_vals() :: [{binary(), binary() | true}].
 
-%% @doc Parse an application/x-www-form-urlencoded string.
+%% Parse an application/x-www-form-urlencoded string.
 %%
 %% The percent decoding is inlined to greatly improve the performance
 %% by avoiding copying binaries twice (once for extracting, once for
 %% decoding) instead of just extracting the proper representation.
 
 -spec parse_qs(binary()) -> qs_vals().
-parse_qs(B) ->
-	parse_qs_name(B, [], <<>>).
 
-parse_qs_name(<< $%, H, L, Rest/bits >>, Acc, Name) ->
-	C = (unhex(H) bsl 4 bor unhex(L)),
-	parse_qs_name(Rest, Acc, << Name/bits, C >>);
-parse_qs_name(<< $+, Rest/bits >>, Acc, Name) ->
-	parse_qs_name(Rest, Acc, << Name/bits, " " >>);
-parse_qs_name(<< $=, Rest/bits >>, Acc, Name) when Name =/= <<>> ->
-	parse_qs_value(Rest, Acc, Name, <<>>);
-parse_qs_name(<< $&, Rest/bits >>, Acc, Name) ->
-	case Name of
-		<<>> -> parse_qs_name(Rest, Acc, <<>>);
-		_ -> parse_qs_name(Rest, [{Name, true}|Acc], <<>>)
-	end;
-parse_qs_name(<< C, Rest/bits >>, Acc, Name) when C =/= $%, C =/= $= ->
-	parse_qs_name(Rest, Acc, << Name/bits, C >>);
-parse_qs_name(<<>>, Acc, Name) ->
-	case Name of
-		<<>> -> lists:reverse(Acc);
-		_ -> lists:reverse([{Name, true}|Acc])
-	end.
+parse_qs(Binary) ->
+	parse_qs_name(Binary, Binary, 0, 0).
 
-parse_qs_value(<< $%, H, L, Rest/bits >>, Acc, Name, Value) ->
-	C = (unhex(H) bsl 4 bor unhex(L)),
-	parse_qs_value(Rest, Acc, Name, << Value/bits, C >>);
-parse_qs_value(<< $+, Rest/bits >>, Acc, Name, Value) ->
-	parse_qs_value(Rest, Acc, Name, << Value/bits, " " >>);
-parse_qs_value(<< $&, Rest/bits >>, Acc, Name, Value) ->
-	parse_qs_name(Rest, [{Name, Value}|Acc], <<>>);
-parse_qs_value(<< C, Rest/bits >>, Acc, Name, Value) when C =/= $% ->
-	parse_qs_value(Rest, Acc, Name, << Value/bits, C >>);
-parse_qs_value(<<>>, Acc, Name, Value) ->
-	lists:reverse([{Name, Value}|Acc]).
+-define(IS_NOT_SEP(C), (C =/= $&) andalso (C =/= $=)).
+
+parse_qs_name(<<C1, C2, C3, C4, Rest/bits>>, Orig, Skip, Len)
+		when ?IS_NOT_SEP(C1) andalso ?IS_NOT_SEP(C2)
+		andalso ?IS_NOT_SEP(C3) andalso ?IS_NOT_SEP(C4) ->
+	parse_qs_name(Rest, Orig, Skip, Len + 4);
+parse_qs_name(<<C, Rest/bits>>, Orig, Skip, Len)
+		when ?IS_NOT_SEP(C) ->
+	parse_qs_name(Rest, Orig, Skip, Len + 1);
+parse_qs_name(<<$=, Rest/bits>>, Orig, Skip, Len)
+		when Len =/= 0 ->
+	Name = urldecode(binary:part(Orig, Skip, Len)),
+	parse_qs_value(Rest, Orig, Skip + Len + 1, 0, Name);
+parse_qs_name(<<$&, Rest/bits>>, Orig, Skip, 0) ->
+	parse_qs_name(Rest, Orig, Skip + 1, 0);
+parse_qs_name(<<$&, Rest/bits>>, Orig, Skip, Len) ->
+	Name = urldecode(binary:part(Orig, Skip, Len)),
+	[{Name, true}|parse_qs_name(Rest, Orig, Skip + Len + 1, 0)];
+parse_qs_name(<<>>, _, _, 0) ->
+	[];
+parse_qs_name(<<>>, Orig, Skip, Len) ->
+	Name = urldecode(binary:part(Orig, Skip, Len)),
+	[{Name, true}].
+
+parse_qs_value(<<C1, C2, C3, C4, Rest/bits>>, Orig, Skip, Len, Name)
+		when (C1 =/= $&) andalso (C2 =/= $&)
+		andalso (C3 =/= $&) andalso (C4 =/= $&) ->
+	parse_qs_value(Rest, Orig, Skip, Len + 4, Name);
+parse_qs_value(<<C, Rest/bits>>, Orig, Skip, Len, Name)
+		when (C =/= $&) ->
+	parse_qs_value(Rest, Orig, Skip, Len + 1, Name);
+parse_qs_value(<<$&, Rest/bits>>, Orig, Skip, Len, Name) ->
+	Value = urldecode(binary:part(Orig, Skip, Len)),
+	[{Name, Value}|parse_qs_name(Rest, Orig, Skip + Len + 1, 0)];
+parse_qs_value(<<>>, _, _, 0, Name) ->
+	[{Name, <<>>}];
+parse_qs_value(<<>>, Orig, Skip, Len, Name) ->
+	Value = urldecode(binary:part(Orig, Skip, Len)),
+	[{Name, Value}].
 
 -ifdef(TEST).
 parse_qs_test_() ->
@@ -164,24 +175,21 @@ horse_parse_qs_longer() ->
 	).
 -endif.
 
-%% @doc Build an application/x-www-form-urlencoded string.
+%% Build an application/x-www-form-urlencoded string.
 
 -spec qs(qs_vals()) -> binary().
+
 qs([]) ->
 	<<>>;
 qs(L) ->
-	qs(L, <<>>).
+	qs(L, []).
 
 qs([], Acc) ->
-	<< $&, Qs/bits >> = Acc,
-	Qs;
+	iolist_to_binary(lists:join(<<$&>>, lists:reverse(Acc)));
 qs([{Name, true}|Tail], Acc) ->
-	Acc2 = urlencode(Name, << Acc/bits, $& >>),
-	qs(Tail, Acc2);
+	qs(Tail, [urlencode_to_iolist(Name)|Acc]);
 qs([{Name, Value}|Tail], Acc) ->
-	Acc2 = urlencode(Name, << Acc/bits, $& >>),
-	Acc3 = urlencode(Value, << Acc2/bits, $= >>),
-	qs(Tail, Acc3).
+	qs(Tail, [[urlencode_to_iolist(Name), $=, urlencode_to_iolist(Value)]|Acc]).
 
 -define(QS_SHORTER, [
 	{<<"hl">>, <<"en">>},
@@ -322,44 +330,74 @@ horse_qs_longer() ->
 	horse:repeat(20000, qs(?QS_LONGER)).
 -endif.
 
-%% @doc Decode a percent encoded string (x-www-form-urlencoded rules).
+%% Decode a percent encoded string (x-www-form-urlencoded rules).
 
--spec urldecode(B) -> B when B::binary().
-urldecode(B) ->
-	urldecode(B, <<>>).
+-spec urldecode(binary()) -> binary().
 
-urldecode(<< $%, H, L, Rest/bits >>, Acc) ->
-	C = (unhex(H) bsl 4 bor unhex(L)),
-	urldecode(Rest, << Acc/bits, C >>);
-urldecode(<< $+, Rest/bits >>, Acc) ->
-	urldecode(Rest, << Acc/bits, " " >>);
-urldecode(<< C, Rest/bits >>, Acc) when C =/= $% ->
-	urldecode(Rest, << Acc/bits, C >>);
-urldecode(<<>>, Acc) ->
-	Acc.
+urldecode(Binary) ->
+	skip_dec(Binary, Binary, 0).
 
-unhex($0) ->  0;
-unhex($1) ->  1;
-unhex($2) ->  2;
-unhex($3) ->  3;
-unhex($4) ->  4;
-unhex($5) ->  5;
-unhex($6) ->  6;
-unhex($7) ->  7;
-unhex($8) ->  8;
-unhex($9) ->  9;
-unhex($A) -> 10;
-unhex($B) -> 11;
-unhex($C) -> 12;
-unhex($D) -> 13;
-unhex($E) -> 14;
-unhex($F) -> 15;
-unhex($a) -> 10;
-unhex($b) -> 11;
-unhex($c) -> 12;
-unhex($d) -> 13;
-unhex($e) -> 14;
-unhex($f) -> 15.
+-define(IS_NOT_ENC(C), (C =/= $%) andalso (C =/= $+)).
+
+%% This functions helps avoid a binary allocation when
+%% there is nothing to decode.
+skip_dec(Binary, Orig, Len) ->
+	case Binary of
+		<<C1, C2, C3, C4, Rest/bits>>
+				when ?IS_NOT_ENC(C1) andalso ?IS_NOT_ENC(C2)
+				andalso ?IS_NOT_ENC(C3) andalso ?IS_NOT_ENC(C4) ->
+			skip_dec(Rest, Orig, Len + 4);
+		_ ->
+			dec(Binary, [], Orig, 0, Len)
+	end.
+
+%% This clause helps speed up decoding of highly encoded values.
+dec(<<$%, H1, L1, $%, H2, L2, $%, H3, L3, $%, H4, L4, Rest/bits>>, Acc, Orig, Skip, Len) ->
+	C1 = ?UNHEX(H1, L1),
+	C2 = ?UNHEX(H2, L2),
+	C3 = ?UNHEX(H3, L3),
+	C4 = ?UNHEX(H4, L4),
+	case Len of
+		0 ->
+			dec(Rest, [Acc|<<C1, C2, C3, C4>>], Orig, Skip + 12, 0);
+		_ ->
+			Part = binary_part(Orig, Skip, Len),
+			dec(Rest, [Acc, Part|<<C1, C2, C3, C4>>], Orig, Skip + Len + 12, 0)
+	end;
+dec(<<$%, H, L, Rest/bits>>, Acc, Orig, Skip, Len) ->
+	C = ?UNHEX(H, L),
+	case Len of
+		0 ->
+			dec(Rest, [Acc|<<C>>], Orig, Skip + 3, 0);
+		_ ->
+			Part = binary_part(Orig, Skip, Len),
+			dec(Rest, [Acc, Part|<<C>>], Orig, Skip + Len + 3, 0)
+	end;
+dec(<<$+, Rest/bits>>, Acc, Orig, Skip, Len) ->
+	case Len of
+		0 ->
+			dec(Rest, [Acc|<<" ">>], Orig, Skip + 1, 0);
+		_ ->
+			Part = binary_part(Orig, Skip, Len),
+			dec(Rest, [Acc, Part|<<" ">>], Orig, Skip + Len + 1, 0)
+	end;
+%% This clause helps speed up decoding of barely encoded values.
+dec(<<C1, C2, C3, C4, Rest/bits>>, Acc, Orig, Skip, Len)
+		when (C1 =/= $%) andalso ?IS_NOT_ENC(C2)
+		andalso ?IS_NOT_ENC(C3) andalso ?IS_NOT_ENC(C4) ->
+	dec(Rest, Acc, Orig, Skip, Len + 4);
+dec(<<C, Rest/bits>>, Acc, Orig, Skip, Len)
+		when (C =/= $%) ->
+	dec(Rest, Acc, Orig, Skip, Len + 1);
+dec(<<>>, _, Orig, 0, _) ->
+	Orig;
+dec(<<>>, Acc, _, _, 0) ->
+	iolist_to_binary(Acc);
+dec(<<>>, Acc, Orig, Skip, Len) ->
+	Part = binary_part(Orig, Skip, Len),
+	iolist_to_binary([Acc|Part]);
+dec(_, _, Orig, Skip, Len) ->
+	error({invalid_byte, binary:at(Orig, Skip + Len)}).
 
 -ifdef(TEST).
 urldecode_test_() ->
@@ -420,101 +458,92 @@ horse_urldecode_mix() ->
 	).
 -endif.
 
-%% @doc Percent encode a string (x-www-form-urlencoded rules).
+%% Percent encode a string (x-www-form-urlencoded rules).
 
--spec urlencode(B) -> B when B::binary().
-urlencode(B) ->
-	urlencode(B, <<>>).
+-spec urlencode(binary()) -> binary().
 
-urlencode(<< $\s, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $+ >>);
-urlencode(<< $-, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $- >>);
-urlencode(<< $., Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $. >>);
-urlencode(<< $0, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $0 >>);
-urlencode(<< $1, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $1 >>);
-urlencode(<< $2, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $2 >>);
-urlencode(<< $3, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $3 >>);
-urlencode(<< $4, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $4 >>);
-urlencode(<< $5, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $5 >>);
-urlencode(<< $6, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $6 >>);
-urlencode(<< $7, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $7 >>);
-urlencode(<< $8, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $8 >>);
-urlencode(<< $9, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $9 >>);
-urlencode(<< $A, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $A >>);
-urlencode(<< $B, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $B >>);
-urlencode(<< $C, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $C >>);
-urlencode(<< $D, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $D >>);
-urlencode(<< $E, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $E >>);
-urlencode(<< $F, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $F >>);
-urlencode(<< $G, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $G >>);
-urlencode(<< $H, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $H >>);
-urlencode(<< $I, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $I >>);
-urlencode(<< $J, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $J >>);
-urlencode(<< $K, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $K >>);
-urlencode(<< $L, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $L >>);
-urlencode(<< $M, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $M >>);
-urlencode(<< $N, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $N >>);
-urlencode(<< $O, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $O >>);
-urlencode(<< $P, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $P >>);
-urlencode(<< $Q, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $Q >>);
-urlencode(<< $R, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $R >>);
-urlencode(<< $S, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $S >>);
-urlencode(<< $T, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $T >>);
-urlencode(<< $U, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $U >>);
-urlencode(<< $V, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $V >>);
-urlencode(<< $W, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $W >>);
-urlencode(<< $X, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $X >>);
-urlencode(<< $Y, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $Y >>);
-urlencode(<< $Z, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $Z >>);
-urlencode(<< $_, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $_ >>);
-urlencode(<< $a, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $a >>);
-urlencode(<< $b, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $b >>);
-urlencode(<< $c, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $c >>);
-urlencode(<< $d, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $d >>);
-urlencode(<< $e, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $e >>);
-urlencode(<< $f, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $f >>);
-urlencode(<< $g, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $g >>);
-urlencode(<< $h, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $h >>);
-urlencode(<< $i, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $i >>);
-urlencode(<< $j, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $j >>);
-urlencode(<< $k, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $k >>);
-urlencode(<< $l, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $l >>);
-urlencode(<< $m, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $m >>);
-urlencode(<< $n, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $n >>);
-urlencode(<< $o, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $o >>);
-urlencode(<< $p, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $p >>);
-urlencode(<< $q, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $q >>);
-urlencode(<< $r, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $r >>);
-urlencode(<< $s, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $s >>);
-urlencode(<< $t, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $t >>);
-urlencode(<< $u, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $u >>);
-urlencode(<< $v, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $v >>);
-urlencode(<< $w, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $w >>);
-urlencode(<< $x, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $x >>);
-urlencode(<< $y, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $y >>);
-urlencode(<< $z, Rest/bits >>, Acc) -> urlencode(Rest, << Acc/bits, $z >>);
-urlencode(<< C, Rest/bits >>, Acc) ->
-	H = hex(C bsr 4),
-	L = hex(C band 16#0f),
-	urlencode(Rest, << Acc/bits, $%, H, L >>);
-urlencode(<<>>, Acc) ->
-	Acc.
+urlencode(Binary) ->
+	case skip_enc(Binary, Binary, 0) of
+		orig -> Binary;
+		IOList -> iolist_to_binary(IOList)
+	end.
 
-hex( 0) -> $0;
-hex( 1) -> $1;
-hex( 2) -> $2;
-hex( 3) -> $3;
-hex( 4) -> $4;
-hex( 5) -> $5;
-hex( 6) -> $6;
-hex( 7) -> $7;
-hex( 8) -> $8;
-hex( 9) -> $9;
-hex(10) -> $A;
-hex(11) -> $B;
-hex(12) -> $C;
-hex(13) -> $D;
-hex(14) -> $E;
-hex(15) -> $F.
+%% Used in qs/1 to avoid calling iolist_to_binary unnecessarily.
+urlencode_to_iolist(Binary) ->
+	case skip_enc(Binary, Binary, 0) of
+		orig -> Binary;
+		IOList -> IOList
+	end.
+
+-define(IS_PLAIN(C), (
+	(C =:= $-) orelse (C =:= $.) orelse (C =:= $0) orelse (C =:= $1) orelse
+	(C =:= $2) orelse (C =:= $3) orelse (C =:= $4) orelse (C =:= $5) orelse
+	(C =:= $6) orelse (C =:= $7) orelse (C =:= $8) orelse (C =:= $9) orelse
+	(C =:= $A) orelse (C =:= $B) orelse (C =:= $C) orelse (C =:= $D) orelse
+	(C =:= $E) orelse (C =:= $F) orelse (C =:= $G) orelse (C =:= $H) orelse
+	(C =:= $I) orelse (C =:= $J) orelse (C =:= $K) orelse (C =:= $L) orelse
+	(C =:= $M) orelse (C =:= $N) orelse (C =:= $O) orelse (C =:= $P) orelse
+	(C =:= $Q) orelse (C =:= $R) orelse (C =:= $S) orelse (C =:= $T) orelse
+	(C =:= $U) orelse (C =:= $V) orelse (C =:= $W) orelse (C =:= $X) orelse
+	(C =:= $Y) orelse (C =:= $Z) orelse (C =:= $_) orelse (C =:= $a) orelse
+	(C =:= $b) orelse (C =:= $c) orelse (C =:= $d) orelse (C =:= $e) orelse
+	(C =:= $f) orelse (C =:= $g) orelse (C =:= $h) orelse (C =:= $i) orelse
+	(C =:= $j) orelse (C =:= $k) orelse (C =:= $l) orelse (C =:= $m) orelse
+	(C =:= $n) orelse (C =:= $o) orelse (C =:= $p) orelse (C =:= $q) orelse
+	(C =:= $r) orelse (C =:= $s) orelse (C =:= $t) orelse (C =:= $u) orelse
+	(C =:= $v) orelse (C =:= $w) orelse (C =:= $x) orelse (C =:= $y) orelse
+	(C =:= $z)
+)).
+
+skip_enc(Binary, Orig, Len) ->
+	case Binary of
+		<<C1, C2, C3, C4, Rest/bits>>
+				when ?IS_PLAIN(C1) andalso ?IS_PLAIN(C2)
+				andalso ?IS_PLAIN(C3) andalso ?IS_PLAIN(C4) ->
+			skip_enc(Rest, Orig, Len + 4);
+		_ ->
+			enc(Binary, [], Orig, 0, Len)
+	end.
+
+enc(<<C1, C2, C3, C4, Rest/bits>>, Acc, Orig, Skip, Len)
+		when ?IS_PLAIN(C1) andalso ?IS_PLAIN(C2)
+		andalso ?IS_PLAIN(C3) andalso ?IS_PLAIN(C4) ->
+	enc(Rest, Acc, Orig, Skip, Len + 4);
+enc(<<C, Rest/bits>>, Acc, Orig, Skip, Len)
+		when ?IS_PLAIN(C) ->
+	enc(Rest, Acc, Orig, Skip, Len + 1);
+enc(<<C1, C2, C3, C4, Rest/bits>>, Acc, Orig, Skip, Len)
+		when (not ?IS_PLAIN(C2)) andalso (not ?IS_PLAIN(C3))
+		andalso (not ?IS_PLAIN(C4)) ->
+	Enc = <<$%, ?HEX(C1), $%, ?HEX(C2), $%, ?HEX(C3), $%, ?HEX(C4)>>,
+	case Len of
+		0 ->
+			enc(Rest, [Acc|Enc], Orig, Skip + 4, 0);
+		_ ->
+			Part = binary_part(Orig, Skip, Len),
+			enc(Rest, [Acc, Part|Enc], Orig, Skip + Len + 4, 0)
+	end;
+enc(<<C, Rest/bits>>, Acc, Orig, Skip, Len) ->
+	Enc = case C of
+		$\s -> <<$+>>;
+		_ -> <<$%, ?HEX(C)>>
+	end,
+	case Len of
+		0 ->
+			enc(Rest, [Acc|Enc], Orig, Skip + 1, 0);
+		_ ->
+			Part = binary_part(Orig, Skip, Len),
+			enc(Rest, [Acc, Part|Enc], Orig, Skip + Len + 1, 0)
+	end;
+enc(<<>>, _, _, 0, _) ->
+	orig;
+enc(<<>>, Acc, _, _, 0) ->
+	Acc;
+enc(<<>>, Acc, Orig, Skip, Len) ->
+	Part = binary_part(Orig, Skip, Len),
+	[Acc|Part];
+enc(_, _, Orig, Skip, Len) ->
+	error({invalid_byte, binary:at(Orig, Skip + Len)}).
 
 -ifdef(TEST).
 urlencode_test_() ->

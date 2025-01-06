@@ -72,6 +72,8 @@
 -type utf8_state() :: 0..8 | undefined.
 -export_type([utf8_state/0]).
 
+-compile({inline, [utf8_class/0]}).
+
 %% @doc Generate a key for the Websocket handshake request.
 
 -spec key() -> binary().
@@ -559,14 +561,14 @@ validate_payload(Payload, Rest, undefined, _, _, _, true) ->
 	{ok, Payload, undefined, Rest};
 %% Text frames and close control frames MUST have a payload that is valid UTF-8.
 validate_payload(Payload, Rest, Utf8State, _, Type, _, Eof) when Type =:= text; Type =:= close ->
-	case validate_utf8(Payload, Utf8State) of
+	case validate_text(Payload, Utf8State) of
 		1 -> {error, badencoding};
 		Utf8State2 when not Eof -> {more, Payload, Utf8State2};
 		0 when Eof -> {ok, Payload, 0, Rest};
 		_ -> {error, badencoding}
 	end;
 validate_payload(Payload, Rest, Utf8State, _, fragment, {Fin, text, _}, Eof) ->
-	case validate_utf8(Payload, Utf8State) of
+	case validate_text(Payload, Utf8State) of
 		1 -> {error, badencoding};
 		0 when Eof -> {ok, Payload, 0, Rest};
 		Utf8State2 when Eof, Fin =:= nofin -> {ok, Payload, Utf8State2, Rest};
@@ -581,36 +583,158 @@ validate_payload(Payload, Rest, Utf8State, _, _, _, true) ->
 %% Based on the Flexible and Economical UTF-8 Decoder algorithm by
 %% Bjoern Hoehrmann <bjoern@hoehrmann.de> (http://bjoern.hoehrmann.de/utf-8/decoder/dfa/).
 %%
-%% The original algorithm has been unrolled into all combinations of values for C and State
-%% each with a clause. The common clauses were then grouped together.
+%% The original algorithm has been reworked to better adapt to
+%% the current Erlang VM (at the time of writing).
+%%
+%% We keep the character class table to quickly find which class
+%% a character is. The transition table was removed in favor of
+%% a separate Erlang function per state as that proved more
+%% efficient.
+%%
+%% We store the character class table in a tuple returned by
+%% an inline function.
+%%
+%% We handle ASCII characters specially because when ASCII
+%% characters are present we are highly likely to have mostly
+%% or only ASCII characters. We process them 4 at a time when
+%% possible.
+%%
+%% When a non-ASCII character is encountered, we switch to
+%% the UTF-8 decoder. When in the UTF-8 decoder we have to
+%% process characters one at a time. When we are in the UTF-8
+%% decoder we expect there to be additional UTF-8 characters
+%% so we check for them instead of reverting back to ASCII
+%% every time. This greatly speeds up decoding of Japanese
+%% and other non-ASCII text.
+%%
+%% Our UTF-8 decoder functions consist of looking up the
+%% character class of the current byte and then using a
+%% case clause to determine which state we are switching to.
+%%
+%% We order clauses based on the likelihood of the character class.
+%% Order is determined by the number of occurrences of the class in
+%% the table. The order (and number of occurrences) is as follow:
+%% 7 (32), 2 (30), 1 and 9 (16), 3 (14), 8 (13), 6 (3), 4, 5, 10 and 11.
 %%
 %% This function returns 0 on success, 1 on error, and 2..8 on incomplete data.
-validate_utf8(<<>>, State) -> State;
-validate_utf8(<< C, Rest/bits >>, 0) when C < 128 -> validate_utf8(Rest, 0);
-validate_utf8(<< C, Rest/bits >>, 2) when C >= 128, C < 144 -> validate_utf8(Rest, 0);
-validate_utf8(<< C, Rest/bits >>, 3) when C >= 128, C < 144 -> validate_utf8(Rest, 2);
-validate_utf8(<< C, Rest/bits >>, 5) when C >= 128, C < 144 -> validate_utf8(Rest, 2);
-validate_utf8(<< C, Rest/bits >>, 7) when C >= 128, C < 144 -> validate_utf8(Rest, 3);
-validate_utf8(<< C, Rest/bits >>, 8) when C >= 128, C < 144 -> validate_utf8(Rest, 3);
-validate_utf8(<< C, Rest/bits >>, 2) when C >= 144, C < 160 -> validate_utf8(Rest, 0);
-validate_utf8(<< C, Rest/bits >>, 3) when C >= 144, C < 160 -> validate_utf8(Rest, 2);
-validate_utf8(<< C, Rest/bits >>, 5) when C >= 144, C < 160 -> validate_utf8(Rest, 2);
-validate_utf8(<< C, Rest/bits >>, 6) when C >= 144, C < 160 -> validate_utf8(Rest, 3);
-validate_utf8(<< C, Rest/bits >>, 7) when C >= 144, C < 160 -> validate_utf8(Rest, 3);
-validate_utf8(<< C, Rest/bits >>, 2) when C >= 160, C < 192 -> validate_utf8(Rest, 0);
-validate_utf8(<< C, Rest/bits >>, 3) when C >= 160, C < 192 -> validate_utf8(Rest, 2);
-validate_utf8(<< C, Rest/bits >>, 4) when C >= 160, C < 192 -> validate_utf8(Rest, 2);
-validate_utf8(<< C, Rest/bits >>, 6) when C >= 160, C < 192 -> validate_utf8(Rest, 3);
-validate_utf8(<< C, Rest/bits >>, 7) when C >= 160, C < 192 -> validate_utf8(Rest, 3);
-validate_utf8(<< C, Rest/bits >>, 0) when C >= 194, C < 224 -> validate_utf8(Rest, 2);
-validate_utf8(<< 224, Rest/bits >>, 0) -> validate_utf8(Rest, 4);
-validate_utf8(<< C, Rest/bits >>, 0) when C >= 225, C < 237 -> validate_utf8(Rest, 3);
-validate_utf8(<< 237, Rest/bits >>, 0) -> validate_utf8(Rest, 5);
-validate_utf8(<< C, Rest/bits >>, 0) when C =:= 238; C =:= 239 -> validate_utf8(Rest, 3);
-validate_utf8(<< 240, Rest/bits >>, 0) -> validate_utf8(Rest, 6);
-validate_utf8(<< C, Rest/bits >>, 0) when C =:= 241; C =:= 242; C =:= 243 -> validate_utf8(Rest, 7);
-validate_utf8(<< 244, Rest/bits >>, 0) -> validate_utf8(Rest, 8);
-validate_utf8(_, _) -> 1.
+%% It expects a starting state value of 0. It can be called again
+%% to stream parse large amounts of text as long as the returned
+%% 2..8 state is provided when it is called back.
+
+validate_text(Text, 0) -> validate_ascii(Text);
+validate_text(Text, 2) -> validate_s2(Text);
+validate_text(Text, 3) -> validate_s3(Text);
+validate_text(Text, 4) -> validate_s4(Text);
+validate_text(Text, 5) -> validate_s5(Text);
+validate_text(Text, 6) -> validate_s6(Text);
+validate_text(Text, 7) -> validate_s7(Text);
+validate_text(Text, 8) -> validate_s8(Text).
+
+validate_ascii(<<>>) -> 0;
+validate_ascii(<<C1,C2,C3,C4,R/bits>>) when C1 < 128, C2 < 128, C3 < 128, C4 < 128 -> validate_ascii(R);
+validate_ascii(<<C1,R/bits>>) when C1 < 128 -> validate_ascii(R);
+validate_ascii(Text) -> validate_s0(Text).
+
+%% Instead of switching back to ASCII we first have this
+%% function attempt to find a non-ASCII character to
+%% greatly speed up decoding of Japanese and other languages.
+validate_s0(<<C,R/bits>>) when C >= 128 ->
+	Class = element(C - 127, utf8_class()),
+	case Class of
+		2 -> validate_s2(R);
+		3 -> validate_s3(R);
+		6 -> validate_s7(R);
+		4 -> validate_s5(R);
+		5 -> validate_s8(R);
+		10 -> validate_s4(R);
+		11 -> validate_s6(R);
+		_ -> 1
+	end;
+validate_s0(Text) ->
+	validate_ascii(Text).
+
+validate_s2(<<C,R/bits>>) ->
+	Class = element(C - 127, utf8_class()),
+	case Class of
+		7 -> validate_s0(R);
+		1 -> validate_s0(R);
+		9 -> validate_s0(R);
+		_ -> 1
+	end;
+validate_s2(<<>>) ->
+	2.
+
+validate_s3(<<C,R/bits>>) ->
+	Class = element(C - 127, utf8_class()),
+	case Class of
+		7 -> validate_s2(R);
+		1 -> validate_s2(R);
+		9 -> validate_s2(R);
+		_ -> 1
+	end;
+validate_s3(<<>>) ->
+	3.
+
+validate_s4(<<C,R/bits>>) ->
+	Class = element(C - 127, utf8_class()),
+	case Class of
+		7 -> validate_s2(R);
+		_ -> 1
+	end;
+validate_s4(<<>>) ->
+	4.
+
+validate_s5(<<C,R/bits>>) ->
+	Class = element(C - 127, utf8_class()),
+	case Class of
+		1 -> validate_s2(R);
+		9 -> validate_s2(R);
+		_ -> 1
+	end;
+validate_s5(<<>>) ->
+	5.
+
+validate_s6(<<C,R/bits>>) ->
+	Class = element(C - 127, utf8_class()),
+	case Class of
+		7 -> validate_s3(R);
+		9 -> validate_s3(R);
+		_ -> 1
+	end;
+validate_s6(<<>>) ->
+	6.
+
+validate_s7(<<C,R/bits>>) ->
+	Class = element(C - 127, utf8_class()),
+	case Class of
+		7 -> validate_s3(R);
+		1 -> validate_s3(R);
+		9 -> validate_s3(R);
+		_ -> 1
+	end;
+validate_s7(<<>>) ->
+	7.
+
+validate_s8(<<C,R/bits>>) ->
+	Class = element(C - 127, utf8_class()),
+	case Class of
+		1 -> validate_s3(R);
+		_ -> 1
+	end;
+validate_s8(<<>>) ->
+	8.
+
+utf8_class() ->
+	{
+		1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+		9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,
+		7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
+		7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
+		8,8,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+		2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+		10,3,3,3,3,3,3,3,3,3,3,3,3,4,3,3,
+		11,6,6,6,5,8,8,8,8,8,8,8,8,8,8,8
+	}.
 
 %% @doc Return a frame tuple from parsed state and data.
 

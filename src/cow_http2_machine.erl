@@ -293,17 +293,38 @@ init_upgrade_stream(Method, State=#http2_machine{mode=server, remote_streamid=0,
 	| {error, {stream_error, cow_http2:streamid(), cow_http2:error(), atom()}, State}
 	| {error, {connection_error, cow_http2:error(), atom()}, State}
 	when State::http2_machine().
+
+%-define(HTTP2_MACHINE_DEBUG, 1).
+-ifdef(HTTP2_MACHINE_DEBUG).
+-define(LOG_FRAME(Frame, State),
+	begin
+		Frame2 = case Frame of
+			{data,_,_,_} -> setelement(4, Frame, {'BINARY-DATA', byte_size(element(4, Frame))});
+			{continuation,_,_,_} -> setelement(4, Frame, {'BINARY-DATA', byte_size(element(4, Frame))});
+			_ -> Frame
+		end,
+		io:format(user, "~p rcv: ~p~n", [State#http2_machine.mode, Frame2])
+	end
+).
+-else.
+-define(LOG_FRAME(Frame, State), _ = Frame).
+-endif.
+
 frame(Frame, State=#http2_machine{state=settings, preface_timer=TRef}) ->
+	?LOG_FRAME(Frame, State),
 	ok = case TRef of
 		undefined -> ok;
 		_ -> erlang:cancel_timer(TRef, [{async, true}, {info, false}])
 	end,
 	settings_frame(Frame, State#http2_machine{state=normal, preface_timer=undefined});
 frame(Frame, State=#http2_machine{state={continuation, _, _}}) ->
+	?LOG_FRAME(Frame, State),
 	maybe_discard_result(continuation_frame(Frame, State));
-frame(settings_ack, State=#http2_machine{state=normal}) ->
+frame(Frame = settings_ack, State=#http2_machine{state=normal}) ->
+	?LOG_FRAME(Frame, State),
 	settings_ack_frame(State);
 frame(Frame, State=#http2_machine{state=normal}) ->
+	?LOG_FRAME(Frame, State),
 	Result = case element(1, Frame) of
 		data -> data_frame(Frame, State);
 		headers -> headers_frame(Frame, State);

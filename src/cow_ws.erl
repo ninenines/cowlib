@@ -525,8 +525,12 @@ unmask(Data, MaskKey, UnmaskedLen) ->
 	MaskKey2 = (MaskKey bsl (Left * 8)) + (MaskKey bsr (Right * 8)),
 	mask(Data, MaskKey2, <<>>).
 
-mask(<<>>, _, Unmasked) ->
-	Unmasked;
+mask(<< O1:32, O2:32, O3:32, O4:32, Rest/bits >>, MaskKey, Acc) ->
+	T1 = O1 bxor MaskKey,
+	T2 = O2 bxor MaskKey,
+	T3 = O3 bxor MaskKey,
+	T4 = O4 bxor MaskKey,
+	mask(Rest, MaskKey, << Acc/binary, T1:32, T2:32, T3:32, T4:32 >>);
 mask(<< O:32, Rest/bits >>, MaskKey, Acc) ->
 	T = O bxor MaskKey,
 	mask(Rest, MaskKey, << Acc/binary, T:32 >>);
@@ -541,7 +545,9 @@ mask(<< O:16 >>, MaskKey, Acc) ->
 mask(<< O:8 >>, MaskKey, Acc) ->
 	<< MaskKey2:8, _:24 >> = << MaskKey:32 >>,
 	T = O bxor MaskKey2,
-	<< Acc/binary, T:8 >>.
+	<< Acc/binary, T:8 >>;
+mask(<<>>, _, Unmasked) ->
+	Unmasked.
 
 inflate_frame(Data, Inflate, TakeOver, FragState, true)
 		when FragState =:= undefined; element(1, FragState) =:= fin ->

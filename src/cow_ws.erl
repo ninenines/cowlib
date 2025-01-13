@@ -520,9 +520,9 @@ unmask(Data, MaskKey, 0) ->
 	mask(Data, MaskKey, <<>>);
 %% We unmask on the fly so we need to continue from the right mask byte.
 unmask(Data, MaskKey, UnmaskedLen) ->
-	Left = UnmaskedLen rem 4,
-	Right = 4 - Left,
-	MaskKey2 = (MaskKey bsl (Left * 8)) + (MaskKey bsr (Right * 8)),
+	Left = (UnmaskedLen rem 4) * 8,
+	Right = 32 - Left,
+	MaskKey2 = (MaskKey bsl Left) + (MaskKey bsr Right),
 	mask(Data, MaskKey2, <<>>).
 
 mask(<< O1:32, O2:32, O3:32, O4:32, Rest/bits >>, MaskKey, Acc) ->

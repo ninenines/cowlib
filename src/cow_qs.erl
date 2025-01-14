@@ -13,6 +13,7 @@
 %% OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 -module(cow_qs).
+-dialyzer(no_improper_lists).
 
 -export([parse_qs/1]).
 -export([qs/1]).

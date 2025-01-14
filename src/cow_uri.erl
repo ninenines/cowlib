@@ -13,6 +13,7 @@
 %% OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 -module(cow_uri).
+-dialyzer(no_improper_lists).
 
 -export([urldecode/1]).
 -export([urlencode/1]).

@@ -50,6 +50,7 @@ web_ext(<<"ico">>) -> {<<"image">>, <<"x-icon">>, []};
 web_ext(<<"jpeg">>) -> {<<"image">>, <<"jpeg">>, []};
 web_ext(<<"jpg">>) -> {<<"image">>, <<"jpeg">>, []};
 web_ext(<<"js">>) -> {<<"application">>, <<"javascript">>, []};
+web_ext(<<"mjs">>) -> {<<"text">>, <<"javascript">>, []};
 web_ext(<<"mp3">>) -> {<<"audio">>, <<"mpeg">>, []};
 web_ext(<<"mp4">>) -> {<<"video">>, <<"mp4">>, []};
 web_ext(<<"ogg">>) -> {<<"audio">>, <<"ogg">>, []};

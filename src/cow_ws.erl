@@ -859,13 +859,22 @@ payload_length(Payload) ->
 	end.
 
 deflate_frame(Payload, Deflate, TakeOver) ->
+	%% Compress all the octets of the payload of the message using DEFLATE.
 	Deflated = iolist_to_binary(zlib:deflate(Deflate, Payload, sync)),
 	case TakeOver of
 		no_takeover -> zlib:deflateReset(Deflate);
 		takeover -> ok
 	end,
+	%% Remove 4 octets (that are 0x00 0x00 0xff 0xff) from the tail end.
 	Len = byte_size(Deflated) - 4,
 	case Deflated of
-		<< Body:Len/binary, 0:8, 0:8, 255:8, 255:8 >> -> Body;
-		_ -> Deflated
+		<< Body:Len/binary, 0:8, 0:8, 255:8, 255:8 >> ->
+			Body;
+		<<>> ->
+			%% If the resulting data does not end with an empty DEFLATE block
+			%% with no compression (the "BTYPE" bits are set to 00), append an
+			%% empty DEFLATE block with no compression to the tail end.
+			<<0>>;
+		_ ->
+			Deflated
 	end.

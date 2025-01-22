@@ -445,7 +445,7 @@ frag_state(_, 1, _, FragState) -> FragState.
 	| {ok, close_code(), binary(), utf8_state(), binary()}
 	| {more, binary(), utf8_state()}
 	| {more, close_code(), binary(), utf8_state()}
-	| {error, badframe | badencoding}.
+	| {error, badframe | badencoding | badsize}.
 %% Empty last frame of compressed message.
 parse_payload(Data, _, Utf8State, _, _, 0, {fin, _, << 1:1, 0:2 >>},
 		#{inflate := Inflate, inflate_takeover := TakeOver}, _) ->
@@ -457,16 +457,27 @@ parse_payload(Data, _, Utf8State, _, _, 0, {fin, _, << 1:1, 0:2 >>},
 	{ok, <<>>, Utf8State, Data};
 %% Compressed fragmented frame.
 parse_payload(Data, MaskKey, Utf8State, ParsedLen, Type, Len, FragState = {_, _, << 1:1, 0:2 >>},
-		#{inflate := Inflate, inflate_takeover := TakeOver}, _) ->
+		Exts = #{inflate := Inflate, inflate_takeover := TakeOver}, _) ->
 	{Data2, Rest, Eof} = split_payload(Data, Len),
-	Payload = inflate_frame(unmask(Data2, MaskKey, ParsedLen), Inflate, TakeOver, FragState, Eof),
-	validate_payload(Payload, Rest, Utf8State, ParsedLen, Type, FragState, Eof);
+	MaxInflateSize = maps:get(max_inflate_size, Exts, infinity),
+	case inflate_frame(unmask(Data2, MaskKey, ParsedLen), Inflate, TakeOver, MaxInflateSize, FragState, Eof) of
+		{ok, Payload} ->
+			validate_payload(Payload, Rest, Utf8State, ParsedLen, Type, FragState, Eof);
+		Error ->
+			Error
+	end;
 %% Compressed frame.
 parse_payload(Data, MaskKey, Utf8State, ParsedLen, Type, Len, FragState,
-		#{inflate := Inflate, inflate_takeover := TakeOver}, << 1:1, 0:2 >>) when Type =:= text; Type =:= binary ->
+		Exts = #{inflate := Inflate, inflate_takeover := TakeOver}, << 1:1, 0:2 >>)
+		when Type =:= text; Type =:= binary ->
 	{Data2, Rest, Eof} = split_payload(Data, Len),
-	Payload = inflate_frame(unmask(Data2, MaskKey, ParsedLen), Inflate, TakeOver, FragState, Eof),
-	validate_payload(Payload, Rest, Utf8State, ParsedLen, Type, FragState, Eof);
+	MaxInflateSize = maps:get(max_inflate_size, Exts, infinity),
+	case inflate_frame(unmask(Data2, MaskKey, ParsedLen), Inflate, TakeOver, MaxInflateSize, FragState, Eof) of
+		{ok, Payload} ->
+			validate_payload(Payload, Rest, Utf8State, ParsedLen, Type, FragState, Eof);
+		Error ->
+			Error
+	end;
 %% Empty frame.
 parse_payload(Data, _, Utf8State, 0, _, 0, _, _, _)
 		when Utf8State =:= 0; Utf8State =:= undefined ->
@@ -549,16 +560,29 @@ mask(<< O:8 >>, MaskKey, Acc) ->
 mask(<<>>, _, Unmasked) ->
 	Unmasked.
 
-inflate_frame(Data, Inflate, TakeOver, FragState, true)
+inflate_frame(Data, Inflate, TakeOver, MaxInflateSize, FragState, true)
 		when FragState =:= undefined; element(1, FragState) =:= fin ->
-	Data2 = zlib:inflate(Inflate, << Data/binary, 0, 0, 255, 255 >>),
-	case TakeOver of
-		no_takeover -> zlib:inflateReset(Inflate);
-		takeover -> ok
-	end,
-	iolist_to_binary(Data2);
-inflate_frame(Data, Inflate, _T, _F, _E) ->
-	iolist_to_binary(zlib:inflate(Inflate, Data)).
+	case cow_deflate:inflate(Inflate, [Data, <<0, 0, 255, 255>>], MaxInflateSize) of
+		{ok, Data2} ->
+			case TakeOver of
+				no_takeover -> zlib:inflateReset(Inflate);
+				takeover -> ok
+			end,
+			{ok, iolist_to_binary(Data2)};
+		{error, data_error} ->
+			{error, badframe};
+		{error, size_error} ->
+			{error, badsize}
+	end;
+inflate_frame(Data, Inflate, _T, MaxInflateSize, _F, _E) ->
+	case cow_deflate:inflate(Inflate, Data, MaxInflateSize) of
+		{ok, Data2} ->
+			{ok, iolist_to_binary(Data2)};
+		{error, data_error} ->
+			{error, badframe};
+		{error, size_error} ->
+			{error, badsize}
+	end.
 
 %% The Utf8State variable can be set to 'undefined' to disable the validation.
 validate_payload(Payload, _, undefined, _, _, _, false) ->

@@ -40,6 +40,7 @@
 -export([parse_access_control_request_method/1]).
 -export([parse_age/1]).
 -export([parse_allow/1]).
+-export([allow/1]).
 % @todo -export([parse_alternates/1]). RFC2295
 % @todo -export([parse_authentication_info/1]). RFC2617
 -export([parse_authorization/1]).
@@ -1016,6 +1017,22 @@ horse_parse_allow() ->
 	horse:repeat(200000,
 		parse_allow(<<"GET, HEAD, PUT">>)
 	).
+-endif.
+
+-spec allow([binary()]) -> binary().
+allow([]) ->
+	<<>>;
+allow(Methods) ->
+	<< ", ", Allow/binary >> = << << ", ", M/binary >> || M <- Methods >>,
+	Allow.
+
+-ifdef(TEST).
+allow_test_() ->
+	Tests = [
+		{[], <<>>},
+		{[<<"GET">>, <<"HEAD">>, <<"PUT">>], <<"GET, HEAD, PUT">>}
+	],
+	[{R, fun() -> R = allow(V) end} || {V, R} <- Tests].
 -endif.
 
 %% Authorization header.

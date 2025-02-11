@@ -42,9 +42,20 @@
 -type head_fin() :: head_fin | head_nofin.
 -export_type([head_fin/0]).
 
+%% @todo The PRIORITY mechanism in HTTP/2 is de facto deprecated.
 -type exclusive() :: exclusive | shared.
 -type weight() :: 1..256.
--type settings() :: map().
+
+-type settings() :: #{
+	enable_connect_protocol => boolean(),
+	enable_push => boolean(),
+	header_table_size => 16384..16#7fffffff,
+	initial_window_size => 0..16#7fffffff,
+	max_concurrent_streams => 0..16#ffffffff,
+	max_frame_size => 16384..16777215,
+	max_header_list_size => 16384..16#ffffffff
+}.
+-export_type([settings/0]).
 
 -type error() :: no_error
 	| protocol_error

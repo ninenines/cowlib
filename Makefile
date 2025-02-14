@@ -107,6 +107,8 @@ prepare_tag:
 	$(verbose) echo -n "APP:                 "
 	$(verbose) grep -m1 vsn ebin/$(PROJECT).app | sed 's/	//g'
 	$(verbose) echo
+	$(verbose) echo -n "LICENSE: " ; head -n1 LICENSE
+	$(verbose) echo
 	$(verbose) echo "Dependencies:"
 	$(verbose) grep ^DEPS Makefile || echo "DEPS ="
 	$(verbose) grep ^dep_ Makefile || true

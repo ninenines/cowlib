@@ -15,6 +15,7 @@
 -module(cow_http2_machine).
 
 -export([init/2]).
+-export([terminate/1]).
 -export([init_stream/2]).
 -export([init_upgrade_stream/2]).
 -export([frame/2]).
@@ -256,6 +257,17 @@ setting_from_opt(Settings, Opts, OptName, SettingName, Default) ->
 	case maps:get(OptName, Opts, Default) of
 		Default -> Settings;
 		Value -> Settings#{SettingName => Value}
+	end.
+
+-spec terminate(State::http2_machine()) -> ok.
+terminate(#http2_machine{preface_timer=PTRef, settings_timer=STRef}) ->
+	case PTRef of
+		undefined -> ok;
+		_ -> erlang:cancel_timer(PTRef, [{async, true}, {info, false}])
+	end,
+	case STRef of
+		undefined -> ok;
+		_ -> erlang:cancel_timer(STRef, [{async, true}, {info, false}])
 	end.
 
 -spec init_stream(binary(), State)
@@ -996,11 +1008,11 @@ ignored_frame(State) ->
 timeout(preface_timeout, TRef, State=#http2_machine{preface_timer=TRef}) ->
 	{error, {connection_error, protocol_error,
 		'The preface was not received in a reasonable amount of time.'},
-		State};
+		State#http2_machine{preface_timer=undefined}};
 timeout(settings_timeout, TRef, State=#http2_machine{settings_timer=TRef}) ->
 	{error, {connection_error, settings_timeout,
 		'The SETTINGS ack was not received within the configured time. (RFC7540 6.5.3)'},
-		State};
+		State#http2_machine{settings_timer=undefined}};
 timeout(_, _, State) ->
 	{ok, State}.
 

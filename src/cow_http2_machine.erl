@@ -261,11 +261,11 @@ setting_from_opt(Settings, Opts, OptName, SettingName, Default) ->
 
 -spec terminate(State::http2_machine()) -> ok.
 terminate(#http2_machine{preface_timer=PTRef, settings_timer=STRef}) ->
-	case PTRef of
+	_ = case PTRef of
 		undefined -> ok;
 		_ -> erlang:cancel_timer(PTRef, [{async, true}, {info, false}])
 	end,
-	case STRef of
+	_ = case STRef of
 		undefined -> ok;
 		_ -> erlang:cancel_timer(STRef, [{async, true}, {info, false}])
 	end.

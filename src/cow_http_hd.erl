@@ -118,6 +118,10 @@
 % @todo -export([parse_via/1]). RFC7230
 % @todo -export([parse_want_digest/1]). RFC3230
 % @todo -export([parse_warning/1]). RFC7234
+-export([parse_wt_available_protocols/1]).
+-export([wt_available_protocols/1]).
+-export([parse_wt_protocol/1]).
+-export([wt_protocol/1]).
 -export([parse_www_authenticate/1]).
 % @todo -export([parse_x_content_duration/1]). Gecko/MDN (value: float)
 % @todo -export([parse_x_dns_prefetch_control/1]). Various (value: "on"|"off")
@@ -3392,6 +3396,40 @@ parse_vary_error_test_() ->
 	],
 	[{V, fun() -> {'EXIT', _} = (catch parse_vary(V)) end} || V <- Tests].
 -endif.
+
+%% WT-Available-Protocols header.
+
+-spec parse_wt_available_protocols(binary()) -> [binary()].
+
+parse_wt_available_protocols(Protocols) ->
+	List = cow_http_struct_hd:parse_list(Protocols),
+	[case Item of
+		{item, {string, Value}, _} -> Value
+	end || Item <- List].
+
+-spec wt_available_protocols([binary()]) -> iolist().
+
+wt_available_protocols(Protocols) ->
+	cow_http_struct_hd:list([
+		{item, {string, Value}, []}
+	|| Value <- Protocols]).
+
+%% @todo Tests.
+
+%% WT-Protocol header.
+
+-spec parse_wt_protocol(binary()) -> binary().
+
+parse_wt_protocol(WTProtocol) ->
+	{item, {string, Value}, _} = cow_http_struct_hd:parse_item(WTProtocol),
+	Value.
+
+-spec wt_protocol(iodata()) -> iolist().
+
+wt_protocol(WTProtocol) ->
+	cow_http_struct_hd:item({item, {string, WTProtocol}, []}).
+
+%% @todo Tests.
 
 %% WWW-Authenticate header.
 %%

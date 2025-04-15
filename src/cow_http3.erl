@@ -17,12 +17,16 @@
 %% Parsing.
 -export([parse/1]).
 -export([parse_unidi_stream_header/1]).
+-export([parse_datagram/1]).
 -export([code_to_error/1]).
+-export([parse_int/1]).
 
 %% Building.
 -export([data/1]).
 -export([headers/1]).
 -export([settings/1]).
+-export([webtransport_stream_header/2]).
+-export([datagram/2]).
 -export([error_to_code/1]).
 -export([encode_int/1]).
 
@@ -32,13 +36,24 @@
 -type push_id() :: non_neg_integer().
 -export_type([push_id/0]).
 
+-type h3_non_neg_integer() :: 0..16#3fffffffffffffff.
+
 -type settings() :: #{
-	qpack_max_table_capacity => 0..16#3fffffffffffffff,
-	max_field_section_size => 0..16#3fffffffffffffff,
-	qpack_blocked_streams => 0..16#3fffffffffffffff,
-	enable_connect_protocol => boolean()
+	qpack_max_table_capacity => h3_non_neg_integer(),
+	max_field_section_size => h3_non_neg_integer(),
+	qpack_blocked_streams => h3_non_neg_integer(),
+	enable_connect_protocol => boolean(),
+	%% Extensions.
+	h3_datagram => boolean(),
+	webtransport_max_sessions => h3_non_neg_integer(),
+	webtransport_initial_max_streams_uni => h3_non_neg_integer(),
+	webtransport_initial_max_streams_bidi => h3_non_neg_integer(),
+	webtransport_initial_max_data => h3_non_neg_integer()
 }.
 -export_type([settings/0]).
+
+-type wt_app_error_code() :: 0..16#ffffffff.
+-export_type([wt_app_error_code/0]).
 
 -type error() :: h3_no_error
 	| h3_general_protocol_error
@@ -56,7 +71,12 @@
 	| h3_request_incomplete
 	| h3_message_error
 	| h3_connect_error
-	| h3_version_fallback.
+	| h3_version_fallback
+	%% Extensions.
+	| h3_datagram_error
+	| webtransport_buffered_stream_rejected
+	| webtransport_session_gone
+	| {webtransport_application_error, wt_app_error_code()}.
 -export_type([error/0]).
 
 -type frame() :: {data, binary()}
@@ -72,6 +92,7 @@
 
 -spec parse(binary())
 	-> {ok, frame(), binary()}
+	| {webtransport_stream_header, stream_id(), binary()}
 	| {more, {data, binary()} | ignore, non_neg_integer()}
 	| {ignore, binary()}
 	| {connection_error, h3_frame_error | h3_frame_unexpected | h3_settings_error, atom()}
@@ -191,6 +212,19 @@ parse(<<13, _/bits>>) ->
 	{connection_error, h3_frame_error,
 		'MAX_PUSH_ID frames payload MUST be 1, 2, 4 or 8 bytes wide. (RFC9114 7.1, RFC9114 7.2.6)'};
 %%
+%% WebTransport stream header.
+%%
+parse(<<1:2, 16#41:14, 0:2, SessionID:6, Rest/bits>>) ->
+	{webtransport_stream_header, SessionID, Rest};
+parse(<<1:2, 16#41:14, 1:2, SessionID:14, Rest/bits>>) ->
+	{webtransport_stream_header, SessionID, Rest};
+parse(<<1:2, 16#41:14, 2:2, SessionID:30, Rest/bits>>) ->
+	{webtransport_stream_header, SessionID, Rest};
+parse(<<1:2, 16#41:14, 3:2, SessionID:62, Rest/bits>>) ->
+	{webtransport_stream_header, SessionID, Rest};
+parse(<<16#41, _/bits>>) ->
+	more;
+%%
 %% HTTP/2 frame types must be rejected.
 %%
 parse(<<2, _/bits>>) ->
@@ -294,6 +328,26 @@ parse_settings_id_val(Rest, Len, Settings, Identifier, Value) ->
 		8 ->
 			{connection_error, h3_settings_error,
 				'The SETTINGS_ENABLE_CONNECT_PROTOCOL value MUST be 0 or 1. (RFC9220 3, RFC8441 3)'};
+		%% SETTINGS_H3_DATAGRAM (RFC9297).
+		16#33 when Value =:= 0 ->
+			parse_settings_key_val(Rest, Len, Settings, h3_datagram, false);
+		16#33 when Value =:= 1 ->
+			parse_settings_key_val(Rest, Len, Settings, h3_datagram, true);
+		16#33 ->
+			{connection_error, h3_settings_error,
+				'The SETTINGS_H3_DATAGRAM value MUST be 0 or 1. (RFC9297 2.1.1)'};
+		%% SETTINGS_WEBTRANSPORT_MAX_SESSIONS (draft-ietf-webtrans-http3).
+		16#c671706a ->
+			parse_settings_key_val(Rest, Len, Settings, webtransport_max_sessions, Value);
+		%% SETTINGS_WEBTRANSPORT_INITIAL_MAX_STREAMS_UNI (draft-ietf-webtrans-http3).
+		16#2b64 ->
+			parse_settings_key_val(Rest, Len, Settings, webtransport_initial_max_streams_uni, Value);
+		%% SETTINGS_WEBTRANSPORT_INITIAL_MAX_STREAMS_BIDI (draft-ietf-webtrans-http3).
+		16#2b65 ->
+			parse_settings_key_val(Rest, Len, Settings, webtransport_initial_max_streams_bidi, Value);
+		%% SETTINGS_WEBTRANSPORT_INITIAL_MAX_DATA (draft-ietf-webtrans-http3).
+		16#2b61 ->
+			parse_settings_key_val(Rest, Len, Settings, webtransport_initial_max_data, Value);
 		_ when Identifier < 6 ->
 			{connection_error, h3_settings_error,
 				'HTTP/2 setting not defined for HTTP/3 must be rejected. (RFC9114 7.2.4.1)'};
@@ -335,8 +389,9 @@ parse_ignore(Data, Len) ->
 	end.
 
 -spec parse_unidi_stream_header(binary())
-	-> {ok, control | push | encoder | decoder, binary()}
-	| {undefined, binary()}.
+	-> {ok, control | push | encoder | decoder | {webtransport, stream_id()}, binary()}
+	| {undefined, binary()}
+	| more.
 
 parse_unidi_stream_header(<<0, Rest/bits>>) ->
 	{ok, control, Rest};
@@ -346,6 +401,18 @@ parse_unidi_stream_header(<<2, Rest/bits>>) ->
 	{ok, encoder, Rest};
 parse_unidi_stream_header(<<3, Rest/bits>>) ->
 	{ok, decoder, Rest};
+%% WebTransport unidi streams.
+parse_unidi_stream_header(<<1:2, 16#54:14, 0:2, SessionID:6, Rest/bits>>) ->
+	{ok, {webtransport, SessionID}, Rest};
+parse_unidi_stream_header(<<1:2, 16#54:14, 1:2, SessionID:14, Rest/bits>>) ->
+	{ok, {webtransport, SessionID}, Rest};
+parse_unidi_stream_header(<<1:2, 16#54:14, 2:2, SessionID:30, Rest/bits>>) ->
+	{ok, {webtransport, SessionID}, Rest};
+parse_unidi_stream_header(<<1:2, 16#54:14, 3:2, SessionID:62, Rest/bits>>) ->
+	{ok, {webtransport, SessionID}, Rest};
+parse_unidi_stream_header(<<1:2, 16#54:14, _/bits>>) ->
+	more;
+%% Unknown unidi streams.
 parse_unidi_stream_header(<<0:2, _:6, Rest/bits>>) ->
 	{undefined, Rest};
 parse_unidi_stream_header(<<1:2, _:14, Rest/bits>>) ->
@@ -354,6 +421,13 @@ parse_unidi_stream_header(<<2:2, _:30, Rest/bits>>) ->
 	{undefined, Rest};
 parse_unidi_stream_header(<<3:2, _:62, Rest/bits>>) ->
 	{undefined, Rest}.
+
+-spec parse_datagram(binary()) -> {stream_id(), binary()}.
+
+parse_datagram(Data) ->
+	{QuarterID, Rest} = parse_int(Data),
+	SessionID = QuarterID * 4,
+	{SessionID, Rest}.
 
 -spec code_to_error(non_neg_integer()) -> error().
 
@@ -374,9 +448,35 @@ code_to_error(16#010d) -> h3_request_incomplete;
 code_to_error(16#010e) -> h3_message_error;
 code_to_error(16#010f) -> h3_connect_error;
 code_to_error(16#0110) -> h3_version_fallback;
+%% Extensions.
+code_to_error(16#33) -> h3_datagram_error;
+code_to_error(16#3994bd84) -> webtransport_buffered_stream_rejected;
+code_to_error(16#170d7b68) -> webtransport_session_gone;
+code_to_error(Code) when Code >= 16#52e4a40fa8db, Code =< 16#52e5ac983162 ->
+	case (Code - 16#21) rem 16#1f of
+		0 -> h3_no_error;
+		_ ->
+			%% @todo We need tests for this.
+			Shifted = Code - 16#52e4a40fa8db,
+			{webtransport_application_error,
+				Shifted - Shifted div 16#1f}
+	end;
 %% Unknown/reserved error codes must be treated
 %% as equivalent to H3_NO_ERROR.
 code_to_error(_) -> h3_no_error.
+
+-spec parse_int(binary()) -> {non_neg_integer(), binary()} | more.
+
+parse_int(<<0:2, Int:6, Rest/bits>>) ->
+	{Int, Rest};
+parse_int(<<1:2, Int:14, Rest/bits>>) ->
+	{Int, Rest};
+parse_int(<<2:2, Int:30, Rest/bits>>) ->
+	{Int, Rest};
+parse_int(<<3:2, Int:62, Rest/bits>>) ->
+	{Int, Rest};
+parse_int(_) ->
+	more.
 
 %% Building.
 
@@ -414,11 +514,44 @@ settings_payload(Settings) ->
 		qpack_blocked_streams -> [encode_int(1), encode_int(Value)];
 		%% SETTINGS_ENABLE_CONNECT_PROTOCOL (RFC9220).
 		enable_connect_protocol when Value -> [encode_int(8), encode_int(1)];
-		enable_connect_protocol -> [encode_int(8), encode_int(0)]
+		enable_connect_protocol -> [encode_int(8), encode_int(0)];
+		%% SETTINGS_H3_DATAGRAM (RFC9297).
+		h3_datagram when Value -> [encode_int(16#33), encode_int(1)];
+		h3_datagram -> [encode_int(16#33), encode_int(0)];
+		%% SETTINGS_ENABLE_WEBTRANSPORT (draft-ietf-webtrans-http3-02, for compatibility).
+		enable_webtransport when Value -> [encode_int(16#2b603742), encode_int(1)];
+		enable_webtransport -> [encode_int(16#2b603742), encode_int(0)];
+		%% SETTINGS_WEBTRANSPORT_MAX_SESSIONS (draft-ietf-webtrans-http3).
+		webtransport_max_sessions when Value =:= 0 -> <<>>;
+		webtransport_max_sessions -> [encode_int(16#c671706a), encode_int(Value)];
+		%% SETTINGS_WEBTRANSPORT_INITIAL_MAX_STREAMS_UNI (draft-ietf-webtrans-http3).
+		webtransport_initial_max_streams_uni when Value =:= 0 -> <<>>;
+		webtransport_initial_max_streams_uni -> [encode_int(16#2b64), encode_int(Value)];
+		%% SETTINGS_WEBTRANSPORT_INITIAL_MAX_STREAMS_BIDI (draft-ietf-webtrans-http3).
+		webtransport_initial_max_streams_bidi when Value =:= 0 -> <<>>;
+		webtransport_initial_max_streams_bidi -> [encode_int(16#2b65), encode_int(Value)];
+		%% SETTINGS_WEBTRANSPORT_INITIAL_MAX_DATA (draft-ietf-webtrans-http3).
+		webtransport_initial_max_data when Value =:= 0 -> <<>>;
+		webtransport_initial_max_data -> [encode_int(16#2b61), encode_int(Value)]
 	end || {Key, Value} <- maps:to_list(Settings)],
 	%% Include one reserved identifier in addition.
 	ReservedType = 16#1f * (rand:uniform(148764065110560900) - 1) + 16#21,
 	[encode_int(ReservedType), encode_int(rand:uniform(15384) - 1)|Payload].
+
+-spec webtransport_stream_header(stream_id(), unidi | bidi) -> iolist().
+
+webtransport_stream_header(SessionID, StreamType) ->
+	Signal = case StreamType of
+		unidi -> 16#54;
+		bidi -> 16#41
+	end,
+	[encode_int(Signal), encode_int(SessionID)].
+
+-spec datagram(stream_id(), iodata()) -> iolist().
+
+datagram(SessionID, Data) ->
+	QuarterID = SessionID div 4,
+	[encode_int(QuarterID), Data].
 
 -spec error_to_code(error()) -> non_neg_integer().
 
@@ -444,9 +577,15 @@ error_to_code(h3_request_cancelled) -> 16#010c;
 error_to_code(h3_request_incomplete) -> 16#010d;
 error_to_code(h3_message_error) -> 16#010e;
 error_to_code(h3_connect_error) -> 16#010f;
-error_to_code(h3_version_fallback) -> 16#0110.
+error_to_code(h3_version_fallback) -> 16#0110;
+%% Extensions.
+error_to_code(h3_datagram_error) -> 16#33;
+error_to_code(webtransport_buffered_stream_rejected) -> 16#3994bd84;
+error_to_code(webtransport_session_gone) -> 16#170d7b68;
+error_to_code({webtransport_application_error, AppErrorCode}) ->
+	16#52e4a40fa8db + AppErrorCode + AppErrorCode div 16#1e.
 
--spec encode_int(0..16#3fffffffffffffff) -> binary().
+-spec encode_int(h3_non_neg_integer()) -> binary().
 
 encode_int(I) when I < 64 ->
 	<<0:2, I:6>>;

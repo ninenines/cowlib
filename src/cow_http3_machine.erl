@@ -20,6 +20,9 @@
 -export([set_unidi_remote_stream_type/3]).
 -export([init_bidi_stream/2]).
 -export([init_bidi_stream/3]).
+-export([become_webtransport_session/2]).
+-export([become_webtransport_stream/3]).
+-export([close_webtransport_session/2]).
 -export([close_bidi_stream_for_sending/2]).
 -export([close_stream/2]).
 -export([unidi_data/4]).
@@ -42,6 +45,9 @@
 
 -type unidi_stream_dir() :: unidi_local | unidi_remote.
 -type unidi_stream_type() :: control | push | encoder | decoder.
+
+%% All stream types must have `id` as the first element
+%% of the record as the more general functions require it there.
 
 -record(unidi_stream, {
 	id :: cow_http3:stream_id(),
@@ -74,7 +80,21 @@
 	te :: undefined | binary()
 }).
 
--type stream() :: #unidi_stream{} | #bidi_stream{}.
+-record(wt_session, {
+	id :: cow_http3:stream_id()
+}).
+
+-record(wt_stream, {
+	id :: cow_http3:stream_id(),
+
+	%% All WT streams belong to a single WT session.
+	session_id :: cow_http3:stream_id(),
+
+	%% Unidi stream direction (local = we initiated) or bidi.
+	dir :: unidi_stream_dir() | bidi
+}).
+
+-type stream() :: #unidi_stream{} | #bidi_stream{} | #wt_session{} | #wt_stream{}.
 
 -record(http3_machine, {
 	%% Whether the HTTP/3 endpoint is a client or a server.
@@ -132,8 +152,15 @@ init_settings(Opts) ->
 	S1 = setting_from_opt(S0, Opts, max_decode_blocked_streams,
 		qpack_blocked_streams, 0),
 	%% @todo max_field_section_size
-	setting_from_opt(S1, Opts, enable_connect_protocol,
-		enable_connect_protocol, false).
+	S2 = setting_from_opt(S1, Opts, enable_connect_protocol,
+		enable_connect_protocol, false),
+	S3 = setting_from_opt(S2, Opts, h3_datagram,
+		h3_datagram, false),
+	%% For compatibility with draft-02.
+	S4 = setting_from_opt(S3, Opts, enable_webtransport,
+		enable_webtransport, false),
+	setting_from_opt(S4, Opts, webtransport_max_sessions,
+		webtransport_max_sessions, 0).
 
 setting_from_opt(Settings, Opts, OptName, SettingName, Default) ->
 	case maps:get(OptName, Opts, Default) of
@@ -226,6 +253,49 @@ init_bidi_stream(StreamID, Method, State=#http3_machine{streams=Streams}) ->
 	State#http3_machine{streams=Streams#{
 		StreamID => #bidi_stream{id=StreamID, method=Method}
 	}}.
+
+-spec become_webtransport_session(cow_http3:stream_id(), State)
+	-> State when State::http3_machine().
+
+become_webtransport_session(StreamID, State=#http3_machine{streams=Streams}) ->
+	#{StreamID := #bidi_stream{}} = Streams,
+	stream_store(#wt_session{id=StreamID}, State).
+
+-spec become_webtransport_stream(cow_http3:stream_id(), cow_http3:stream_id(), State)
+	-> {ok, State} when State::http3_machine().
+
+become_webtransport_stream(StreamID, SessionID, State0) ->
+	%% First we check whether SessionID really exists and is a WT session.
+	case stream_get(SessionID, State0) of
+		#wt_session{} ->
+			%% The stream becomes a WT stream tied to SessionID.
+			Dir = case stream_get(StreamID, State0) of
+				#unidi_stream{dir=Dir0} -> Dir0;
+				%% @todo The bidi stream must be in idle state.
+				#bidi_stream{} -> bidi
+			end,
+			State = stream_store(#wt_stream{
+				id=StreamID, session_id=SessionID, dir=Dir},
+				State0),
+			{ok, State}
+		%% @todo Error conditions.
+	end.
+
+-spec close_webtransport_session(cow_http3:stream_id(), State)
+	-> State when State::http3_machine().
+
+close_webtransport_session(SessionID, State=#http3_machine{streams=Streams0}) ->
+	#{SessionID := #wt_session{}} = Streams0,
+	%% Remove all streams belonging to the session.
+	Streams = maps:filtermap(fun
+		(_, #wt_session{id=StreamID}) when StreamID =:= SessionID ->
+			false;
+		(_, #wt_stream{session_id=StreamID}) when StreamID =:= SessionID ->
+			false;
+		(_, _) ->
+			true
+	end, Streams0),
+	State#http3_machine{streams=Streams}.
 
 -spec close_bidi_stream_for_sending(cow_http3:stream_id(), State)
 	-> State when State::http3_machine().
@@ -399,6 +469,9 @@ headers_process(Stream=#bidi_stream{method=ReqMethod},
 		State=#http3_machine{local_settings=LocalSettings},
 		IsFin, Type, DecData, Headers0) ->
 	case cow_http:process_headers(Headers0, Type, ReqMethod, IsFin, LocalSettings) of
+		%% @todo If this is a webtransport request we also need to check a few
+		%% other things such as h3_datagram, max_sessions and QUIC's max_datagram_size options.
+		%% @todo So cow_http3_machine needs to know about at least some QUIC options.
 		{headers, Headers, PseudoHeaders, Len} ->
 			headers_frame(Stream, State, IsFin, Type, DecData, Headers, PseudoHeaders, Len);
 %		{push_promise, Headers, PseudoHeaders} -> %% @todo Implement push promises.
@@ -714,8 +787,5 @@ stream_get(StreamID, #http3_machine{streams=Streams}) ->
 	maps:get(StreamID, Streams, undefined).
 
 stream_store(Stream, State=#http3_machine{streams=Streams}) ->
-	StreamID = case Stream of
-		#bidi_stream{id=StreamID0} -> StreamID0;
-		#unidi_stream{id=StreamID0} -> StreamID0
-	end,
+	StreamID = element(2, Stream),
 	State#http3_machine{streams=Streams#{StreamID => Stream}}.

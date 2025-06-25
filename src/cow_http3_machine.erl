@@ -159,8 +159,8 @@ init_settings(Opts) ->
 	%% For compatibility with draft-02.
 	S4 = setting_from_opt(S3, Opts, enable_webtransport,
 		enable_webtransport, false),
-	setting_from_opt(S4, Opts, webtransport_max_sessions,
-		webtransport_max_sessions, 0).
+	setting_from_opt(S4, Opts, wt_max_sessions,
+		wt_max_sessions, 0).
 
 setting_from_opt(Settings, Opts, OptName, SettingName, Default) ->
 	case maps:get(OptName, Opts, Default) of
@@ -469,7 +469,7 @@ headers_process(Stream=#bidi_stream{method=ReqMethod},
 		State=#http3_machine{local_settings=LocalSettings},
 		IsFin, Type, DecData, Headers0) ->
 	case cow_http:process_headers(Headers0, Type, ReqMethod, IsFin, LocalSettings) of
-		%% @todo If this is a webtransport request we also need to check a few
+		%% @todo If this is a WebTransport request we also need to check a few
 		%% other things such as h3_datagram, max_sessions and QUIC's max_datagram_size options.
 		%% @todo So cow_http3_machine needs to know about at least some QUIC options.
 		{headers, Headers, PseudoHeaders, Len} ->

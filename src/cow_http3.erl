@@ -45,10 +45,10 @@
 	enable_connect_protocol => boolean(),
 	%% Extensions.
 	h3_datagram => boolean(),
-	webtransport_max_sessions => h3_non_neg_integer(),
-	webtransport_initial_max_streams_uni => h3_non_neg_integer(),
-	webtransport_initial_max_streams_bidi => h3_non_neg_integer(),
-	webtransport_initial_max_data => h3_non_neg_integer()
+	wt_max_sessions => h3_non_neg_integer(),
+	wt_initial_max_streams_uni => h3_non_neg_integer(),
+	wt_initial_max_streams_bidi => h3_non_neg_integer(),
+	wt_initial_max_data => h3_non_neg_integer()
 }.
 -export_type([settings/0]).
 
@@ -74,9 +74,9 @@
 	| h3_version_fallback
 	%% Extensions.
 	| h3_datagram_error
-	| webtransport_buffered_stream_rejected
-	| webtransport_session_gone
-	| {webtransport_application_error, wt_app_error_code()}.
+	| wt_buffered_stream_rejected
+	| wt_session_gone
+	| {wt_application_error, wt_app_error_code()}.
 -export_type([error/0]).
 
 -type frame() :: {data, binary()}
@@ -336,18 +336,18 @@ parse_settings_id_val(Rest, Len, Settings, Identifier, Value) ->
 		16#33 ->
 			{connection_error, h3_settings_error,
 				'The SETTINGS_H3_DATAGRAM value MUST be 0 or 1. (RFC9297 2.1.1)'};
-		%% SETTINGS_WEBTRANSPORT_MAX_SESSIONS (draft-ietf-webtrans-http3).
+		%% SETTINGS_WT_MAX_SESSIONS (draft-ietf-webtrans-http3).
 		16#c671706a ->
-			parse_settings_key_val(Rest, Len, Settings, webtransport_max_sessions, Value);
-		%% SETTINGS_WEBTRANSPORT_INITIAL_MAX_STREAMS_UNI (draft-ietf-webtrans-http3).
+			parse_settings_key_val(Rest, Len, Settings, wt_max_sessions, Value);
+		%% SETTINGS_WT_INITIAL_MAX_STREAMS_UNI (draft-ietf-webtrans-http3).
 		16#2b64 ->
-			parse_settings_key_val(Rest, Len, Settings, webtransport_initial_max_streams_uni, Value);
-		%% SETTINGS_WEBTRANSPORT_INITIAL_MAX_STREAMS_BIDI (draft-ietf-webtrans-http3).
+			parse_settings_key_val(Rest, Len, Settings, wt_initial_max_streams_uni, Value);
+		%% SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI (draft-ietf-webtrans-http3).
 		16#2b65 ->
-			parse_settings_key_val(Rest, Len, Settings, webtransport_initial_max_streams_bidi, Value);
-		%% SETTINGS_WEBTRANSPORT_INITIAL_MAX_DATA (draft-ietf-webtrans-http3).
+			parse_settings_key_val(Rest, Len, Settings, wt_initial_max_streams_bidi, Value);
+		%% SETTINGS_WT_INITIAL_MAX_DATA (draft-ietf-webtrans-http3).
 		16#2b61 ->
-			parse_settings_key_val(Rest, Len, Settings, webtransport_initial_max_data, Value);
+			parse_settings_key_val(Rest, Len, Settings, wt_initial_max_data, Value);
 		_ when Identifier < 6 ->
 			{connection_error, h3_settings_error,
 				'HTTP/2 setting not defined for HTTP/3 must be rejected. (RFC9114 7.2.4.1)'};
@@ -450,15 +450,15 @@ code_to_error(16#010f) -> h3_connect_error;
 code_to_error(16#0110) -> h3_version_fallback;
 %% Extensions.
 code_to_error(16#33) -> h3_datagram_error;
-code_to_error(16#3994bd84) -> webtransport_buffered_stream_rejected;
-code_to_error(16#170d7b68) -> webtransport_session_gone;
+code_to_error(16#3994bd84) -> wt_buffered_stream_rejected;
+code_to_error(16#170d7b68) -> wt_session_gone;
 code_to_error(Code) when Code >= 16#52e4a40fa8db, Code =< 16#52e5ac983162 ->
 	case (Code - 16#21) rem 16#1f of
 		0 -> h3_no_error;
 		_ ->
 			%% @todo We need tests for this.
 			Shifted = Code - 16#52e4a40fa8db,
-			{webtransport_application_error,
+			{wt_application_error,
 				Shifted - Shifted div 16#1f}
 	end;
 %% Unknown/reserved error codes must be treated
@@ -521,18 +521,18 @@ settings_payload(Settings) ->
 		%% SETTINGS_ENABLE_WEBTRANSPORT (draft-ietf-webtrans-http3-02, for compatibility).
 		enable_webtransport when Value -> [encode_int(16#2b603742), encode_int(1)];
 		enable_webtransport -> [encode_int(16#2b603742), encode_int(0)];
-		%% SETTINGS_WEBTRANSPORT_MAX_SESSIONS (draft-ietf-webtrans-http3).
-		webtransport_max_sessions when Value =:= 0 -> <<>>;
-		webtransport_max_sessions -> [encode_int(16#c671706a), encode_int(Value)];
-		%% SETTINGS_WEBTRANSPORT_INITIAL_MAX_STREAMS_UNI (draft-ietf-webtrans-http3).
-		webtransport_initial_max_streams_uni when Value =:= 0 -> <<>>;
-		webtransport_initial_max_streams_uni -> [encode_int(16#2b64), encode_int(Value)];
-		%% SETTINGS_WEBTRANSPORT_INITIAL_MAX_STREAMS_BIDI (draft-ietf-webtrans-http3).
-		webtransport_initial_max_streams_bidi when Value =:= 0 -> <<>>;
-		webtransport_initial_max_streams_bidi -> [encode_int(16#2b65), encode_int(Value)];
-		%% SETTINGS_WEBTRANSPORT_INITIAL_MAX_DATA (draft-ietf-webtrans-http3).
-		webtransport_initial_max_data when Value =:= 0 -> <<>>;
-		webtransport_initial_max_data -> [encode_int(16#2b61), encode_int(Value)]
+		%% SETTINGS_WT_MAX_SESSIONS (draft-ietf-webtrans-http3).
+		wt_max_sessions when Value =:= 0 -> <<>>;
+		wt_max_sessions -> [encode_int(16#c671706a), encode_int(Value)];
+		%% SETTINGS_WT_INITIAL_MAX_STREAMS_UNI (draft-ietf-webtrans-http3).
+		wt_initial_max_streams_uni when Value =:= 0 -> <<>>;
+		wt_initial_max_streams_uni -> [encode_int(16#2b64), encode_int(Value)];
+		%% SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI (draft-ietf-webtrans-http3).
+		wt_initial_max_streams_bidi when Value =:= 0 -> <<>>;
+		wt_initial_max_streams_bidi -> [encode_int(16#2b65), encode_int(Value)];
+		%% SETTINGS_WT_INITIAL_MAX_DATA (draft-ietf-webtrans-http3).
+		wt_initial_max_data when Value =:= 0 -> <<>>;
+		wt_initial_max_data -> [encode_int(16#2b61), encode_int(Value)]
 	end || {Key, Value} <- maps:to_list(Settings)],
 	%% Include one reserved identifier in addition.
 	ReservedType = 16#1f * (rand:uniform(148764065110560900) - 1) + 16#21,
@@ -580,9 +580,9 @@ error_to_code(h3_connect_error) -> 16#010f;
 error_to_code(h3_version_fallback) -> 16#0110;
 %% Extensions.
 error_to_code(h3_datagram_error) -> 16#33;
-error_to_code(webtransport_buffered_stream_rejected) -> 16#3994bd84;
-error_to_code(webtransport_session_gone) -> 16#170d7b68;
-error_to_code({webtransport_application_error, AppErrorCode}) ->
+error_to_code(wt_buffered_stream_rejected) -> 16#3994bd84;
+error_to_code(wt_session_gone) -> 16#170d7b68;
+error_to_code({wt_application_error, AppErrorCode}) ->
 	16#52e4a40fa8db + AppErrorCode + AppErrorCode div 16#1e.
 
 -spec encode_int(h3_non_neg_integer()) -> binary().

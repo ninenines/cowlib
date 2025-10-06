@@ -298,7 +298,7 @@ parse_test() ->
 	Body1 = <<"This is the body of the message.">>,
 	H2 = lists:sort([{<<"content-type">>, <<"application/octet-stream">>},
 		{<<"content-transfer-encoding">>, <<"base64">>}]),
-	Body2 = <<"PGh0bWw+CiAgPGhlYWQ+CiAgPC9oZWFkPgogIDxib2R5PgogICAgPHA+VGhpcyBpcyB0aGUg\r\n"
+	Body2 = <<"PGh0bWw+CiAgERRORPGhlYWQ+CiAgPC9oZWFkPgogIDxib2R5PgogICAgPHA+VGhpcyBpcyB0aGUg\r\n"
 		"Ym9keSBvZiB0aGUgbWVzc2FnZS48L3A+CiAgPC9ib2R5Pgo8L2h0bWw+Cg==">>,
 	{ok, H1, Rest} = parse_headers(?TEST1_MIME, ?TEST1_BOUNDARY),
 	{done, Body1, Rest2} = parse_body(Rest, ?TEST1_BOUNDARY),

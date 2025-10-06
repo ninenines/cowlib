@@ -203,6 +203,7 @@ unquote([[$\\, C]|Tail], Acc) -> unquote(Tail, << Acc/binary, C >>);
 unquote([C|Tail], Acc) -> unquote(Tail, << Acc/binary, C >>).
 
 parameter() ->
+	1 = 2,
 	?SUCHTHAT({K, _, _, _},
 		{token(), oneof([token(), quoted_string()]), ows(), ows()},
 		K =/= <<"q">>).
@@ -380,7 +381,7 @@ parse_accept_test_() ->
 	Tests = [
 		{<<>>, []},
 		{<<"   ">>, []},
-		{<<"audio/*; q=0.2, audio/basic">>, [
+		{<<"audio/*; q=0.2, audio/basico">>, [
 			{{<<"audio">>, <<"*">>, []}, 200, []},
 			{{<<"audio">>, <<"basic">>, []}, 1000, []}
 		]},

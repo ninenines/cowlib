@@ -168,60 +168,96 @@ horse_parse_status_line_other() ->
 -endif.
 
 %% @doc Parse the list of headers.
+%%
+%% Optimized to use skip/len pattern instead of byte-by-byte binary
+%% accumulation. This avoids O(n^2) allocation overhead for header values.
 
 -spec parse_headers(binary()) -> {[{binary(), binary()}], binary()}.
 parse_headers(Data) ->
-	parse_header(Data, []).
+	parse_header(Data, Data, []).
 
-parse_header(<< $\r, $\n, Rest/bits >>, Acc) ->
+%% parse_header/3: Data is current position, Orig is original binary for extraction
+parse_header(<< $\r, $\n, Rest/bits >>, _Orig, Acc) ->
 	{lists:reverse(Acc), Rest};
-parse_header(Data, Acc) ->
-	parse_hd_name(Data, Acc, <<>>).
+parse_header(Data, Orig, Acc) ->
+	parse_hd_name(Data, Orig, Acc, <<>>).
 
-parse_hd_name(<< C, Rest/bits >>, Acc, SoFar) ->
+%% Header name parsing - still uses binary accumulation for ?LOWER macro
+%% (names are typically short, so this is less impactful)
+parse_hd_name(<< C, Rest/bits >>, Orig, Acc, SoFar) ->
 	case C of
-		$: -> parse_hd_before_value(Rest, Acc, SoFar);
-		$\s -> parse_hd_name_ws(Rest, Acc, SoFar);
-		$\t -> parse_hd_name_ws(Rest, Acc, SoFar);
-		_ -> ?LOWER(parse_hd_name, Rest, Acc, SoFar)
+		$: -> parse_hd_before_value(Rest, Orig, Acc, SoFar);
+		$\s -> parse_hd_name_ws(Rest, Orig, Acc, SoFar);
+		$\t -> parse_hd_name_ws(Rest, Orig, Acc, SoFar);
+		_ -> ?LOWER(parse_hd_name, Rest, Orig, Acc, SoFar)
 	end.
 
-parse_hd_name_ws(<< C, Rest/bits >>, Acc, Name) ->
+parse_hd_name_ws(<< C, Rest/bits >>, Orig, Acc, Name) ->
 	case C of
-		$: -> parse_hd_before_value(Rest, Acc, Name);
-		$\s -> parse_hd_name_ws(Rest, Acc, Name);
-		$\t -> parse_hd_name_ws(Rest, Acc, Name)
+		$: -> parse_hd_before_value(Rest, Orig, Acc, Name);
+		$\s -> parse_hd_name_ws(Rest, Orig, Acc, Name);
+		$\t -> parse_hd_name_ws(Rest, Orig, Acc, Name)
 	end.
 
-parse_hd_before_value(<< $\s, Rest/bits >>, Acc, Name) ->
-	parse_hd_before_value(Rest, Acc, Name);
-parse_hd_before_value(<< $\t, Rest/bits >>, Acc, Name) ->
-	parse_hd_before_value(Rest, Acc, Name);
-parse_hd_before_value(Data, Acc, Name) ->
-	parse_hd_value(Data, Acc, Name, <<>>).
+parse_hd_before_value(<< $\s, Rest/bits >>, Orig, Acc, Name) ->
+	parse_hd_before_value(Rest, Orig, Acc, Name);
+parse_hd_before_value(<< $\t, Rest/bits >>, Orig, Acc, Name) ->
+	parse_hd_before_value(Rest, Orig, Acc, Name);
+parse_hd_before_value(Data, Orig, Acc, Name) ->
+	%% Calculate skip position based on where we are in the original binary
+	Skip = byte_size(Orig) - byte_size(Data),
+	parse_hd_value(Data, Orig, Skip, 0, Acc, Name).
 
-parse_hd_value(<< $\r, Rest/bits >>, Acc, Name, SoFar) ->
-	case Rest of
-		<< $\n, C, Rest2/bits >> when C =:= $\s; C =:= $\t ->
-			parse_hd_value(Rest2, Acc, Name, << SoFar/binary, C >>);
-		<< $\n, Rest2/bits >> ->
-			Value = clean_value_ws_end(SoFar, byte_size(SoFar) - 1),
-			parse_header(Rest2, [{Name, Value}|Acc])
-	end;
-parse_hd_value(<< C, Rest/bits >>, Acc, Name, SoFar) ->
-	parse_hd_value(Rest, Acc, Name, << SoFar/binary, C >>).
+%% Optimized header value parsing using skip/len pattern.
+%% Fast path: single segment header values (no folding).
 
-%% This function has been copied from cowboy_http.
-clean_value_ws_end(_, -1) ->
+%% 4-byte chunking for faster scanning
+parse_hd_value(<< C1, C2, C3, C4, Rest/bits >>, Orig, Skip, Len, Acc, Name)
+		when C1 =/= $\r, C2 =/= $\r, C3 =/= $\r, C4 =/= $\r ->
+	parse_hd_value(Rest, Orig, Skip, Len + 4, Acc, Name);
+%% Single byte when approaching \r
+parse_hd_value(<< C, Rest/bits >>, Orig, Skip, Len, Acc, Name) when C =/= $\r ->
+	parse_hd_value(Rest, Orig, Skip, Len + 1, Acc, Name);
+%% Found \r - check for end of header or folding
+parse_hd_value(<< $\r, $\n, C, Rest/bits >>, Orig, Skip, Len, Acc, Name)
+		when C =:= $\s; C =:= $\t ->
+	%% Header folding - switch to multi-segment mode
+	Part = binary:part(Orig, Skip, Len),
+	NewSkip = Skip + Len + 3,
+	parse_hd_value_folded(Rest, Orig, NewSkip, 0, Acc, Name, [C, Part]);
+parse_hd_value(<< $\r, $\n, Rest/bits >>, Orig, Skip, Len, Acc, Name) ->
+	%% End of header value - extract and clean trailing whitespace
+	Value = clean_value_ws_end(Orig, Skip, Len),
+	parse_header(Rest, Orig, [{Name, Value}|Acc]).
+
+%% Multi-segment header value parsing (header folding case).
+%% Uses iolist accumulation for multiple segments.
+parse_hd_value_folded(<< C1, C2, C3, C4, Rest/bits >>, Orig, Skip, Len, Acc, Name, Parts)
+		when C1 =/= $\r, C2 =/= $\r, C3 =/= $\r, C4 =/= $\r ->
+	parse_hd_value_folded(Rest, Orig, Skip, Len + 4, Acc, Name, Parts);
+parse_hd_value_folded(<< C, Rest/bits >>, Orig, Skip, Len, Acc, Name, Parts) when C =/= $\r ->
+	parse_hd_value_folded(Rest, Orig, Skip, Len + 1, Acc, Name, Parts);
+parse_hd_value_folded(<< $\r, $\n, C, Rest/bits >>, Orig, Skip, Len, Acc, Name, Parts)
+		when C =:= $\s; C =:= $\t ->
+	%% Another fold
+	Part = binary:part(Orig, Skip, Len),
+	NewSkip = Skip + Len + 3,
+	parse_hd_value_folded(Rest, Orig, NewSkip, 0, Acc, Name, [C, Part|Parts]);
+parse_hd_value_folded(<< $\r, $\n, Rest/bits >>, Orig, Skip, Len, Acc, Name, Parts) ->
+	%% End of folded header value
+	Part = binary:part(Orig, Skip, Len),
+	FullValue = iolist_to_binary(lists:reverse([Part|Parts])),
+	Value = clean_value_ws_end(FullValue, 0, byte_size(FullValue)),
+	parse_header(Rest, Orig, [{Name, Value}|Acc]).
+
+%% Optimized trailing whitespace removal using Skip/Len.
+clean_value_ws_end(_Orig, _Skip, 0) ->
 	<<>>;
-clean_value_ws_end(Value, N) ->
-	case binary:at(Value, N) of
-		$\s -> clean_value_ws_end(Value, N - 1);
-		$\t -> clean_value_ws_end(Value, N - 1);
-		_ ->
-			S = N + 1,
-			<< Value2:S/binary, _/bits >> = Value,
-			Value2
+clean_value_ws_end(Orig, Skip, Len) ->
+	case binary:at(Orig, Skip + Len - 1) of
+		$\s -> clean_value_ws_end(Orig, Skip, Len - 1);
+		$\t -> clean_value_ws_end(Orig, Skip, Len - 1);
+		_ -> binary:part(Orig, Skip, Len)
 	end.
 
 -ifdef(TEST).

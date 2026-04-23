@@ -14,23 +14,39 @@
 
 -module(cow_http3_machine).
 
+%% Init.
 -export([init/2]).
 -export([init_unidi_local_streams/4]).
--export([init_unidi_stream/3]).
+
+%% New streams.
+-export([new_unidi_local_stream/3]).
 -export([set_unidi_remote_stream_type/3]).
--export([init_bidi_stream/2]).
--export([init_bidi_stream/3]).
+-export([new_bidi_local_stream/2]).
+-export([new_bidi_local_stream/3]).
+
+%% WebTransport streams.
 -export([become_webtransport_session/2]).
 -export([become_webtransport_stream/3]).
 -export([close_webtransport_session/2]).
--export([close_bidi_stream_for_sending/2]).
--export([close_stream/2]).
+
+%% Stream shutdown.
+-export([discard_stream/2]).
+-export([fin_local/2]).
+%% @todo -export([reset_stream_local/2]).
+-export([fin_remote/2]).
+-export([reset_stream_remote/2]).
+-export([stop_sending_remote/2]).
+
+%% Incoming frames and data.
 -export([unidi_data/4]).
 -export([frame/4]).
 -export([ignored_frame/2]).
+
+%% Outgoing headers/trailers.
 -export([prepare_headers/5]).
 -export([prepare_trailers/3]).
--export([reset_stream/2]).
+
+%% Getters.
 -export([get_bidi_stream_local_state/2]).
 -export([get_bidi_stream_remote_state/2]).
 
@@ -91,7 +107,14 @@
 	session_id :: cow_http3:stream_id(),
 
 	%% Unidi stream direction (local = we initiated) or bidi.
-	dir :: unidi_stream_dir() | bidi
+	dir :: unidi_stream_dir() | bidi,
+
+	%% Whether we finished sending data.
+	local = nofin :: cow_http:fin(),
+
+	%% Whether we finished receiving data.
+	%% Initial value depends on dir (unidi: fin; bidi: nofin).
+	remote :: cow_http:fin()
 }).
 
 -type stream() :: #unidi_stream{} | #bidi_stream{} | #wt_session{} | #wt_stream{}.
@@ -134,6 +157,8 @@
 
 -type instructions() :: undefined
 	| {decoder_instructions | encoder_instructions, iodata()}.
+
+%% Init.
 
 -spec init(client | server, opts())
 	-> {ok, iolist(), http3_machine()}.
@@ -195,10 +220,12 @@ init_unidi_local_streams(ControlID, EncoderID, DecoderID,
 			DecoderID => #unidi_stream{id=DecoderID, dir=unidi_local, type=decoder}
 	}}.
 
--spec init_unidi_stream(cow_http3:stream_id(), unidi_stream_dir(), State)
+%% New streams.
+
+-spec new_unidi_local_stream(cow_http3:stream_id(), unidi_stream_dir(), State)
 	-> State when State::http3_machine().
 
-init_unidi_stream(StreamID, StreamDir, State=#http3_machine{streams=Streams}) ->
+new_unidi_local_stream(StreamID, StreamDir, State=#http3_machine{streams=Streams}) ->
 	State#http3_machine{streams=Streams#{StreamID => #unidi_stream{
 		id=StreamID, dir=StreamDir, type=undefined}}}.
 
@@ -238,21 +265,23 @@ set_unidi_remote_stream_type(_, encoder, State) ->
 %% All bidi streams are request/response.
 %% We only need to know the method when in client mode.
 
--spec init_bidi_stream(cow_http3:stream_id(), State)
+-spec new_bidi_local_stream(cow_http3:stream_id(), State)
 	-> State when State::http3_machine().
 
-init_bidi_stream(StreamID, State=#http3_machine{streams=Streams}) ->
+new_bidi_local_stream(StreamID, State=#http3_machine{streams=Streams}) ->
 	State#http3_machine{streams=Streams#{
 		StreamID => #bidi_stream{id=StreamID}
 	}}.
 
--spec init_bidi_stream(cow_http3:stream_id(), binary(), State)
+-spec new_bidi_local_stream(cow_http3:stream_id(), binary(), State)
 	-> State when State::http3_machine().
 
-init_bidi_stream(StreamID, Method, State=#http3_machine{streams=Streams}) ->
+new_bidi_local_stream(StreamID, Method, State=#http3_machine{streams=Streams}) ->
 	State#http3_machine{streams=Streams#{
 		StreamID => #bidi_stream{id=StreamID, method=Method}
 	}}.
+
+%% WebTransport streams.
 
 -spec become_webtransport_session(cow_http3:stream_id(), State)
 	-> State when State::http3_machine().
@@ -297,35 +326,152 @@ close_webtransport_session(SessionID, State=#http3_machine{streams=Streams0}) ->
 	end, Streams0),
 	State#http3_machine{streams=Streams}.
 
--spec close_bidi_stream_for_sending(cow_http3:stream_id(), State)
-	-> State when State::http3_machine().
+%% Stream shutdown.
+%%
+%% Streams may be completely discarded, send/receive a FIN flag
+%% or send/receive a RESET_STREAM or STOP_SENDING frame.
+%%
+%% When receiving a STOP_SENDING frame we have to send back
+%% a RESET_STREAM frame so we treat STOP_SENDING as if the
+%% direction was already closed. It is up to the user of this
+%% module to send a RESET_STREAM frame back.
+%%
+%% When the user of this module sends a STOP_SENDING frame we
+%% will want to drop any incoming data from the stream. But
+%% that is best done directly by the user of this module so
+%% there is no corresponding function. As far as this module
+%% is concerned the remote direction will get closed on FIN
+%% or RESET_STREAM reception.
 
-close_bidi_stream_for_sending(StreamID, State=#http3_machine{streams=Streams}) ->
-	#{StreamID := Stream} = Streams,
-	stream_store(Stream#bidi_stream{local=fin}, State).
+-spec discard_stream(cow_http3:stream_id(), State)
+	-> {closed, State} when State::http3_machine().
 
--spec close_stream(cow_http3:stream_id(), State)
-	-> {ok, State}
+%% This function MUST NOT be used when the stream is:
+%%
+%% * #unidi_stream{} control/encoder/decoder (they must not be closed)
+%% * #wt_session{} (use the dedicated function)
+
+discard_stream(StreamID, State=#http3_machine{streams=Streams0}) ->
+	%% Error out if the stream does not exist.
+	{_, Streams} = maps:take(StreamID, Streams0),
+	{closed, State#http3_machine{streams=Streams}}.
+
+-spec fin_local(cow_http3:stream_id(), State)
+	-> {ok | closed, State} when State::http3_machine().
+
+%% This function MUST NOT be used when the stream is:
+%%
+%% * #unidi_stream{} control/encoder/decoder (they must not be closed)
+%% * #wt_session{} (use the dedicated function)
+
+fin_local(StreamID, State=#http3_machine{streams=Streams0}) ->
+	{Stream, OtherStreams} = maps:take(StreamID, Streams0),
+	case Stream of
+		#bidi_stream{remote=nofin} ->
+			{ok, stream_store(Stream#bidi_stream{local=fin}, State)};
+		#bidi_stream{remote=fin} ->
+			{closed, State#http3_machine{streams=OtherStreams}};
+		#wt_stream{remote=nofin} ->
+			{ok, stream_store(Stream#wt_stream{local=fin}, State)};
+		#wt_stream{remote=fin} ->
+			{closed, State#http3_machine{streams=OtherStreams}}
+	end.
+
+-spec fin_remote(cow_http3:stream_id(), State)
+	-> {ok | closed, State}
 	| {error, {connection_error, h3_closed_critical_stream, atom()}, State}
 	when State::http3_machine().
 
-close_stream(StreamID, State=#http3_machine{streams=Streams0}) ->
-	case maps:take(StreamID, Streams0) of
-		{#unidi_stream{type=control}, Streams} ->
+%% This function is to be used for streams that do not end up calling
+%% the functions unidi_data/4, frame/4 or ignored_frame/2. These can
+%% only be #wt_session{} or #wt_stream{} at this time.
+
+fin_remote(StreamID, State=#http3_machine{streams=Streams0}) ->
+	{Stream, OtherStreams} = maps:take(StreamID, Streams0),
+	case Stream of
+		#wt_session{} ->
+			%% We expect the user to call close_webtransport_session/2 separately.
+			{wt_session_closed, State#http3_machine{streams=OtherStreams}};
+		#wt_stream{remote=nofin} ->
+			{ok, stream_store(Stream#wt_stream{local=fin}, State)};
+		#wt_stream{remote=fin} ->
+			{closed, State#http3_machine{streams=OtherStreams}}
+	end.
+
+-spec reset_stream_remote(cow_http3:stream_id(), State)
+	-> {ok | closed | wt_session_closed, State}
+	| {error, {connection_error, h3_closed_critical_stream, atom()}, State}
+	when State::http3_machine().
+
+%% The RESET_STREAM frame can be received by any stream.
+
+reset_stream_remote(StreamID, State=#http3_machine{streams=Streams0}) ->
+	{Stream, OtherStreams} = maps:take(StreamID, Streams0),
+	case Stream of
+		#unidi_stream{type=control} ->
 			{error, {connection_error, h3_closed_critical_stream,
 				'A control stream was closed. (RFC9114 6.2.1)'},
-				State#http3_machine{streams=Streams}};
-		{#unidi_stream{type=decoder}, Streams} ->
+				State#http3_machine{streams=OtherStreams}};
+		#unidi_stream{type=decoder} ->
 			{error, {connection_error, h3_closed_critical_stream,
 				'A decoder stream was closed. (RFC9204 4.2)'},
-				State#http3_machine{streams=Streams}};
-		{#unidi_stream{type=encoder}, Streams} ->
+				State#http3_machine{streams=OtherStreams}};
+		#unidi_stream{type=encoder} ->
 			{error, {connection_error, h3_closed_critical_stream,
 				'An encoder stream was closed. (RFC9204 4.2)'},
-				State#http3_machine{streams=Streams}};
-		{_, Streams} ->
-			{ok, State#http3_machine{streams=Streams}}
+				State#http3_machine{streams=OtherStreams}};
+		#bidi_stream{local=nofin} ->
+			{ok, stream_store(Stream#bidi_stream{remote=fin}, State)};
+		#bidi_stream{local=fin} ->
+			{closed, State#http3_machine{streams=OtherStreams}};
+		#wt_session{} ->
+			%% We expect the user to call close_webtransport_session/2 separately.
+			{wt_session_closed, State#http3_machine{streams=OtherStreams}};
+		#wt_stream{local=nofin} ->
+			{ok, stream_store(Stream#wt_stream{remote=fin}, State)};
+		#wt_stream{local=fin} ->
+			{closed, State#http3_machine{streams=OtherStreams}}
 	end.
+
+-spec stop_sending_remote(cow_http3:stream_id(), State)
+	-> {ok | closed | wt_session_closed, State}
+	| {error, {connection_error, h3_closed_critical_stream, atom()}, State}
+	when State::http3_machine().
+
+%% The STOP_SENDING frame can be received by any stream.
+%% The user is expected to send a RESET_STREAM frame back
+%% immediately so this function closes the relevant stream
+%% direction.
+
+stop_sending_remote(StreamID, State=#http3_machine{streams=Streams0}) ->
+	{Stream, OtherStreams} = maps:take(StreamID, Streams0),
+	case Stream of
+		#unidi_stream{type=control} ->
+			{error, {connection_error, h3_closed_critical_stream,
+				'A control stream was closed. (RFC9114 6.2.1)'},
+				State#http3_machine{streams=OtherStreams}};
+		#unidi_stream{type=decoder} ->
+			{error, {connection_error, h3_closed_critical_stream,
+				'A decoder stream was closed. (RFC9204 4.2)'},
+				State#http3_machine{streams=OtherStreams}};
+		#unidi_stream{type=encoder} ->
+			{error, {connection_error, h3_closed_critical_stream,
+				'An encoder stream was closed. (RFC9204 4.2)'},
+				State#http3_machine{streams=OtherStreams}};
+		#bidi_stream{remote=nofin} ->
+			{ok, stream_store(Stream#bidi_stream{local=fin}, State)};
+		#bidi_stream{remote=fin} ->
+			{closed, State#http3_machine{streams=OtherStreams}};
+		#wt_session{} ->
+			%% We expect the user to call close_webtransport_session/2 separately.
+			{wt_session_closed, State#http3_machine{streams=OtherStreams}};
+		#wt_stream{remote=nofin} ->
+			{ok, stream_store(Stream#wt_stream{local=fin}, State)};
+		#wt_stream{remote=fin} ->
+			{closed, State#http3_machine{streams=OtherStreams}}
+	end.
+
+%% Incoming frames and data.
 
 -spec unidi_data(binary(), cow_http:fin(), cow_http3:stream_id(), State)
 	-> {ok, instructions(), State}
@@ -675,6 +821,8 @@ ignored_frame(StreamID, State) ->
 			{ok, State}
 	end.
 
+%% Outgoing headers/trailers.
+%%
 %% Functions for sending a message header or body. Note that
 %% this module does not send data directly, instead it returns
 %% a value that can then be used to send the frames.
@@ -738,20 +886,7 @@ prepare_trailers(StreamID, State=#http3_machine{encode_state=EncodeState0}, Trai
 			{no_trailers, stream_store(Stream#bidi_stream{local=fin}, State)}
 	end.
 
-%% Public interface to reset streams.
-
--spec reset_stream(cow_http3:stream_id(), State)
-	-> {ok, State} | {error, not_found} when State::http3_machine().
-
-reset_stream(StreamID, State=#http3_machine{streams=Streams0}) ->
-	case maps:take(StreamID, Streams0) of
-		{_, Streams} ->
-			{ok, State#http3_machine{streams=Streams}};
-		error ->
-			{error, not_found}
-	end.
-
-%% Retrieve the local state for a bidi stream.
+%% Getters.
 
 -spec get_bidi_stream_local_state(cow_http3:stream_id(), http3_machine())
 	-> {ok, idle | cow_http:fin()} | {error, not_found}.
@@ -765,8 +900,6 @@ get_bidi_stream_local_state(StreamID, State) ->
 		undefined ->
 			{error, not_found}
 	end.
-
-%% Retrieve the remote state for a bidi stream.
 
 -spec get_bidi_stream_remote_state(cow_http3:stream_id(), http3_machine())
 	-> {ok, idle | cow_http:fin()} | {error, not_found}.

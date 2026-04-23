@@ -21,12 +21,13 @@
 %% New streams.
 -export([new_unidi_local_stream/3]).
 -export([set_unidi_remote_stream_type/3]).
--export([new_bidi_local_stream/2]).
--export([new_bidi_local_stream/3]).
+-export([new_bidi_stream/2]).
+-export([new_bidi_stream/3]).
 
 %% WebTransport streams.
 -export([become_webtransport_session/2]).
 -export([become_webtransport_stream/3]).
+-export([new_wt_local_stream/4]).
 -export([close_webtransport_session/2]).
 
 %% Stream shutdown.
@@ -110,10 +111,9 @@
 	dir :: unidi_stream_dir() | bidi,
 
 	%% Whether we finished sending data.
-	local = nofin :: cow_http:fin(),
+	local :: cow_http:fin(),
 
 	%% Whether we finished receiving data.
-	%% Initial value depends on dir (unidi: fin; bidi: nofin).
 	remote :: cow_http:fin()
 }).
 
@@ -265,21 +265,17 @@ set_unidi_remote_stream_type(_, encoder, State) ->
 %% All bidi streams are request/response.
 %% We only need to know the method when in client mode.
 
--spec new_bidi_local_stream(cow_http3:stream_id(), State)
+-spec new_bidi_stream(cow_http3:stream_id(), State)
 	-> State when State::http3_machine().
 
-new_bidi_local_stream(StreamID, State=#http3_machine{streams=Streams}) ->
-	State#http3_machine{streams=Streams#{
-		StreamID => #bidi_stream{id=StreamID}
-	}}.
+new_bidi_stream(StreamID, State) ->
+	stream_store(#bidi_stream{id=StreamID}, State).
 
--spec new_bidi_local_stream(cow_http3:stream_id(), binary(), State)
+-spec new_bidi_stream(cow_http3:stream_id(), binary(), State)
 	-> State when State::http3_machine().
 
-new_bidi_local_stream(StreamID, Method, State=#http3_machine{streams=Streams}) ->
-	State#http3_machine{streams=Streams#{
-		StreamID => #bidi_stream{id=StreamID, method=Method}
-	}}.
+new_bidi_stream(StreamID, Method, State) ->
+	stream_store(#bidi_stream{id=StreamID, method=Method}, State).
 
 %% WebTransport streams.
 
@@ -298,17 +294,30 @@ become_webtransport_stream(StreamID, SessionID, State0) ->
 	case stream_get(SessionID, State0) of
 		#wt_session{} ->
 			%% The stream becomes a WT stream tied to SessionID.
-			Dir = case stream_get(StreamID, State0) of
-				#unidi_stream{dir=Dir0} -> Dir0;
-				%% @todo The bidi stream must be in idle state.
-				#bidi_stream{} -> bidi
+			{Dir, LocalIsFin} = case stream_get(StreamID, State0) of
+				#unidi_stream{dir=Dir0} -> {Dir0, fin};
+				#bidi_stream{local=idle, remote=idle} -> {bidi, nofin}
 			end,
 			State = stream_store(#wt_stream{
-				id=StreamID, session_id=SessionID, dir=Dir},
+				id=StreamID, session_id=SessionID, dir=Dir,
+				local=LocalIsFin, remote=nofin},
 				State0),
 			{ok, State}
 		%% @todo Error conditions.
 	end.
+
+-spec new_wt_local_stream(cow_http3:stream_id(), bidi | unidi, cow_http3:stream_id(), State)
+	-> State when State::http3_machine().
+
+new_wt_local_stream(StreamID, StreamType, SessionID, State) ->
+	{Dir, RemoteIsFin} = case StreamType of
+		bidi -> {bidi, nofin};
+		unidi -> {unidi_local, fin}
+	end,
+	stream_store(#wt_stream{
+		id=StreamID, session_id=SessionID, dir=Dir,
+		local=nofin, remote=RemoteIsFin
+	}, State).
 
 -spec close_webtransport_session(cow_http3:stream_id(), State)
 	-> State when State::http3_machine().

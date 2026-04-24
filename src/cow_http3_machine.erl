@@ -234,24 +234,24 @@ new_unidi_local_stream(StreamID, StreamDir, State=#http3_machine{streams=Streams
 	| {error, {connection_error, h3_stream_creation_error, atom()}, State}
 	when State::http3_machine().
 
-set_unidi_remote_stream_type(StreamID, Type=control,
+set_unidi_remote_stream_type(StreamID, StreamType=control,
 		State=#http3_machine{peer_control_state=no_stream}) ->
 	Stream = stream_get(StreamID, State),
-	{ok, stream_store(Stream#unidi_stream{type=Type},
+	{ok, stream_store(Stream#unidi_stream{type=StreamType},
 		State#http3_machine{peer_control_state=no_settings})};
 set_unidi_remote_stream_type(_, control, State) ->
 	{error, {connection_error, h3_stream_creation_error,
 		'A peer cannot open two control streams. (RFC9114 6.2.1)'},
 		State};
-set_unidi_remote_stream_type(StreamID, Type=decoder,
+set_unidi_remote_stream_type(StreamID, StreamType=decoder,
 		State=#http3_machine{peer_decode_state=no_stream}) ->
 	Stream = stream_get(StreamID, State),
-	{ok, stream_store(Stream#unidi_stream{type=Type},
+	{ok, stream_store(Stream#unidi_stream{type=StreamType},
 		State#http3_machine{peer_decode_state=ready})};
-set_unidi_remote_stream_type(StreamID, Type=encoder,
+set_unidi_remote_stream_type(StreamID, StreamType=encoder,
 		State=#http3_machine{peer_encode_state=no_stream}) ->
 	Stream = stream_get(StreamID, State),
-	{ok, stream_store(Stream#unidi_stream{type=Type},
+	{ok, stream_store(Stream#unidi_stream{type=StreamType},
 		State#http3_machine{peer_encode_state=ready})};
 set_unidi_remote_stream_type(_, decoder, State) ->
 	{error, {connection_error, h3_stream_creation_error,

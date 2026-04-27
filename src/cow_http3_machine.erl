@@ -295,7 +295,7 @@ become_webtransport_stream(StreamID, SessionID, State0) ->
 		#wt_session{} ->
 			%% The stream becomes a WT stream tied to SessionID.
 			{Dir, LocalIsFin} = case stream_get(StreamID, State0) of
-				#unidi_stream{type=unidi_remote, dir=Dir0} -> {Dir0, fin};
+				#unidi_stream{dir=unidi_remote} -> {unidi_remote, fin};
 				#bidi_stream{local=idle, remote=idle} -> {bidi, nofin}
 			end,
 			State = stream_store(#wt_stream{

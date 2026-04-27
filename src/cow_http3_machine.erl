@@ -19,7 +19,7 @@
 -export([init_unidi_local_streams/4]).
 
 %% New streams.
--export([new_unidi_local_stream/3]).
+-export([new_unidi_stream/3]).
 -export([set_unidi_remote_stream_type/3]).
 -export([new_bidi_stream/2]).
 -export([new_bidi_stream/3]).
@@ -222,10 +222,10 @@ init_unidi_local_streams(ControlID, EncoderID, DecoderID,
 
 %% New streams.
 
--spec new_unidi_local_stream(cow_http3:stream_id(), unidi_stream_dir(), State)
+-spec new_unidi_stream(cow_http3:stream_id(), unidi_stream_dir(), State)
 	-> State when State::http3_machine().
 
-new_unidi_local_stream(StreamID, StreamDir, State=#http3_machine{streams=Streams}) ->
+new_unidi_stream(StreamID, StreamDir, State=#http3_machine{streams=Streams}) ->
 	State#http3_machine{streams=Streams#{StreamID => #unidi_stream{
 		id=StreamID, dir=StreamDir, type=undefined}}}.
 
@@ -295,7 +295,7 @@ become_webtransport_stream(StreamID, SessionID, State0) ->
 		#wt_session{} ->
 			%% The stream becomes a WT stream tied to SessionID.
 			{Dir, LocalIsFin} = case stream_get(StreamID, State0) of
-				#unidi_stream{dir=Dir0} -> {Dir0, fin};
+				#unidi_stream{type=unidi_remote, dir=Dir0} -> {Dir0, fin};
 				#bidi_stream{local=idle, remote=idle} -> {bidi, nofin}
 			end,
 			State = stream_store(#wt_stream{

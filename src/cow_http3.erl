@@ -92,7 +92,7 @@
 
 -spec parse(binary())
 	-> {ok, frame(), binary()}
-	| {webtransport_stream_header, stream_id(), binary()}
+	| {wt_stream_header, stream_id(), binary()}
 	| {more, {data, binary()} | ignore, non_neg_integer()}
 	| {ignore, binary()}
 	| {connection_error, h3_frame_error | h3_frame_unexpected | h3_settings_error, atom()}
@@ -215,13 +215,13 @@ parse(<<13, _/bits>>) ->
 %% WebTransport stream header.
 %%
 parse(<<1:2, 16#41:14, 0:2, SessionID:6, Rest/bits>>) ->
-	{webtransport_stream_header, SessionID, Rest};
+	{wt_stream_header, SessionID, Rest};
 parse(<<1:2, 16#41:14, 1:2, SessionID:14, Rest/bits>>) ->
-	{webtransport_stream_header, SessionID, Rest};
+	{wt_stream_header, SessionID, Rest};
 parse(<<1:2, 16#41:14, 2:2, SessionID:30, Rest/bits>>) ->
-	{webtransport_stream_header, SessionID, Rest};
+	{wt_stream_header, SessionID, Rest};
 parse(<<1:2, 16#41:14, 3:2, SessionID:62, Rest/bits>>) ->
-	{webtransport_stream_header, SessionID, Rest};
+	{wt_stream_header, SessionID, Rest};
 parse(<<16#41, _/bits>>) ->
 	more;
 %%

@@ -41,7 +41,7 @@
 %% Incoming frames and data.
 -export([unidi_data/4]).
 -export([frame/4]).
--export([ignored_frame/2]).
+-export([ignored_frame/3]).
 
 %% Outgoing headers/trailers.
 -export([prepare_headers/5]).
@@ -231,6 +231,7 @@ new_unidi_stream(StreamID, StreamDir, State=#http3_machine{streams=Streams}) ->
 
 -spec set_unidi_remote_stream_type(cow_http3:stream_id(), unidi_stream_type(), State)
 	-> {ok, State}
+	%% @todo Most {error, {connection_error... are unnecessary.
 	| {error, {connection_error, h3_stream_creation_error, atom()}, State}
 	when State::http3_machine().
 
@@ -387,8 +388,7 @@ fin_local(StreamID, State=#http3_machine{streams=Streams0}) ->
 	end.
 
 -spec fin_remote(cow_http3:stream_id(), State)
-	-> {ok | closed, State}
-	| {error, {connection_error, h3_closed_critical_stream, atom()}, State}
+	-> {ok | closed | wt_session_closed, State}
 	when State::http3_machine().
 
 %% This function is to be used for streams that do not end up calling
@@ -409,7 +409,7 @@ fin_remote(StreamID, State=#http3_machine{streams=Streams0}) ->
 
 -spec reset_stream_remote(cow_http3:stream_id(), State)
 	-> {ok | closed | wt_session_closed, State}
-	| {error, {connection_error, h3_closed_critical_stream, atom()}, State}
+	| {{connection_error, h3_closed_critical_stream, atom()}, State}
 	when State::http3_machine().
 
 %% The RESET_STREAM frame can be received by any stream.
@@ -418,15 +418,15 @@ reset_stream_remote(StreamID, State=#http3_machine{streams=Streams0}) ->
 	{Stream, OtherStreams} = maps:take(StreamID, Streams0),
 	case Stream of
 		#unidi_stream{type=control} ->
-			{error, {connection_error, h3_closed_critical_stream,
+			{{connection_error, h3_closed_critical_stream,
 				'A control stream was closed. (RFC9114 6.2.1)'},
 				State#http3_machine{streams=OtherStreams}};
 		#unidi_stream{type=decoder} ->
-			{error, {connection_error, h3_closed_critical_stream,
+			{{connection_error, h3_closed_critical_stream,
 				'A decoder stream was closed. (RFC9204 4.2)'},
 				State#http3_machine{streams=OtherStreams}};
 		#unidi_stream{type=encoder} ->
-			{error, {connection_error, h3_closed_critical_stream,
+			{{connection_error, h3_closed_critical_stream,
 				'An encoder stream was closed. (RFC9204 4.2)'},
 				State#http3_machine{streams=OtherStreams}};
 		#bidi_stream{local=nofin} ->
@@ -444,7 +444,7 @@ reset_stream_remote(StreamID, State=#http3_machine{streams=Streams0}) ->
 
 -spec stop_sending_remote(cow_http3:stream_id(), State)
 	-> {ok | closed | wt_session_closed, State}
-	| {error, {connection_error, h3_closed_critical_stream, atom()}, State}
+	| {{connection_error, h3_closed_critical_stream, atom()}, State}
 	when State::http3_machine().
 
 %% The STOP_SENDING frame can be received by any stream.
@@ -456,15 +456,15 @@ stop_sending_remote(StreamID, State=#http3_machine{streams=Streams0}) ->
 	{Stream, OtherStreams} = maps:take(StreamID, Streams0),
 	case Stream of
 		#unidi_stream{type=control} ->
-			{error, {connection_error, h3_closed_critical_stream,
+			{{connection_error, h3_closed_critical_stream,
 				'A control stream was closed. (RFC9114 6.2.1)'},
 				State#http3_machine{streams=OtherStreams}};
 		#unidi_stream{type=decoder} ->
-			{error, {connection_error, h3_closed_critical_stream,
+			{{connection_error, h3_closed_critical_stream,
 				'A decoder stream was closed. (RFC9204 4.2)'},
 				State#http3_machine{streams=OtherStreams}};
 		#unidi_stream{type=encoder} ->
-			{error, {connection_error, h3_closed_critical_stream,
+			{{connection_error, h3_closed_critical_stream,
 				'An encoder stream was closed. (RFC9204 4.2)'},
 				State#http3_machine{streams=OtherStreams}};
 		#bidi_stream{remote=nofin} ->
@@ -552,7 +552,7 @@ data_frame(Frame={data, Data}, IsFin, StreamID, State) ->
 				'DATA frame received after trailer HEADERS frame. (RFC9114 4.1)'},
 				State};
 		#unidi_stream{type=control} ->
-			control_frame(Frame, State)
+			control_frame(Frame, IsFin, State)
 	end.
 
 data_frame(Frame, IsFin, Stream0=#bidi_stream{remote_read_size=StreamRead}, State0, DataLen) ->
@@ -603,7 +603,7 @@ headers_frame(Frame, IsFin, StreamID, State=#http3_machine{mode=Mode}) ->
 				'HEADERS frame received after trailer HEADERS frame. (RFC9114 4.1)'},
 				State};
 		#unidi_stream{type=control} ->
-			control_frame(Frame, State)
+			control_frame(Frame, IsFin, State)
 	end.
 
 headers_decode({headers, EncodedFieldSection}, IsFin, Stream=#bidi_stream{id=StreamID},
@@ -738,49 +738,53 @@ format_error(uppercase_header_name) ->
 format_error(Reason) ->
 	cow_http:format_semantic_error(Reason).
 
-cancel_push_frame(Frame, _IsFin, StreamID, State) ->
+cancel_push_frame(Frame, IsFin, StreamID, State) ->
 	case stream_get(StreamID, State) of
 		#unidi_stream{type=control} ->
-			control_frame(Frame, State)
+			control_frame(Frame, IsFin, State)
 	end.
 
-settings_frame(Frame, _IsFin, StreamID, State) ->
+settings_frame(Frame, IsFin, StreamID, State) ->
 	case stream_get(StreamID, State) of
 		#unidi_stream{type=control} ->
-			control_frame(Frame, State);
+			control_frame(Frame, IsFin, State);
 		#bidi_stream{} ->
 			{error, {connection_error, h3_frame_unexpected,
 				'The SETTINGS frame is not allowed on a bidi stream. (RFC9114 7.2.4)'},
 				State}
 	end.
 
-push_promise_frame(Frame, _IsFin, StreamID, State) ->
+push_promise_frame(Frame, IsFin, StreamID, State) ->
 	case stream_get(StreamID, State) of
 		#unidi_stream{type=control} ->
-			control_frame(Frame, State)
+			control_frame(Frame, IsFin, State)
 	end.
 
-goaway_frame(Frame, _IsFin, StreamID, State) ->
+goaway_frame(Frame, IsFin, StreamID, State) ->
 	case stream_get(StreamID, State) of
 		#unidi_stream{type=control} ->
-			control_frame(Frame, State);
+			control_frame(Frame, IsFin, State);
 		#bidi_stream{} ->
 			{error, {connection_error, h3_frame_unexpected,
 				'The GOAWAY frame is not allowed on a bidi stream. (RFC9114 7.2.6)'},
 				State}
 	end.
 
-max_push_id_frame(Frame, _IsFin, StreamID, State) ->
+max_push_id_frame(Frame, IsFin, StreamID, State) ->
 	case stream_get(StreamID, State) of
 		#unidi_stream{type=control} ->
-			control_frame(Frame, State);
+			control_frame(Frame, IsFin, State);
 		#bidi_stream{} ->
 			{error, {connection_error, h3_frame_unexpected,
 				'The MAX_PUSH_ID frame is not allowed on a bidi stream. (RFC9114 7.2.7)'},
 				State}
 	end.
 
-control_frame({settings, Settings}, State=#http3_machine{
+control_frame(_, fin, State) ->
+	{error, {connection_error, h3_closed_critical_stream,
+		'A control stream was closed. (RFC9114 6.2.1)'},
+		State};
+control_frame({settings, Settings}, nofin, State=#http3_machine{
 		peer_control_state=no_settings, encode_state=EncState0}) ->
 	%% @todo max_field_section_size
 	%% Send the QPACK values to the encoder.
@@ -788,18 +792,18 @@ control_frame({settings, Settings}, State=#http3_machine{
 	MaxBlockedStreams = maps:get(qpack_blocked_streams, Settings, 0),
 	EncState = cow_qpack:encoder_set_settings(MaxTableCapacity, MaxBlockedStreams, EncState0),
 	{ok, State#http3_machine{peer_control_state=ready, encode_state=EncState}};
-control_frame({settings, _}, State) ->
+control_frame({settings, _}, nofin, State) ->
 	{error, {connection_error, h3_frame_unexpected,
 		'The SETTINGS frame cannot be sent more than once. (RFC9114 7.2.4)'},
 		State};
-control_frame(_Frame, State=#http3_machine{peer_control_state=no_settings}) ->
+control_frame(_Frame, nofin, State=#http3_machine{peer_control_state=no_settings}) ->
 	{error, {connection_error, h3_missing_settings,
 		'The first frame on the control stream must be a SETTINGS frame. (RFC9114 6.2.1)'},
 		State};
-control_frame(Frame = {goaway, _}, State) ->
+control_frame(Frame = {goaway, _}, nofin, State) ->
 	{ok, Frame, State};
 %% @todo Implement server push.
-control_frame({max_push_id, PushID}, State=#http3_machine{max_push_id=MaxPushID}) ->
+control_frame({max_push_id, PushID}, nofin, State=#http3_machine{max_push_id=MaxPushID}) ->
 	if
 		PushID >= MaxPushID ->
 			{ok, State#http3_machine{max_push_id=PushID}};
@@ -808,24 +812,24 @@ control_frame({max_push_id, PushID}, State=#http3_machine{max_push_id=MaxPushID}
 				'MAX_PUSH_ID must not be lower than previously received. (RFC9114 7.2.7)'},
 				State}
 	end;
-control_frame(ignored_frame, State) ->
+control_frame(ignored_frame, nofin, State) ->
 	{ok, State};
-control_frame(_Frame, State) ->
+control_frame(_Frame, nofin, State) ->
 	{error, {connection_error, h3_frame_unexpected,
 		'DATA and HEADERS frames are not allowed on the control stream. (RFC9114 7.2.1, RFC9114 7.2.2)'},
 		State}.
 
 %% Ignored frames.
 
--spec ignored_frame(cow_http3:stream_id(), State)
+-spec ignored_frame(cow_http3:stream_id(), cow_http:fin(), State)
 	-> {ok, State}
 	| {error, {connection_error, cow_http3:error(), atom()}, State}
 	when State::http3_machine().
 
-ignored_frame(StreamID, State) ->
+ignored_frame(StreamID, IsFin, State) ->
 	case stream_get(StreamID, State) of
 		#unidi_stream{type=control} ->
-			control_frame(ignored_frame, State);
+			control_frame(ignored_frame, IsFin, State);
 		_ ->
 			{ok, State}
 	end.

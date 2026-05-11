@@ -15,6 +15,10 @@ Cookies :: [{Name :: iodata(), Value :: iodata()}]
 
 Generate a cookie header.
 
+Note that this function expects the `Name` and `Value`
+to be safe, meaning they do not contain invalid characters
+according to RFC6265 section 4.2.1.
+
 == Arguments
 
 Cookies::

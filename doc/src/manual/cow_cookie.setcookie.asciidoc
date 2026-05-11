@@ -16,6 +16,11 @@ setcookie(Name  :: iodata(),
 
 Generate a set-cookie header.
 
+Note that this function expects the `Name`, `Value` arguments
+as well as the `domain` or `path` options to be safe, meaning
+they do not contain invalid characters according to RFC6265
+section 4.1.1.
+
 == Arguments
 
 Name::

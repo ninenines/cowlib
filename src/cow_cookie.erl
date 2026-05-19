@@ -318,13 +318,23 @@ parse_set_cookie_test_() ->
 cookie([]) ->
 	[];
 cookie([{<<>>, Value}]) ->
-	[Value];
+	[cookie_value(Value)];
 cookie([{Name, Value}]) ->
-	[Name, $=, Value];
+	[cookie_name(Name), $=, cookie_value(Value)];
 cookie([{<<>>, Value}|Tail]) ->
-	[Value, $;, $\s|cookie(Tail)];
+	[cookie_value(Value), $;, $\s|cookie(Tail)];
 cookie([{Name, Value}|Tail]) ->
-	[Name, $=, Value, $;, $\s|cookie(Tail)].
+	[cookie_name(Name), $=, cookie_value(Value), $;, $\s|cookie(Tail)].
+
+cookie_name(Name) ->
+	nomatch = binary:match(iolist_to_binary(Name), [<<$=>>, <<$,>>, <<$;>>,
+			<<$\s>>, <<$\t>>, <<$\r>>, <<$\n>>, <<$\013>>, <<$\014>>]),
+	Name.
+
+cookie_value(Value) ->
+	nomatch = binary:match(iolist_to_binary(Value), [<<$,>>, <<$;>>,
+			<<$\s>>, <<$\t>>, <<$\r>>, <<$\n>>, <<$\013>>, <<$\014>>]),
+	Value.
 
 -ifdef(TEST).
 cookie_test_() ->
@@ -337,6 +347,35 @@ cookie_test_() ->
 	],
 	[{Res, fun() -> Res = iolist_to_binary(cookie(Cookies)) end}
 		|| {Cookies, Res} <- Tests].
+
+cookie_injection_test_() ->
+	F = fun(Cookies) ->
+		try cookie(Cookies) of
+			_ -> false
+		catch _:_ -> true
+		end
+	end,
+	Tests = [
+		[{<<"name\r\n">>, <<"value">>}],
+		[{<<"name\r">>, <<"value">>}],
+		[{<<"name\n">>, <<"value">>}],
+		[{<<"name=">>, <<"value">>}],
+		[{<<"name;">>, <<"value">>}],
+		[{<<"name,">>, <<"value">>}],
+		[{<<"name ">>, <<"value">>}],
+		[{<<"name\t">>, <<"value">>}],
+		[{<<"name">>, <<"value\r\nInjected: header">>}],
+		[{<<"name">>, <<"value\r">>}],
+		[{<<"name">>, <<"value\n">>}],
+		[{<<"name">>, <<"value;">>}],
+		[{<<"name">>, <<"value,">>}],
+		[{<<"name">>, <<"value ">>}],
+		[{<<"name">>, <<"value\t">>}],
+		[{<<>>, <<"value\r\nInjected: header">>}],
+		[{<<"a">>, <<"b">>}, {<<"c">>, <<"d\r\nSet-Cookie: x">>}]
+	],
+	[{iolist_to_binary(io_lib:format("~p", [C])),
+		fun() -> true = F(C) end} || C <- Tests].
 -endif.
 
 %% Convert a cookie name, value and options to its iodata form.

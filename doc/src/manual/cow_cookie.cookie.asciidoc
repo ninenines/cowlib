@@ -31,6 +31,7 @@ An iolist with the generated cookie header value.
 
 == Changelog
 
+* *2.16.2*: Reject invalid characters in `Name` and `Value` to prevent injection.
 * *2.9*: Function introduced.
 
 == Examples

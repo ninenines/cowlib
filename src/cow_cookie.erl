@@ -318,13 +318,23 @@ parse_set_cookie_test_() ->
 cookie([]) ->
 	[];
 cookie([{<<>>, Value}]) ->
-	[Value];
+	[cookie_value(Value)];
 cookie([{Name, Value}]) ->
-	[Name, $=, Value];
+	[cookie_name(Name), $=, cookie_value(Value)];
 cookie([{<<>>, Value}|Tail]) ->
-	[Value, $;, $\s|cookie(Tail)];
+	[cookie_value(Value), $;, $\s|cookie(Tail)];
 cookie([{Name, Value}|Tail]) ->
-	[Name, $=, Value, $;, $\s|cookie(Tail)].
+	[cookie_name(Name), $=, cookie_value(Value), $;, $\s|cookie(Tail)].
+
+cookie_name(Name) ->
+	nomatch = binary:match(iolist_to_binary(Name), [<<$=>>, <<$,>>, <<$;>>,
+			<<$\s>>, <<$\t>>, <<$\r>>, <<$\n>>, <<$\013>>, <<$\014>>]),
+	Name.
+
+cookie_value(Value) ->
+	nomatch = binary:match(iolist_to_binary(Value), [<<$,>>, <<$;>>,
+			<<$\s>>, <<$\t>>, <<$\r>>, <<$\n>>, <<$\013>>, <<$\014>>]),
+	Value.
 
 -ifdef(TEST).
 cookie_test_() ->
@@ -333,10 +343,61 @@ cookie_test_() ->
 		{[{<<"a">>, <<"b">>}], <<"a=b">>},
 		{[{<<"a">>, <<"b">>}, {<<"c">>, <<"d">>}], <<"a=b; c=d">>},
 		{[{<<>>, <<"b">>}, {<<"c">>, <<"d">>}], <<"b; c=d">>},
-		{[{<<"a">>, <<"b">>}, {<<>>, <<"d">>}], <<"a=b; d">>}
+		{[{<<"a">>, <<"b">>}, {<<>>, <<"d">>}], <<"a=b; d">>},
+		%% iodata in name/value (not just binary).
+		{[{[<<"a">>, "b"], ["c", <<"d">>]}], <<"ab=cd">>},
+		%% Equal sign is allowed in cookie-value per RFC6265 section 4.2.1.
+		{[{<<"a">>, <<"b=c">>}], <<"a=b=c">>}
 	],
 	[{Res, fun() -> Res = iolist_to_binary(cookie(Cookies)) end}
 		|| {Cookies, Res} <- Tests].
+
+cookie_failures_test_() ->
+	F = fun(Cookies) ->
+		try cookie(Cookies) of
+			_ ->
+				false
+		catch _:_ ->
+			true
+		end
+	end,
+	%% Each rejected character should fail at the name position (except
+	%% $=, which is allowed in cookie-value but not in cookie-name) and
+	%% at the value position.
+	Tests = [
+		%% Name rejects: $=, $,, $;, $\s, $\t, $\r, $\n, $\013, $\014
+		[{<<"Na=me">>, <<"Value">>}],
+		[{<<"Na,me">>, <<"Value">>}],
+		[{<<"Na;me">>, <<"Value">>}],
+		[{<<"Na me">>, <<"Value">>}],
+		[{<<"Na\tme">>, <<"Value">>}],
+		[{<<"Na\rme">>, <<"Value">>}],
+		[{<<"Na\nme">>, <<"Value">>}],
+		[{<<"Na\013me">>, <<"Value">>}],
+		[{<<"Na\014me">>, <<"Value">>}],
+		%% Value rejects: $,, $;, $\s, $\t, $\r, $\n, $\013, $\014
+		[{<<"Name">>, <<"Va,lue">>}],
+		[{<<"Name">>, <<"Va;lue">>}],
+		[{<<"Name">>, <<"Va lue">>}],
+		[{<<"Name">>, <<"Va\tlue">>}],
+		[{<<"Name">>, <<"Va\rlue">>}],
+		[{<<"Name">>, <<"Va\nlue">>}],
+		[{<<"Name">>, <<"Va\013lue">>}],
+		[{<<"Name">>, <<"Va\014lue">>}],
+		%% Classic header-injection payload.
+		[{<<"Name">>, <<"Value\r\nSet-Cookie: evil=1">>}],
+		%% Empty-name variant: invalid value must still be rejected.
+		[{<<>>, <<"Va;lue">>}],
+		%% Rejected pair is not necessarily the first one.
+		[{<<"good">>, <<"ok">>}, {<<"bad;name">>, <<"v">>}],
+		[{<<"good">>, <<"ok">>}, {<<"name">>, <<"bad;value">>}],
+		%% iodata input is also validated.
+		[{[<<"Na">>, ";me"], <<"Value">>}],
+		[{<<"Name">>, [<<"Va">>, ";lue"]}]
+	],
+	[{iolist_to_binary(io_lib:format("~p failure", [Cookies])),
+		fun() -> true = F(Cookies) end}
+		|| Cookies <- Tests].
 -endif.
 
 %% Convert a cookie name, value and options to its iodata form.

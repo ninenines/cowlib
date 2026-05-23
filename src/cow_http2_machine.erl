@@ -270,6 +270,31 @@ terminate(#http2_machine{preface_timer=PTRef, settings_timer=STRef}) ->
 		_ -> erlang:cancel_timer(STRef, [{async, true}, {info, false}])
 	end.
 
+-ifdef(TEST).
+
+terminate_removes_stray_timeout_messages_test() ->
+	PTRef = erlang:start_timer(5000, self(), {?MODULE, undefined, preface_timeout}),
+	STRef = erlang:start_timer(5000, self(), {?MODULE, undefined, settings_timeout}),
+	PTMsg = {timeout, PTRef, {?MODULE, undefined, preface_timeout}},
+	STMsg = {timeout, STRef, {?MODULE, undefined, settings_timeout}},
+	self() ! PTMsg,
+	self() ! STMsg,
+	terminate(#http2_machine{preface_timer=PTRef, settings_timer=STRef}),
+	[] = collect_timeout_messages(PTRef, STRef),
+	ok.
+
+collect_timeout_messages(PTRef, STRef) ->
+	receive
+		{timeout, PTRef, {?MODULE, undefined, preface_timeout}} ->
+			[preface_timeout|collect_timeout_messages(PTRef, STRef)];
+		{timeout, STRef, {?MODULE, undefined, settings_timeout}} ->
+			[settings_timeout|collect_timeout_messages(PTRef, STRef)]
+	after 0 ->
+		[]
+	end.
+
+-endif.
+
 -spec init_stream(binary(), State)
 	-> {ok, cow_http2:streamid(), State} when State::http2_machine().
 init_stream(Method, State=#http2_machine{mode=client, local_streamid=LocalStreamID,

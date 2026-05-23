@@ -261,13 +261,22 @@ setting_from_opt(Settings, Opts, OptName, SettingName, Default) ->
 
 -spec terminate(State::http2_machine()) -> ok.
 terminate(#http2_machine{preface_timer=PTRef, settings_timer=STRef}) ->
-	_ = case PTRef of
-		undefined -> ok;
-		_ -> erlang:cancel_timer(PTRef, [{async, true}, {info, false}])
-	end,
-	_ = case STRef of
-		undefined -> ok;
-		_ -> erlang:cancel_timer(STRef, [{async, true}, {info, false}])
+	cancel_timeout(PTRef),
+	cancel_timeout(STRef).
+
+cancel_timeout(TRef) ->
+	ok = case TRef of
+		undefined ->
+			ok;
+		_ ->
+			%% Do a synchronous cancel and remove the message if any
+			%% to avoid receiving stray messages.
+			_ = erlang:cancel_timer(TRef, [{async, false}, {info, false}]),
+			receive
+				{timeout, TRef, _} -> ok
+			after 0 ->
+				ok
+			end
 	end.
 
 -ifdef(TEST).

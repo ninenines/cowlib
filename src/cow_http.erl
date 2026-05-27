@@ -40,6 +40,10 @@
 -export([process_headers/5]).
 -export([remove_http1_headers/1]).
 
+%% Validation functions.
+
+-export([ensure_token/1]).
+
 %% Types used by all versions of HTTP.
 
 -type status() :: 100..999.
@@ -72,6 +76,8 @@
 
 -type fin() :: fin | nofin.
 -export_type([fin/0]).
+
+-include("cow_parse.hrl").
 
 %% HTTP/1 function aliases.
 
@@ -369,3 +375,50 @@ remove_http1_headers(Headers) ->
 	lists:filter(fun({Name, _}) ->
 		not lists:member(Name, RemoveHeaders)
 	end, Headers).
+
+%% Validation functions.
+
+-spec ensure_token(binary()) -> binary().
+
+ensure_token(Token) when Token =/= <<>> ->
+	ok = validate_token(Token),
+	Token.
+
+validate_token(<<C,R/bits>>) when ?IS_TOKEN(C) -> validate_token(R);
+validate_token(<<>>) -> ok.
+
+-ifdef(TEST).
+ensure_token_test_() ->
+	Tests = [
+		<<$a>>, <<$0>>, <<"!">>, <<"#">>,
+		<<"$">>, <<"%">>, <<"&">>, <<"'">>,
+		<<"*">>, <<"+">>, <<"-">>, <<".">>,
+		<<"^">>, <<"_">>, <<"`">>, <<"|">>, <<"~">>,
+		<<"GET">>,
+		<<"foo">>,
+		<<"foo-bar">>,
+		<<"!#$%&'*+-.^_`|~09azAZ">>,
+		%% Long token.
+		<< <<$a>> || _ <- lists:seq(1, 1024) >>
+	],
+	[{V, fun() -> V = ensure_token(V) end} || V <- Tests].
+
+ensure_token_error_test_() ->
+	Tests = [
+		%% Empty.
+		<<>>,
+		%% Invalid chars.
+		<<" ">>, <<",">>, <<":">>, <<";">>, <<"\"">>,
+		<<"(">>, <<")">>, <<"<">>, <<">">>, <<"[">>,
+		<<"]">>, <<"{">>, <<"}">>, <<"\\">>, <<"?">>,
+		<<"@">>, <<$\r>>, <<$\n>>, <<0>>,
+		<<16#1f>>, <<16#7f>>, <<16#80>>,
+		<<195,169>>, %% é
+		%% Invalid in middle.
+		<<"a b">>, <<"a,b">>, <<"a:b">>,
+		%% Invalid type.
+		undefined
+	],
+	[{iolist_to_binary(io_lib:format("~0p", [V])),
+		fun() -> {'EXIT', _} = (catch ensure_token(V)) end} || V <- Tests].
+-endif.

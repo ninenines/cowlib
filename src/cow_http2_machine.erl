@@ -1074,8 +1074,8 @@ prepare_trailers(StreamID, State=#http2_machine{encode_state=EncodeState0}, Trai
 	| {send, [{cow_http2:streamid(), cow_http:fin(), [DataOrFileOrTrailers]}], State}
 	when State::http2_machine(), DataOrFileOrTrailers::
 		{data, iodata()} | #sendfile{} | {trailers, cow_http:headers()}.
-send_or_queue_data(StreamID, State0=#http2_machine{opts=Opts, local_window=ConnWindow},
-		IsFin0, DataOrFileOrTrailers0) ->
+send_or_queue_data(StreamID, State0=#http2_machine{mode=Mode, opts=Opts,
+		local_window=ConnWindow}, IsFin0, DataOrFileOrTrailers0) ->
 	%% @todo Probably just ignore if the method was HEAD.
 	Stream0 = #stream{
 		local=nofin,
@@ -1085,19 +1085,25 @@ send_or_queue_data(StreamID, State0=#http2_machine{opts=Opts, local_window=ConnW
 	} = stream_get(StreamID, State0),
 	DataOrFileOrTrailers = case DataOrFileOrTrailers0 of
 		{trailers, _} ->
-			%% We only accept TE headers containing exactly "trailers" (RFC7540 8.1.2.1).
-			TE = try cow_http_hd:parse_te(TE0) of
-				{trailers, []} -> trailers;
-				_ -> no_trailers
-			catch _:_ ->
-				%% If we can't parse the TE header, assume we can't send trailers.
-				no_trailers
-			end,
-			case TE of
-				trailers ->
+			%% Trailers are always allowed in client requests.
+			%% When sending trailers in server responses we must
+			%% check that the client sent "TE: trailers" (RFC7540 8.1.2.2).
+			case Mode of
+				client ->
 					DataOrFileOrTrailers0;
-				no_trailers ->
-					{data, <<>>}
+				server ->
+					TE = try cow_http_hd:parse_te(TE0) of
+						{trailers, []} -> trailers;
+						_ -> no_trailers
+					catch _:_ ->
+						no_trailers
+					end,
+					case TE of
+						trailers ->
+							DataOrFileOrTrailers0;
+						no_trailers ->
+							{data, <<>>}
+					end
 			end;
 		_ ->
 			DataOrFileOrTrailers0

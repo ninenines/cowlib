@@ -692,7 +692,7 @@ validate_s0(<<C,R/bits>>) when C >= 128 ->
 validate_s0(Text) ->
 	validate_ascii(Text).
 
-validate_s2(<<C,R/bits>>) ->
+validate_s2(<<C,R/bits>>) when C >= 128 ->
 	Class = element(C - 127, utf8_class()),
 	case Class of
 		7 -> validate_s0(R);
@@ -701,9 +701,11 @@ validate_s2(<<C,R/bits>>) ->
 		_ -> 1
 	end;
 validate_s2(<<>>) ->
-	2.
+	2;
+validate_s2(_) ->
+	1.
 
-validate_s3(<<C,R/bits>>) ->
+validate_s3(<<C,R/bits>>) when C >= 128 ->
 	Class = element(C - 127, utf8_class()),
 	case Class of
 		7 -> validate_s2(R);
@@ -712,18 +714,22 @@ validate_s3(<<C,R/bits>>) ->
 		_ -> 1
 	end;
 validate_s3(<<>>) ->
-	3.
+	3;
+validate_s3(_) ->
+	1.
 
-validate_s4(<<C,R/bits>>) ->
+validate_s4(<<C,R/bits>>) when C >= 128 ->
 	Class = element(C - 127, utf8_class()),
 	case Class of
 		7 -> validate_s2(R);
 		_ -> 1
 	end;
 validate_s4(<<>>) ->
-	4.
+	4;
+validate_s4(_) ->
+	1.
 
-validate_s5(<<C,R/bits>>) ->
+validate_s5(<<C,R/bits>>) when C >= 128 ->
 	Class = element(C - 127, utf8_class()),
 	case Class of
 		1 -> validate_s2(R);
@@ -731,9 +737,11 @@ validate_s5(<<C,R/bits>>) ->
 		_ -> 1
 	end;
 validate_s5(<<>>) ->
-	5.
+	5;
+validate_s5(_) ->
+	1.
 
-validate_s6(<<C,R/bits>>) ->
+validate_s6(<<C,R/bits>>) when C >= 128 ->
 	Class = element(C - 127, utf8_class()),
 	case Class of
 		7 -> validate_s3(R);
@@ -741,9 +749,11 @@ validate_s6(<<C,R/bits>>) ->
 		_ -> 1
 	end;
 validate_s6(<<>>) ->
-	6.
+	6;
+validate_s6(_) ->
+	1.
 
-validate_s7(<<C,R/bits>>) ->
+validate_s7(<<C,R/bits>>) when C >= 128 ->
 	Class = element(C - 127, utf8_class()),
 	case Class of
 		7 -> validate_s3(R);
@@ -752,16 +762,20 @@ validate_s7(<<C,R/bits>>) ->
 		_ -> 1
 	end;
 validate_s7(<<>>) ->
-	7.
+	7;
+validate_s7(_) ->
+	1.
 
-validate_s8(<<C,R/bits>>) ->
+validate_s8(<<C,R/bits>>) when C >= 128 ->
 	Class = element(C - 127, utf8_class()),
 	case Class of
 		1 -> validate_s3(R);
 		_ -> 1
 	end;
 validate_s8(<<>>) ->
-	8.
+	8;
+validate_s8(_) ->
+	1.
 
 utf8_class() ->
 	{
@@ -774,6 +788,71 @@ utf8_class() ->
 		10,3,3,3,3,3,3,3,3,3,3,3,3,4,3,3,
 		11,6,6,6,5,8,8,8,8,8,8,8,8,8,8,8
 	}.
+
+-ifdef(TEST).
+
+validate_text_valid_test() ->
+	0 = validate_text(<<>>, 0),
+	0 = validate_text(<<"Hello world!">>, 0),
+	0 = validate_text(<<16#c2, 16#a2>>, 0),
+	0 = validate_text(<<16#e2, 16#82, 16#ac>>, 0),
+	0 = validate_text(<<16#f0, 16#9f, 16#98, 16#80>>, 0),
+	2 = validate_text(<<16#c2>>, 0),
+	0 = validate_text(<<16#a2>>, 2),
+	ok.
+
+validate_text_rejects_ascii_after_multibyte_lead_test_() ->
+	Tests = [
+		{<<"s2">>, <<16#c2, $A>>},
+		{<<"s3">>, <<16#e1, $A>>},
+		{<<"s4">>, <<16#e0, $A>>},
+		{<<"s5">>, <<16#ed, $A>>},
+		{<<"s6">>, <<16#f0, $A>>},
+		{<<"s7">>, <<16#f1, $A>>},
+		{<<"s8">>, <<16#f4, $A>>}
+	],
+	[{Name, fun() -> 1 = validate_text(Text, 0) end}
+		|| {Name, Text} <- Tests].
+
+validate_text_rejects_streamed_ascii_in_continuation_state_test_() ->
+	Tests = [
+		{<<"s2">>, 2},
+		{<<"s3">>, 3},
+		{<<"s4">>, 4},
+		{<<"s5">>, 5},
+		{<<"s6">>, 6},
+		{<<"s7">>, 7},
+		{<<"s8">>, 8}
+	],
+	[{Name, fun() -> 1 = validate_text(<<"A">>, State) end}
+		|| {Name, State} <- Tests].
+
+parse_payload_text_utf8_test() ->
+	Payload = <<16#f0, 16#9f, 16#98, 16#80>>,
+	{ok, Payload, 0, <<>>}
+		= parse_payload(Payload, undefined, 0, 0, text, 4, undefined, #{},
+			<<0:3>>),
+	ok.
+
+parse_payload_rejects_invalid_utf8_text_test() ->
+	{error, badencoding}
+		= parse_payload(<<16#c2, $A>>, undefined, 0, 0, text, 2,
+			undefined, #{}, <<0:3>>),
+	ok.
+
+parse_payload_rejects_invalid_utf8_close_test() ->
+	{error, badencoding}
+		= parse_payload(<<1000:16, 16#c2, $A>>, undefined, 0, 0,
+			close, 4, undefined, #{}, <<0:3>>),
+	ok.
+
+parse_payload_rejects_streamed_invalid_utf8_fragment_test() ->
+	{error, badencoding}
+		= parse_payload(<<"A">>, undefined, 2, 0, fragment, 1,
+			{fin, text, <<0:3>>}, #{}, <<0:3>>),
+	ok.
+
+-endif.
 
 %% @doc Return a frame tuple from parsed state and data.
 

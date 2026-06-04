@@ -692,7 +692,7 @@ validate_s0(<<C,R/bits>>) when C >= 128 ->
 validate_s0(Text) ->
 	validate_ascii(Text).
 
-validate_s2(<<C,R/bits>>) ->
+validate_s2(<<C,R/bits>>) when C >= 128 ->
 	Class = element(C - 127, utf8_class()),
 	case Class of
 		7 -> validate_s0(R);
@@ -700,10 +700,12 @@ validate_s2(<<C,R/bits>>) ->
 		9 -> validate_s0(R);
 		_ -> 1
 	end;
+validate_s2(<<_,_/bits>>) ->
+	1;
 validate_s2(<<>>) ->
 	2.
 
-validate_s3(<<C,R/bits>>) ->
+validate_s3(<<C,R/bits>>) when C >= 128 ->
 	Class = element(C - 127, utf8_class()),
 	case Class of
 		7 -> validate_s2(R);
@@ -711,39 +713,47 @@ validate_s3(<<C,R/bits>>) ->
 		9 -> validate_s2(R);
 		_ -> 1
 	end;
+validate_s3(<<_,_/bits>>) ->
+	1;
 validate_s3(<<>>) ->
 	3.
 
-validate_s4(<<C,R/bits>>) ->
+validate_s4(<<C,R/bits>>) when C >= 128 ->
 	Class = element(C - 127, utf8_class()),
 	case Class of
 		7 -> validate_s2(R);
 		_ -> 1
 	end;
+validate_s4(<<_,_/bits>>) ->
+	1;
 validate_s4(<<>>) ->
 	4.
 
-validate_s5(<<C,R/bits>>) ->
+validate_s5(<<C,R/bits>>) when C >= 128 ->
 	Class = element(C - 127, utf8_class()),
 	case Class of
 		1 -> validate_s2(R);
 		9 -> validate_s2(R);
 		_ -> 1
 	end;
+validate_s5(<<_,_/bits>>) ->
+	1;
 validate_s5(<<>>) ->
 	5.
 
-validate_s6(<<C,R/bits>>) ->
+validate_s6(<<C,R/bits>>) when C >= 128 ->
 	Class = element(C - 127, utf8_class()),
 	case Class of
 		7 -> validate_s3(R);
 		9 -> validate_s3(R);
 		_ -> 1
 	end;
+validate_s6(<<_,_/bits>>) ->
+	1;
 validate_s6(<<>>) ->
 	6.
 
-validate_s7(<<C,R/bits>>) ->
+validate_s7(<<C,R/bits>>) when C >= 128 ->
 	Class = element(C - 127, utf8_class()),
 	case Class of
 		7 -> validate_s3(R);
@@ -751,15 +761,19 @@ validate_s7(<<C,R/bits>>) ->
 		9 -> validate_s3(R);
 		_ -> 1
 	end;
+validate_s7(<<_,_/bits>>) ->
+	1;
 validate_s7(<<>>) ->
 	7.
 
-validate_s8(<<C,R/bits>>) ->
+validate_s8(<<C,R/bits>>) when C >= 128 ->
 	Class = element(C - 127, utf8_class()),
 	case Class of
 		1 -> validate_s3(R);
 		_ -> 1
 	end;
+validate_s8(<<_,_/bits>>) ->
+	1;
 validate_s8(<<>>) ->
 	8.
 

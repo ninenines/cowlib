@@ -25,6 +25,7 @@
 
 -export([decode/1]).
 -export([decode/2]).
+-export([decode/3]).
 
 -export([encode/1]).
 -export([encode/2]).
@@ -39,6 +40,11 @@
 
 -opaque state() :: #state{}.
 -export_type([state/0]).
+
+-type decoder_opts() :: #{
+	max_headers => non_neg_integer()
+}.
+-export_type([decoder_opts/0]).
 
 -type encoder_opts() :: #{
 	huffman => boolean()
@@ -80,109 +86,128 @@ set_max_size(MaxSize, State) ->
 
 %% Decoding.
 
--spec decode(binary()) -> {cow_http:headers(), state()}.
-decode(Data) ->
-	decode(Data, init()).
+-spec decode(binary()) ->
+	{cow_http:headers(), state()}.
 
--spec decode(binary(), State) -> {cow_http:headers(), State} when State::state().
+decode(Data) ->
+	decode(Data, init(), #{}).
+
+-spec decode(binary(), state())
+	-> {cow_http:headers(), state()}.
+
+decode(Data, State) ->
+	decode(Data, State, #{}).
+
+-spec decode(binary(), state(), decoder_opts())
+	-> {cow_http:headers(), state()}.
+
 %% Dynamic table size update is only allowed at the beginning of a HEADERS block.
-decode(<< 0:2, 1:1, Rest/bits >>, State=#state{configured_max_size=ConfigMaxSize}) ->
+decode(<< 0:2, 1:1, Rest/bits >>, State=#state{configured_max_size=ConfigMaxSize},
+		Opts) ->
 	{MaxSize, Rest2} = dec_int5(Rest),
 	if
 		MaxSize =< ConfigMaxSize ->
 			State2 = table_update_size(MaxSize, State),
-			decode(Rest2, State2)
+			decode(Rest2, State2, Opts)
 	end;
-decode(Data, State) ->
-	decode(Data, State, []).
+decode(Data, State, Opts0) ->
+	Opts = #{
+		max_headers => maps:get(max_headers, Opts0, 100)
+	},
+	decode(Data, State, [], Opts).
 
-decode(<<>>, State, Acc) ->
+decode(<<>>, State, Acc, _) ->
 	{lists:reverse(Acc), State};
+decode(_, _, Acc, Opts)
+		when length(Acc) >= map_get(max_headers, Opts) ->
+	error(max_headers);
 %% Indexed header field representation.
-decode(<< 1:1, Rest/bits >>, State, Acc) ->
-	dec_indexed(Rest, State, Acc);
+decode(<< 1:1, Rest/bits >>, State, Acc, Opts) ->
+	dec_indexed(Rest, State, Acc, Opts);
 %% Literal header field with incremental indexing: new name.
-decode(<< 0:1, 1:1, 0:6, Rest/bits >>, State, Acc) ->
-	dec_lit_index_new_name(Rest, State, Acc);
+decode(<< 0:1, 1:1, 0:6, Rest/bits >>, State, Acc, Opts) ->
+	dec_lit_index_new_name(Rest, State, Acc, Opts);
 %% Literal header field with incremental indexing: indexed name.
-decode(<< 0:1, 1:1, Rest/bits >>, State, Acc) ->
-	dec_lit_index_indexed_name(Rest, State, Acc);
+decode(<< 0:1, 1:1, Rest/bits >>, State, Acc, Opts) ->
+	dec_lit_index_indexed_name(Rest, State, Acc, Opts);
 %% Literal header field without indexing: new name.
-decode(<< 0:8, Rest/bits >>, State, Acc) ->
-	dec_lit_no_index_new_name(Rest, State, Acc);
+decode(<< 0:8, Rest/bits >>, State, Acc, Opts) ->
+	dec_lit_no_index_new_name(Rest, State, Acc, Opts);
 %% Literal header field without indexing: indexed name.
-decode(<< 0:4, Rest/bits >>, State, Acc) ->
-	dec_lit_no_index_indexed_name(Rest, State, Acc);
+decode(<< 0:4, Rest/bits >>, State, Acc, Opts) ->
+	dec_lit_no_index_indexed_name(Rest, State, Acc, Opts);
 %% Literal header field never indexed: new name.
 %% @todo Keep track of "never indexed" headers.
-decode(<< 0:3, 1:1, 0:4, Rest/bits >>, State, Acc) ->
-	dec_lit_no_index_new_name(Rest, State, Acc);
+decode(<< 0:3, 1:1, 0:4, Rest/bits >>, State, Acc, Opts) ->
+	dec_lit_no_index_new_name(Rest, State, Acc, Opts);
 %% Literal header field never indexed: indexed name.
 %% @todo Keep track of "never indexed" headers.
-decode(<< 0:3, 1:1, Rest/bits >>, State, Acc) ->
-	dec_lit_no_index_indexed_name(Rest, State, Acc).
+decode(<< 0:3, 1:1, Rest/bits >>, State, Acc, Opts) ->
+	dec_lit_no_index_indexed_name(Rest, State, Acc, Opts).
 
 %% Indexed header field representation.
 
 %% We do the integer decoding inline where appropriate, falling
 %% back to dec_big_int for larger values.
-dec_indexed(<<2#1111111:7, 0:1, Int:7, Rest/bits>>, State, Acc) ->
+dec_indexed(<<2#1111111:7, 0:1, Int:7, Rest/bits>>, State, Acc, Opts) ->
 	{Name, Value} = table_get(127 + Int, State),
-	decode(Rest, State, [{Name, Value}|Acc]);
-dec_indexed(<<2#1111111:7, Rest0/bits>>, State, Acc) ->
+	decode(Rest, State, [{Name, Value}|Acc], Opts);
+dec_indexed(<<2#1111111:7, Rest0/bits>>, State, Acc, Opts) ->
 	{Index, Rest} = dec_big_int(Rest0, 127, 0),
 	{Name, Value} = table_get(Index, State),
-	decode(Rest, State, [{Name, Value}|Acc]);
-dec_indexed(<<Index:7, Rest/bits>>, State, Acc) ->
+	decode(Rest, State, [{Name, Value}|Acc], Opts);
+dec_indexed(<<Index:7, Rest/bits>>, State, Acc, Opts) ->
 	{Name, Value} = table_get(Index, State),
-	decode(Rest, State, [{Name, Value}|Acc]).
+	decode(Rest, State, [{Name, Value}|Acc], Opts).
 
 %% Literal header field with incremental indexing.
 
-dec_lit_index_new_name(Rest, State, Acc) ->
+dec_lit_index_new_name(Rest, State, Acc, Opts) ->
 	{Name, Rest2} = dec_str(Rest),
-	dec_lit_index(Rest2, State, Acc, Name).
+	dec_lit_index(Rest2, State, Acc, Opts, Name).
 
 %% We do the integer decoding inline where appropriate, falling
 %% back to dec_big_int for larger values.
-dec_lit_index_indexed_name(<<2#111111:6, 0:1, Int:7, Rest/bits>>, State, Acc) ->
+dec_lit_index_indexed_name(<<2#111111:6, 0:1, Int:7, Rest/bits>>,
+		State, Acc, Opts) ->
 	Name = table_get_name(63 + Int, State),
-	dec_lit_index(Rest, State, Acc, Name);
-dec_lit_index_indexed_name(<<2#111111:6, Rest0/bits>>, State, Acc) ->
+	dec_lit_index(Rest, State, Acc, Name, Opts);
+dec_lit_index_indexed_name(<<2#111111:6, Rest0/bits>>, State, Acc, Opts) ->
 	{Index, Rest} = dec_big_int(Rest0, 63, 0),
 	Name = table_get_name(Index, State),
-	dec_lit_index(Rest, State, Acc, Name);
-dec_lit_index_indexed_name(<<Index:6, Rest/bits>>, State, Acc) ->
+	dec_lit_index(Rest, State, Acc, Opts, Name);
+dec_lit_index_indexed_name(<<Index:6, Rest/bits>>, State, Acc, Opts) ->
 	Name = table_get_name(Index, State),
-	dec_lit_index(Rest, State, Acc, Name).
+	dec_lit_index(Rest, State, Acc, Opts, Name).
 
-dec_lit_index(Rest, State, Acc, Name) ->
+dec_lit_index(Rest, State, Acc, Opts, Name) ->
 	{Value, Rest2} = dec_str(Rest),
 	State2 = table_insert({Name, Value}, State),
-	decode(Rest2, State2, [{Name, Value}|Acc]).
+	decode(Rest2, State2, [{Name, Value}|Acc], Opts).
 
 %% Literal header field without indexing.
 
-dec_lit_no_index_new_name(Rest, State, Acc) ->
+dec_lit_no_index_new_name(Rest, State, Acc, Opts) ->
 	{Name, Rest2} = dec_str(Rest),
-	dec_lit_no_index(Rest2, State, Acc, Name).
+	dec_lit_no_index(Rest2, State, Acc, Opts, Name).
 
 %% We do the integer decoding inline where appropriate, falling
 %% back to dec_big_int for larger values.
-dec_lit_no_index_indexed_name(<<2#1111:4, 0:1, Int:7, Rest/bits>>, State, Acc) ->
+dec_lit_no_index_indexed_name(<<2#1111:4, 0:1, Int:7, Rest/bits>>,
+		State, Acc, Opts) ->
 	Name = table_get_name(15 + Int, State),
-	dec_lit_no_index(Rest, State, Acc, Name);
-dec_lit_no_index_indexed_name(<<2#1111:4, Rest0/bits>>, State, Acc) ->
+	dec_lit_no_index(Rest, State, Acc, Opts, Name);
+dec_lit_no_index_indexed_name(<<2#1111:4, Rest0/bits>>, State, Acc, Opts) ->
 	{Index, Rest} = dec_big_int(Rest0, 15, 0),
 	Name = table_get_name(Index, State),
-	dec_lit_no_index(Rest, State, Acc, Name);
-dec_lit_no_index_indexed_name(<<Index:4, Rest/bits>>, State, Acc) ->
+	dec_lit_no_index(Rest, State, Acc, Opts, Name);
+dec_lit_no_index_indexed_name(<<Index:4, Rest/bits>>, State, Acc, Opts) ->
 	Name = table_get_name(Index, State),
-	dec_lit_no_index(Rest, State, Acc, Name).
+	dec_lit_no_index(Rest, State, Acc, Opts, Name).
 
-dec_lit_no_index(Rest, State, Acc, Name) ->
+dec_lit_no_index(Rest, State, Acc, Opts, Name) ->
 	{Value, Rest2} = dec_str(Rest),
-	decode(Rest2, State, [{Name, Value}|Acc]).
+	decode(Rest2, State, [{Name, Value}|Acc], Opts).
 
 %% @todo Literal header field never indexed.
 

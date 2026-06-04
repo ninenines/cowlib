@@ -552,18 +552,24 @@ client_headers_frame(_, State) ->
 		State}.
 
 headers_decode(Frame=#headers{head=head_fin, data=HeaderData},
-		State=#http2_machine{decode_state=DecodeState0}, Type, Stream) ->
-	try cow_hpack:decode(HeaderData, DecodeState0) of
+		State=#http2_machine{opts=Opts, decode_state=DecodeState0},
+		Type, Stream) ->
+	try cow_hpack:decode(HeaderData, DecodeState0, Opts) of
 		{Headers, DecodeState} when Type =:= request ->
 			headers_enforce_concurrency_limit(Frame,
 				State#http2_machine{decode_state=DecodeState}, Type, Stream, Headers);
 		{Headers, DecodeState} ->
 			headers_process(Frame,
 				State#http2_machine{decode_state=DecodeState}, Type, Stream, Headers)
-	catch _:_ ->
-		{error, {connection_error, compression_error,
-			'Error while trying to decode HPACK-encoded header block. (RFC7540 4.3)'},
-			State}
+	catch
+		error:max_headers ->
+			{error, {connection_error, enhance_your_calm,
+				'The number of headers is larger than configuration allows. (RFC9110 5.4)'},
+				State};
+		C:E ->
+			{error, {connection_error, compression_error,
+				'Error while trying to decode HPACK-encoded header block. (RFC7540 4.3)'},
+				State}
 	end.
 
 headers_enforce_concurrency_limit(Frame=#headers{id=StreamID},

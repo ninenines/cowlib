@@ -566,7 +566,7 @@ headers_decode(Frame=#headers{head=head_fin, data=HeaderData},
 			{error, {connection_error, enhance_your_calm,
 				'The number of headers is larger than configuration allows. (RFC9110 5.4)'},
 				State};
-		C:E ->
+		_:_ ->
 			{error, {connection_error, compression_error,
 				'Error while trying to decode HPACK-encoded header block. (RFC7540 4.3)'},
 				State}

@@ -27,6 +27,8 @@
 -export([execute_decoder_instructions/2]).
 -export([encoder_set_settings/3]).
 
+-export([bench/0]).
+
 -record(state, {
 	%% Configuration.
 	%%
@@ -69,6 +71,11 @@
 	%% be [3, 2, 1] and the insert_count value would be 3, allowing
 	%% us to know what index the newest entry is using.
 	dyn_table = [] :: [{pos_integer(), {binary(), binary()}}],
+
+	%% Map indices for O(1) lookup during encoding.
+	%% Store absolute indices (which never change for an entry).
+	dyn_field_idx = #{} :: #{{binary(), binary()} => non_neg_integer()},
+	dyn_name_idx = #{} :: #{binary() => non_neg_integer()},
 
 	%% Decoder-specific state.
 
@@ -1410,17 +1417,26 @@ table_get_name_static(98) -> <<"x-frame-options">>.
 
 table_insert(Entry={Name, Value}, State=#state{capacity=Capacity,
 		size=Size0, insert_count=InsertCount, dyn_table=DynamicTable0,
+		dyn_field_idx=FieldIdx, dyn_name_idx=NameIdx,
 		draining_size=DrainingSize}) ->
 	EntrySize = byte_size(Name) + byte_size(Value) + 32,
 	if
 		EntrySize + Size0 =< Capacity ->
+			%% Add entry without eviction. Index is current InsertCount.
 			{ok, State#state{size=Size0 + EntrySize, insert_count=InsertCount + 1,
-				dyn_table=[{EntrySize, Entry}|DynamicTable0]}};
+				dyn_table=[{EntrySize, Entry}|DynamicTable0],
+				dyn_field_idx=FieldIdx#{Entry => InsertCount},
+				dyn_name_idx=NameIdx#{Name => InsertCount}}};
 		EntrySize =< Capacity ->
+			%% Evict, then add entry. Rebuild maps.
 			{DynamicTable, Size} = table_evict(DynamicTable0,
 				Capacity - EntrySize, 0, []),
+			NewTable = [{EntrySize, Entry}|DynamicTable],
+			{FieldIdx2, NameIdx2} = table_rebuild_indices(NewTable, InsertCount),
 			{ok, State#state{size=Size + EntrySize, insert_count=InsertCount + 1,
-				dyn_table=[{EntrySize, Entry}|DynamicTable],
+				dyn_table=NewTable,
+				dyn_field_idx=FieldIdx2,
+				dyn_name_idx=NameIdx2,
 				%% We reduce the draining size by how much was gained from evicting.
 				draining_size=DrainingSize - (Size0 - Size)}};
 		true -> % EntrySize > Capacity ->
@@ -1436,25 +1452,33 @@ table_evict([{EntrySize, _}|_], MaxSize, Size, Acc)
 table_evict([Entry = {EntrySize, _}|Tail], MaxSize, Size, Acc) ->
 	table_evict(Tail, MaxSize, Size + EntrySize, [Entry|Acc]).
 
-table_find_dyn(Entry, #state{insert_count=InsertCount, dyn_table=DynamicTable}) ->
-	table_find_dyn(Entry, DynamicTable, InsertCount - 1).
+%% Rebuild map indices from dynamic table.
+%% InsertCount is the count BEFORE incrementing for the new entry.
+%% Newest entry (first in list) gets index InsertCount, then decrement.
+table_rebuild_indices(DynTable, InsertCount) ->
+	table_rebuild_indices(DynTable, InsertCount, #{}, #{}).
 
-table_find_dyn(_, [], _) ->
-	not_found;
-table_find_dyn(Entry, [{_, Entry}|_], Index) ->
-	Index;
-table_find_dyn(Entry, [_|Tail], Index) ->
-	table_find_dyn(Entry, Tail, Index - 1).
+table_rebuild_indices([], _, FieldIdx, NameIdx) ->
+	{FieldIdx, NameIdx};
+table_rebuild_indices([{_, Entry = {Name, _}}|Tail], Index, FieldIdx, NameIdx) ->
+	%% Only store first occurrence (highest index = newest) for each key.
+	FieldIdx2 = case maps:is_key(Entry, FieldIdx) of
+		true -> FieldIdx;
+		false -> FieldIdx#{Entry => Index}
+	end,
+	NameIdx2 = case maps:is_key(Name, NameIdx) of
+		true -> NameIdx;
+		false -> NameIdx#{Name => Index}
+	end,
+	table_rebuild_indices(Tail, Index - 1, FieldIdx2, NameIdx2).
 
-table_find_name_dyn(Name, #state{insert_count=InsertCount, dyn_table=DynamicTable}) ->
-	table_find_name_dyn(Name, DynamicTable, InsertCount - 1).
+%% O(1) lookup using map index.
+table_find_dyn(Entry, #state{dyn_field_idx=FieldIdx}) ->
+	maps:get(Entry, FieldIdx, not_found).
 
-table_find_name_dyn(_, [], _) ->
-	not_found;
-table_find_name_dyn(Name, [{_, {Name, _}}|_], Index) ->
-	Index;
-table_find_name_dyn(Name, [_|Tail], Index) ->
-	table_find_name_dyn(Name, Tail, Index - 1).
+%% O(1) lookup using map index.
+table_find_name_dyn(Name, #state{dyn_name_idx=NameIdx}) ->
+	maps:get(Name, NameIdx, not_found).
 
 %% @todo These functions may error out if the encoder is invalid (2.2.3. Invalid References).
 table_get_dyn_abs(Index, #state{insert_count=InsertCount, dyn_table=DynamicTable}) ->
@@ -1579,3 +1603,51 @@ table_get_dyn_post_base_test() ->
 	{<<"i">>, <<"j">>} = table_get_dyn_post_base(2, 2, State3),
 	ok.
 -endif.
+
+%% Benchmark for dynamic table lookup performance.
+%% Run with: cow_qpack:bench().
+bench() ->
+	%% Build a state with many dynamic table entries
+	Headers = [
+		{<<"x-custom-", (integer_to_binary(N))/binary>>, <<"value-", (integer_to_binary(N))/binary>>}
+		|| N <- lists:seq(1, 50)
+	],
+	%% Create encoder state with capacity set
+	State0 = #state{
+		settings_received=true,
+		max_table_capacity=16384,
+		max_blocked_streams=100,
+		capacity=16384
+	},
+	State = lists:foldl(fun(H, S) ->
+		{ok, S2} = table_insert(H, S),
+		S2
+	end, State0, Headers),
+
+	%% Headers to look up (mix of existing and non-existing)
+	LookupHeaders = [
+		{<<"x-custom-1">>, <<"value-1">>},
+		{<<"x-custom-25">>, <<"value-25">>},
+		{<<"x-custom-50">>, <<"value-50">>},
+		{<<"x-nonexistent">>, <<"value">>},
+		{<<":status">>, <<"200">>}, % static table
+		{<<"content-type">>, <<"application/json">>} % static table
+	],
+
+	Iterations = 100000,
+
+	{Time, _} = timer:tc(fun() ->
+		bench_loop(Iterations, LookupHeaders, State)
+	end),
+
+	io:format("QPACK table_find benchmark~n"),
+	io:format("Dynamic table entries: ~p~n", [length(Headers)]),
+	io:format("Iterations: ~p~n", [Iterations * length(LookupHeaders)]),
+	io:format("Time: ~p us (~.3f us/lookup)~n",
+		[Time, Time / (Iterations * length(LookupHeaders))]),
+	ok.
+
+bench_loop(0, _, _) -> ok;
+bench_loop(N, Headers, State) ->
+	_ = [table_find_dyn(H, State) || H <- Headers],
+	bench_loop(N - 1, Headers, State).

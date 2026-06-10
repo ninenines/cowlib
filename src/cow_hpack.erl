@@ -171,7 +171,7 @@ dec_lit_index_new_name(Rest, State, Acc, Opts) ->
 dec_lit_index_indexed_name(<<2#111111:6, 0:1, Int:7, Rest/bits>>,
 		State, Acc, Opts) ->
 	Name = table_get_name(63 + Int, State),
-	dec_lit_index(Rest, State, Acc, Name, Opts);
+	dec_lit_index(Rest, State, Acc, Opts, Name);
 dec_lit_index_indexed_name(<<2#111111:6, Rest0/bits>>, State, Acc, Opts) ->
 	{Index, Rest} = dec_big_int(Rest0, 63, 0),
 	Name = table_get_name(Index, State),
@@ -230,6 +230,25 @@ dec_str(<<1:1, Length:7, Rest/bits>>) ->
 %% Test case extracted from h2spec.
 decode_reject_eos_test() ->
 	{'EXIT', _} = (catch decode(<<16#0085f2b24a84ff874951fffffffa7f:120>>)),
+	ok.
+
+decode_lit_index_dynamic_name_test() ->
+	%% Fill the dynamic table with two entries:
+	%% x-name-a: v1, then x-name-b: v1.
+	{_, State0} = decode(<<
+		16#4008782d6e616d652d61027631:104,
+		16#4008782d6e616d652d62027631:104
+	>>),
+	#state{dyn_table=[
+		{42,{<<"x-name-b">>, <<"v1">>}},
+		{42,{<<"x-name-a">>, <<"v1">>}}]} = State0,
+	%% Literal header with incremental indexing, name at index 63.
+	{Headers, State} = decode(<< 16#7f00027632:40 >>, State0),
+	Headers = [{<<"x-name-a">>, <<"v2">>}],
+	#state{dyn_table=[
+		{42,{<<"x-name-a">>, <<"v2">>}},
+		{42,{<<"x-name-b">>, <<"v1">>}},
+		{42,{<<"x-name-a">>, <<"v1">>}}]} = State,
 	ok.
 
 req_decode_test() ->

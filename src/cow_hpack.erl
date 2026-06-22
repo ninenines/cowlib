@@ -52,6 +52,7 @@
 -export_type([encoder_opts/0]).
 
 -ifdef(TEST).
+-include_lib("stdlib/include/assert.hrl").
 -include_lib("proper/include/proper.hrl").
 -endif.
 
@@ -229,7 +230,7 @@ dec_str(<<1:1, Length:7, Rest/bits>>) ->
 -ifdef(TEST).
 %% Test case extracted from h2spec.
 decode_reject_eos_test() ->
-	{'EXIT', _} = (catch decode(<<16#0085f2b24a84ff874951fffffffa7f:120>>)),
+	?assertError(_, decode(<<16#0085f2b24a84ff874951fffffffa7f:120>>)),
 	ok.
 
 decode_lit_index_dynamic_name_test() ->
@@ -445,10 +446,10 @@ table_update_decode_too_large_test() ->
 	State2 = set_max_size(512, State1),
 	%% Second response with the table size update (raw then huffman).
 	MaxSize = enc_big_int(1024 - 31, <<>>),
-	{'EXIT', _} = (catch decode(
+	?assertError(_, decode(
 		iolist_to_binary([<< 2#00111111>>, MaxSize, <<16#4803333037c1c0bf:64>>]),
 		State2)),
-	{'EXIT', _} = (catch decode(
+	?assertError(_, decode(
 		iolist_to_binary([<< 2#00111111>>, MaxSize, <<16#4883640effc1c0bf:64>>]),
 		State2)),
 	ok.

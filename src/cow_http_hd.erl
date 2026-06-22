@@ -144,6 +144,7 @@
 -include("cow_parse.hrl").
 
 -ifdef(TEST).
+-include_lib("stdlib/include/assert.hrl").
 -include_lib("proper/include/proper.hrl").
 
 vector(Min, Max, Dom) -> ?LET(N, choose(Min, Max), vector(N, Dom)).
@@ -432,7 +433,7 @@ parse_accept_error_test_() ->
 		<<"aud\tio/basic">>,
 		<<"audio/basic;t=\"zero \\", 0, " woo\"">>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_accept(V)) end} || V <- Tests].
+	[{V, fun() -> ?assertError(_, parse_accept(V)) end} || V <- Tests].
 
 horse_parse_accept() ->
 	horse:repeat(20000,
@@ -524,7 +525,7 @@ parse_accept_charset_error_test_() ->
 	Tests = [
 		<<>>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_accept_charset(V)) end} || V <- Tests].
+	[{V, fun() -> ?assertError(_, parse_accept_charset(V)) end} || V <- Tests].
 
 horse_parse_accept_charset() ->
 	horse:repeat(20000,
@@ -697,7 +698,7 @@ parse_accept_language_error_test_() ->
 		<<"en-us-loooooong">>,
 		<<"419-en-us">>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_accept_language(V)) end} || V <- Tests].
+	[{V, fun() -> ?assertError(_, parse_accept_language(V)) end} || V <- Tests].
 
 horse_parse_accept_language() ->
 	horse:repeat(20000,
@@ -726,7 +727,7 @@ parse_accept_ranges_error_test_() ->
 	Tests = [
 		<<>>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_accept_ranges(V)) end} || V <- Tests].
+	[{V, fun() -> ?assertError(_, parse_accept_ranges(V)) end} || V <- Tests].
 
 horse_parse_accept_ranges_none() ->
 	horse:repeat(200000,
@@ -769,7 +770,7 @@ access_control_allow_headers_error_test_() ->
 		[]
 	],
 	[{lists:flatten(io_lib:format("~p", [V])),
-		fun() -> {'EXIT', _} = (catch access_control_allow_headers(V)) end} || V <- Tests].
+		fun() -> ?assertError(_, access_control_allow_headers(V)) end} || V <- Tests].
 
 horse_access_control_allow_headers() ->
 	horse:repeat(200000,
@@ -797,7 +798,7 @@ access_control_allow_methods_error_test_() ->
 		[]
 	],
 	[{lists:flatten(io_lib:format("~p", [V])),
-		fun() -> {'EXIT', _} = (catch access_control_allow_methods(V)) end} || V <- Tests].
+		fun() -> ?assertError(_, access_control_allow_methods(V)) end} || V <- Tests].
 
 horse_access_control_allow_methods() ->
 	horse:repeat(200000,
@@ -859,7 +860,7 @@ access_control_expose_headers_error_test_() ->
 		[]
 	],
 	[{lists:flatten(io_lib:format("~p", [V])),
-		fun() -> {'EXIT', _} = (catch access_control_expose_headers(V)) end} || V <- Tests].
+		fun() -> ?assertError(_, access_control_expose_headers(V)) end} || V <- Tests].
 
 horse_access_control_expose_headers() ->
 	horse:repeat(200000,
@@ -951,7 +952,7 @@ parse_access_control_request_method_error_test_() ->
 	Tests = [
 		<<>>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_access_control_request_method(V)) end} || V <- Tests].
+	[{V, fun() -> ?assertError(_, parse_access_control_request_method(V)) end} || V <- Tests].
 
 horse_parse_access_control_request_method() ->
 	horse:repeat(200000,
@@ -985,7 +986,7 @@ parse_age_error_test_() ->
 		<<"123, 123">>,
 		<<"4.17">>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_age(V)) end} || V <- Tests].
+	[{V, fun() -> ?assertError(_, parse_age(V)) end} || V <- Tests].
 -endif.
 
 %% Allow header.
@@ -1300,7 +1301,7 @@ parse_cache_control_error_test_() ->
 	Tests = [
 		<<>>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_cache_control(V)) end} || V <- Tests].
+	[{V, fun() -> ?assertError(_, parse_cache_control(V)) end} || V <- Tests].
 
 horse_parse_cache_control_no_cache() ->
 	horse:repeat(200000,
@@ -1362,7 +1363,7 @@ parse_connection_error_test_() ->
 	Tests = [
 		<<>>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_connection(V)) end} || V <- Tests].
+	[{V, fun() -> ?assertError(_, parse_connection(V)) end} || V <- Tests].
 
 horse_parse_connection_close() ->
 	horse:repeat(200000,
@@ -1397,7 +1398,7 @@ parse_content_encoding_error_test_() ->
 	Tests = [
 		<<>>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_content_encoding(V)) end} || V <- Tests].
+	[{V, fun() -> ?assertError(_, parse_content_encoding(V)) end} || V <- Tests].
 
 horse_parse_content_encoding() ->
 	horse:repeat(200000,
@@ -1683,7 +1684,7 @@ parse_content_language_error_test_() ->
 	Tests = [
 		<<>>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_content_language(V)) end} || V <- Tests].
+	[{V, fun() -> ?assertError(_, parse_content_language(V)) end} || V <- Tests].
 
 horse_parse_content_language() ->
 	horse:repeat(100000,
@@ -1725,7 +1726,7 @@ parse_content_length_error_test_() ->
 		<<"123, 123">>,
 		<<"4.17">>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_content_length(V)) end} || V <- Tests].
+	[{V, fun() -> ?assertError(_, parse_content_length(V)) end} || V <- Tests].
 
 horse_parse_content_length_zero() ->
 	horse:repeat(100000,
@@ -1825,7 +1826,7 @@ parse_content_range_error_test_() ->
 	Tests = [
 		<<>>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_content_range(V)) end} || V <- Tests].
+	[{V, fun() -> ?assertError(_, parse_content_range(V)) end} || V <- Tests].
 
 horse_parse_content_range_bytes() ->
 	horse:repeat(200000,
@@ -2015,7 +2016,7 @@ parse_etag_error_test_() ->
 		<<"W">>,
 		<<"W/">>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_etag(V)) end} || V <- Tests].
+	[{V, fun() -> ?assertError(_, parse_etag(V)) end} || V <- Tests].
 
 horse_parse_etag() ->
 	horse:repeat(200000,
@@ -2063,7 +2064,7 @@ parse_expect_error_test_() ->
 		<<"200-OK">>,
 		<<"Cookies">>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_expect(V)) end} || V <- Tests].
+	[{V, fun() -> ?assertError(_, parse_expect(V)) end} || V <- Tests].
 
 horse_parse_expect() ->
 	horse:repeat(200000,
@@ -2240,7 +2241,7 @@ parse_if_match_error_test_() ->
 	Tests = [
 		<<>>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_if_match(V)) end} || V <- Tests].
+	[{V, fun() -> ?assertError(_, parse_if_match(V)) end} || V <- Tests].
 
 horse_parse_if_match() ->
 	horse:repeat(200000,
@@ -2287,7 +2288,7 @@ parse_if_none_match_error_test_() ->
 	Tests = [
 		<<>>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_if_none_match(V)) end} || V <- Tests].
+	[{V, fun() -> ?assertError(_, parse_if_none_match(V)) end} || V <- Tests].
 
 horse_parse_if_none_match() ->
 	horse:repeat(200000,
@@ -2318,7 +2319,7 @@ parse_if_range_error_test_() ->
 	Tests = [
 		<<>>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_if_range(V)) end} || V <- Tests].
+	[{V, fun() -> ?assertError(_, parse_if_range(V)) end} || V <- Tests].
 
 horse_parse_if_range_etag() ->
 	horse:repeat(200000,
@@ -2397,7 +2398,7 @@ parse_max_forwards_error_test_() ->
 		<<"123, 123">>,
 		<<"4.17">>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_max_forwards(V)) end} || V <- Tests].
+	[{V, fun() -> ?assertError(_, parse_max_forwards(V)) end} || V <- Tests].
 -endif.
 
 %% Origin header.
@@ -2514,7 +2515,7 @@ parse_origin_error_test_() ->
 		<<"null", $\t, "null">>,
 		<<"null", $\s, $\s, "null">>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_origin(V)) end} || V <- Tests].
+	[{V, fun() -> ?assertError(_, parse_origin(V)) end} || V <- Tests].
 
 horse_parse_origin_blue_example_org() ->
 	horse:repeat(200000,
@@ -2671,7 +2672,7 @@ parse_range_error_test_() ->
 	Tests = [
 		<<>>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_range(V)) end} || V <- Tests].
+	[{V, fun() -> ?assertError(_, parse_range(V)) end} || V <- Tests].
 
 horse_parse_range_first_last() ->
 	horse:repeat(200000,
@@ -2721,7 +2722,7 @@ parse_retry_after_error_test_() ->
 	Tests = [
 		<<>>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_retry_after(V)) end} || V <- Tests].
+	[{V, fun() -> ?assertError(_, parse_retry_after(V)) end} || V <- Tests].
 
 horse_parse_retry_after_date() ->
 	horse:repeat(200000,
@@ -2828,7 +2829,7 @@ parse_sec_websocket_extensions_error_test_() ->
 	Tests = [
 		<<>>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_sec_websocket_extensions(V)) end}
+	[{V, fun() -> ?assertError(_, parse_sec_websocket_extensions(V)) end}
 		|| V <- Tests].
 
 horse_parse_sec_websocket_extensions() ->
@@ -2866,7 +2867,7 @@ parse_sec_websocket_protocol_req_error_test_() ->
 	Tests = [
 		<<>>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_sec_websocket_protocol_req(V)) end}
+	[{V, fun() -> ?assertError(_, parse_sec_websocket_protocol_req(V)) end}
 		|| V <- Tests].
 
 horse_parse_sec_websocket_protocol_req() ->
@@ -2900,7 +2901,7 @@ parse_sec_websocket_protocol_resp_error_test_() ->
 	Tests = [
 		<<>>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_sec_websocket_protocol_resp(V)) end}
+	[{V, fun() -> ?assertError(_, parse_sec_websocket_protocol_resp(V)) end}
 		|| V <- Tests].
 
 horse_parse_sec_websocket_protocol_resp() ->
@@ -2937,7 +2938,7 @@ parse_sec_websocket_version_req_error_test_() ->
 		<<"7, 8, 13">>,
 		<<"invalid">>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_sec_websocket_version_req(V)) end}
+	[{V, fun() -> ?assertError(_, parse_sec_websocket_version_req(V)) end}
 		|| V <- Tests].
 
 horse_parse_sec_websocket_version_req_13() ->
@@ -2993,7 +2994,7 @@ parse_sec_websocket_version_resp_error_test_() ->
 	Tests = [
 		<<>>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_sec_websocket_version_resp(V)) end}
+	[{V, fun() -> ?assertError(_, parse_sec_websocket_version_resp(V)) end}
 		|| V <- Tests].
 
 horse_parse_sec_websocket_version_resp() ->
@@ -3124,7 +3125,7 @@ parse_trailer_error_test_() ->
 	Tests = [
 		<<>>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_trailer(V)) end} || V <- Tests].
+	[{V, fun() -> ?assertError(_, parse_trailer(V)) end} || V <- Tests].
 
 horse_parse_trailer() ->
 	horse:repeat(200000,
@@ -3172,7 +3173,7 @@ parse_transfer_encoding_error_test_() ->
 		<<",,,">>,
 		<<"a b">>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_transfer_encoding(V)) end}
+	[{V, fun() -> ?assertError(_, parse_transfer_encoding(V)) end}
 		|| V <- Tests].
 
 horse_parse_transfer_encoding_chunked() ->
@@ -3245,7 +3246,7 @@ parse_upgrade_error_test_() ->
 	Tests = [
 		<<>>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_upgrade(V)) end}
+	[{V, fun() -> ?assertError(_, parse_upgrade(V)) end}
 		|| V <- Tests].
 -endif.
 
@@ -3286,7 +3287,7 @@ parse_variant_key_error_test_() ->
 	Tests = [
 		{<<"(gzip fr), (identity fr), (br fr oops)">>, 2}
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_variant_key(V, N)) end} || {V, N} <- Tests].
+	[{V, fun() -> ?assertError(_, parse_variant_key(V, N)) end} || {V, N} <- Tests].
 -endif.
 
 -spec variant_key([[binary()]]) -> iolist().
@@ -3394,7 +3395,7 @@ parse_vary_error_test_() ->
 	Tests = [
 		<<>>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_vary(V)) end} || V <- Tests].
+	[{V, fun() -> ?assertError(_, parse_vary(V)) end} || V <- Tests].
 -endif.
 
 %% WT-Available-Protocols header.
@@ -3587,7 +3588,7 @@ parse_www_authenticate_error_test_() ->
 	Tests = [
 		<<>>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_www_authenticate(V)) end} || V <- Tests].
+	[{V, fun() -> ?assertError(_, parse_www_authenticate(V)) end} || V <- Tests].
 
 horse_parse_www_authenticate() ->
 	horse:repeat(200000,
@@ -3658,7 +3659,7 @@ parse_x_forwarded_for_error_test_() ->
 	Tests = [
 		<<>>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_x_forwarded_for(V)) end} || V <- Tests].
+	[{V, fun() -> ?assertError(_, parse_x_forwarded_for(V)) end} || V <- Tests].
 -endif.
 
 %% Internal.

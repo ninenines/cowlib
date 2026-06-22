@@ -38,6 +38,8 @@
 -include("cow_parse.hrl").
 
 -ifdef(TEST).
+-include_lib("stdlib/include/assert.hrl").
+
 dripfeed(<< C, Rest/bits >>, Acc, State, F) ->
 	case F(<< Acc/binary, C >>, State) of
 		more ->
@@ -344,7 +346,7 @@ stream_chunked_error_test_() ->
 		{<<"10000000000000000\r\n">>, {0, 0}}
 	],
 	[{lists:flatten(io_lib:format("value ~p state ~p", [V, S])),
-		fun() -> {'EXIT', _} = (catch stream_chunked(V, S)) end}
+		fun() -> ?assertError(_, stream_chunked(V, S)) end}
 			|| {V, S} <- Tests].
 
 horse_stream_chunked() ->

@@ -57,6 +57,10 @@
 	(C =:= $z)
 ).
 
+-ifdef(TEST).
+-include_lib("stdlib/include/assert.hrl").
+-endif.
+
 %% Parsing.
 
 -spec parse_dictionary(binary()) -> sh_dictionary().
@@ -266,24 +270,25 @@ parse_struct_hd_test_() ->
 				Raw = raw_to_binary(Raw0),
 				case HeaderType of
 					<<"dictionary">> when MustFail; CanFail ->
-						{'EXIT', _} = (catch parse_dictionary(Raw));
+						?assertError(_, parse_dictionary(Raw));
 					%% The test "binary.json: non-zero pad bits" does not fail
 					%% due to our reliance on Erlang/OTP's base64 module.
 					<<"item">> when CanFail ->
-						case (catch parse_item(Raw)) of
-							{'EXIT', _} -> ok;
+						try parse_item(Raw) of
 							Expected -> ok
+						catch error:_ ->
+							ok
 						end;
 					<<"item">> when MustFail ->
-						{'EXIT', _} = (catch parse_item(Raw));
+						?assertError(_, parse_item(Raw));
 					<<"list">> when MustFail; CanFail ->
-						{'EXIT', _} = (catch parse_list(Raw));
+						?assertError(_, parse_list(Raw));
 					<<"dictionary">> ->
-						Expected = (catch parse_dictionary(Raw));
+						Expected = parse_dictionary(Raw);
 					<<"item">> ->
-						Expected = (catch parse_item(Raw));
+						Expected = parse_item(Raw);
 					<<"list">> ->
-						Expected = (catch parse_list(Raw))
+						Expected = parse_list(Raw)
 				end
 			end}
 		|| Test=#{

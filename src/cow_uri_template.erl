@@ -51,6 +51,10 @@
 -include("cow_inline.hrl").
 -include("cow_parse.hrl").
 
+-ifdef(TEST).
+-include_lib("stdlib/include/assert.hrl").
+-endif.
+
 %% Parse a URI template.
 
 -spec parse(binary()) -> uri_template().
@@ -342,7 +346,7 @@ expand_uritemplate_test_() ->
 						io:format("expected: ~0p", [Expected]),
 						case Expected of
 							false ->
-								{'EXIT', _} = (catch expand(URITemplate, Vars));
+								?assertError(_, expand(URITemplate, Vars));
 							[_|_] ->
 								Result = iolist_to_binary(expand(URITemplate, Vars)),
 								io:format("~p", [Result]),

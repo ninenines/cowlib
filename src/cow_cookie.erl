@@ -42,6 +42,10 @@
 
 -include("cow_inline.hrl").
 
+-ifdef(TEST).
+-include_lib("stdlib/include/assert.hrl").
+-endif.
+
 %% Cookie header.
 
 -spec parse_cookie(binary()) -> [{binary(), binary()}].
@@ -164,7 +168,7 @@ parse_cookie_error_test_() ->
 	Tests = [
 		<<"=">>
 	],
-	[{V, fun() -> {'EXIT', {badarg, _}} = (catch parse_cookie(V)) end} || V <- Tests].
+	[{V, fun() -> ?assertError(badarg, parse_cookie(V)) end} || V <- Tests].
 -endif.
 
 %% Set-Cookie header.
@@ -425,9 +429,8 @@ setcookie_max_age_test() ->
 		<<" Max-Age=111">>,
 		<<" Secure">>] = F(<<"Customer">>, <<"WILE_E_COYOTE">>,
 			#{max_age => 111, secure => true}),
-	case catch F(<<"Customer">>, <<"WILE_E_COYOTE">>, #{max_age => -111}) of
-		{'EXIT', {{badarg, {max_age, -111}}, _}} -> ok
-	end,
+	?assertError({badarg, {max_age, -111}},
+		F(<<"Customer">>, <<"WILE_E_COYOTE">>, #{max_age => -111})),
 	[<<"Customer=WILE_E_COYOTE">>,
 		<<" Expires=", _/binary>>,
 		<<" Max-Age=86417">>] = F(<<"Customer">>, <<"WILE_E_COYOTE">>,

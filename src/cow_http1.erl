@@ -32,6 +32,10 @@
 
 -include("cow_inline.hrl").
 
+-ifdef(TEST).
+-include_lib("stdlib/include/assert.hrl").
+-endif.
+
 %% @doc Parse the request line.
 
 -spec parse_request_line(binary()) -> {binary(), binary(), version(), binary()}.
@@ -70,7 +74,7 @@ parse_request_line_error_test_() ->
 		<<"content-type: text/plain\r\n">>,
 		<<0:80, "\r\n">>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_request_line(V)) end}
+	[{V, fun() -> ?assertError(_, parse_request_line(V)) end}
 		|| V <- Tests].
 
 horse_parse_request_line_get_path() ->
@@ -143,7 +147,7 @@ parse_status_line_error_test_() ->
 		<<"content-type: text/plain\r\n">>,
 		<<0:80, "\r\n">>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_status_line(V)) end}
+	[{V, fun() -> ?assertError(_, parse_status_line(V)) end}
 		|| V <- Tests].
 
 horse_parse_status_line_200() ->
@@ -259,7 +263,7 @@ parse_headers_error_test_() ->
 		<<0:80, "\r\n\r\n">>,
 		<<"content-type: text/plain\r\ncontent-length: 12\r\n">>
 	],
-	[{V, fun() -> {'EXIT', _} = (catch parse_headers(V)) end}
+	[{V, fun() -> ?assertError(_, parse_headers(V)) end}
 		|| V <- Tests].
 
 horse_parse_headers() ->
@@ -315,7 +319,7 @@ parse_version(<<"HTTP/1.0">>) -> 'HTTP/1.0'.
 parse_version_test() ->
 	'HTTP/1.1' = parse_version(<<"HTTP/1.1">>),
 	'HTTP/1.0' = parse_version(<<"HTTP/1.0">>),
-	{'EXIT', _} = (catch parse_version(<<"HTTP/1.2">>)),
+	?assertError(_, parse_version(<<"HTTP/1.2">>)),
 	ok.
 -endif.
 
@@ -348,7 +352,7 @@ version('HTTP/1.0') -> <<"HTTP/1.0">>.
 version_test() ->
 	<<"HTTP/1.1">> = version('HTTP/1.1'),
 	<<"HTTP/1.0">> = version('HTTP/1.0'),
-	{'EXIT', _} = (catch version('HTTP/1.2')),
+	?assertError(_, version('HTTP/1.2')),
 	ok.
 -endif.
 

@@ -80,6 +80,10 @@
 
 -include("cow_parse.hrl").
 
+-ifdef(TEST).
+-include_lib("stdlib/include/assert.hrl").
+-endif.
+
 %% HTTP/1 function aliases.
 
 -spec parse_request_line(binary()) -> {binary(), binary(), cow_http1:version(), binary()}.
@@ -465,7 +469,7 @@ ensure_scheme_error_test_() ->
 		undefined
 	],
 	[{iolist_to_binary(io_lib:format("~0p", [V])),
-		fun() -> {'EXIT', _} = (catch ensure_scheme(V)) end} || V <- Tests].
+		fun() -> ?assertError(_, ensure_scheme(V)) end} || V <- Tests].
 
 -endif.
 
@@ -515,6 +519,6 @@ ensure_token_error_test_() ->
 		undefined
 	],
 	[{iolist_to_binary(io_lib:format("~0p", [V])),
-		fun() -> {'EXIT', _} = (catch ensure_token(V)) end} || V <- Tests].
+		fun() -> ?assertError(_, ensure_token(V)) end} || V <- Tests].
 
 -endif.

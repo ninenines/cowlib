@@ -46,6 +46,10 @@
 }.
 -export_type([event/0]).
 
+-ifdef(TEST).
+-include_lib("stdlib/include/assert.hrl").
+-endif.
+
 -spec init() -> state().
 init() ->
 	#state{}.
@@ -354,12 +358,12 @@ event_test() ->
 	ok.
 
 event_error_test() ->
-	{'EXIT', _} = (catch event(#{id => "test\n"})),
-	{'EXIT', _} = (catch event(#{id => "test\r"})),
-	{'EXIT', _} = (catch event(#{id => "test\r\n"})),
-	{'EXIT', _} = (catch event(#{event => "test\n"})),
-	{'EXIT', _} = (catch event(#{event => "test\r"})),
-	{'EXIT', _} = (catch event(#{event => "test\r\n"})),
+	?assertError(_, event(#{id => "test\n"})),
+	?assertError(_, event(#{id => "test\r"})),
+	?assertError(_, event(#{id => "test\r\n"})),
+	?assertError(_, event(#{event => "test\n"})),
+	?assertError(_, event(#{event => "test\r"})),
+	?assertError(_, event(#{event => "test\r\n"})),
 	ok.
 
 identity_test_() ->

@@ -42,6 +42,7 @@
 
 %% Validation functions.
 
+-export([ensure_scheme/1]).
 -export([ensure_token/1]).
 
 %% Types used by all versions of HTTP.
@@ -200,23 +201,41 @@ process_headers(Headers, Type = trailers, ReqMethod, IsFin, _LocalSettings) ->
 request_pseudo_headers([{<<":method">>, _}|_], #{method := _}) ->
 	{error, multiple_method_pseudo_headers};
 request_pseudo_headers([{<<":method">>, Method}|Tail], PseudoHeaders) ->
-	request_pseudo_headers(Tail, PseudoHeaders#{method => Method});
+	try validate_token(Method) of
+		ok -> request_pseudo_headers(Tail, PseudoHeaders#{method => Method})
+	catch _:_ ->
+		{error, invalid_pseudo_header}
+	end;
 request_pseudo_headers([{<<":scheme">>, _}|_], #{scheme := _}) ->
 	{error, multiple_scheme_pseudo_headers};
 request_pseudo_headers([{<<":scheme">>, Scheme}|Tail], PseudoHeaders) ->
-	request_pseudo_headers(Tail, PseudoHeaders#{scheme => Scheme});
+	try validate_scheme(Scheme) of
+		ok -> request_pseudo_headers(Tail, PseudoHeaders#{scheme => Scheme})
+	catch _:_ ->
+		{error, invalid_pseudo_header}
+	end;
 request_pseudo_headers([{<<":authority">>, _}|_], #{authority := _}) ->
 	{error, multiple_authority_pseudo_headers};
 request_pseudo_headers([{<<":authority">>, Authority}|Tail], PseudoHeaders) ->
-	request_pseudo_headers(Tail, PseudoHeaders#{authority => Authority});
+	case validate_header(Authority) of
+		ok -> request_pseudo_headers(Tail, PseudoHeaders#{authority => Authority});
+		error -> {error, invalid_pseudo_header}
+	end;
 request_pseudo_headers([{<<":path">>, _}|_], #{path := _}) ->
 	{error, multiple_path_pseudo_headers};
 request_pseudo_headers([{<<":path">>, Path}|Tail], PseudoHeaders) ->
-	request_pseudo_headers(Tail, PseudoHeaders#{path => Path});
+	case validate_header(Path) of
+		ok -> request_pseudo_headers(Tail, PseudoHeaders#{path => Path});
+		error -> {error, invalid_pseudo_header}
+	end;
 request_pseudo_headers([{<<":protocol">>, _}|_], #{protocol := _}) ->
 	{error, multiple_protocol_pseudo_headers};
 request_pseudo_headers([{<<":protocol">>, Protocol}|Tail], PseudoHeaders) ->
-	request_pseudo_headers(Tail, PseudoHeaders#{protocol => Protocol});
+	try validate_token(Protocol) of
+		ok -> request_pseudo_headers(Tail, PseudoHeaders#{protocol => Protocol})
+	catch _:_ ->
+		{error, invalid_pseudo_header}
+	end;
 request_pseudo_headers([{<<":", _/bits>>, _}|_], _) ->
 	{error, invalid_pseudo_header};
 request_pseudo_headers(Headers, PseudoHeaders) ->
@@ -278,18 +297,30 @@ regular_headers([{<<"te">>, Value}|_], request) when Value =/= <<"trailers">> ->
 	{error, invalid_te_value};
 regular_headers([{<<"te">>, _}|_], Type) when Type =/= request ->
 	{error, invalid_te_header};
-regular_headers([{Name, _}|Tail], Type) ->
+regular_headers([{Name, Value}|Tail], Type) ->
 	Pattern = [
 		<<$A>>, <<$B>>, <<$C>>, <<$D>>, <<$E>>, <<$F>>, <<$G>>, <<$H>>, <<$I>>,
 		<<$J>>, <<$K>>, <<$L>>, <<$M>>, <<$N>>, <<$O>>, <<$P>>, <<$Q>>, <<$R>>,
-		<<$S>>, <<$T>>, <<$U>>, <<$V>>, <<$W>>, <<$X>>, <<$Y>>, <<$Z>>
+		<<$S>>, <<$T>>, <<$U>>, <<$V>>, <<$W>>, <<$X>>, <<$Y>>, <<$Z>>,
+		<<$\r>>, <<$\n>>, <<$\0>>
 	],
 	case binary:match(Name, Pattern) of
-		nomatch -> regular_headers(Tail, Type);
-		_ -> {error, uppercase_header_name}
+		nomatch ->
+			case validate_header(Value) of
+				ok -> regular_headers(Tail, Type);
+				error -> {error, invalid_header_value}
+			end;
+		_ -> {error, invalid_header_name}
 	end;
 regular_headers([], _) ->
 	ok.
+
+%% Reject CR, LF and NUL early.
+validate_header(Value) ->
+	case binary:match(Value, [<<$\r>>, <<$\n>>, <<$\0>>]) of
+		nomatch -> ok;
+		_ -> error
+	end.
 
 request_expected_size(Headers, IsFin, PseudoHeaders) ->
 	case [CL || {<<"content-length">>, CL} <- Headers] of
@@ -378,16 +409,80 @@ remove_http1_headers(Headers) ->
 
 %% Validation functions.
 
+-spec ensure_scheme(binary()) -> binary().
+
+ensure_scheme(Scheme) ->
+	ok = validate_scheme(Scheme),
+	Scheme.
+
+validate_scheme(<<C,R/bits>>) when ?IS_ALPHA(C) ->
+	validate_scheme1(R).
+
+validate_scheme1(<<C,R/bits>>)
+		when ?IS_ALPHA(C) or ?IS_DIGIT(C) or
+		(C =:= $+) or (C =:= $-) or (C =:= $.) ->
+	validate_scheme1(R);
+validate_scheme1(<<>>) ->
+	ok.
+
+-ifdef(TEST).
+
+ensure_scheme_test_() ->
+	Tests = [
+		<<"a">>, <<"a0">>,
+		<<"a+">>, <<"a-">>, <<"a.">>,
+		<<"GET">>,
+		<<"foo">>,
+		<<"foo-bar">>,
+		<<"foo+bar">>,
+		<<"foo.bar">>,
+		%% Long.
+		<< <<$a>> || _ <- lists:seq(1, 1024) >>
+	],
+	[{V, fun() -> V = ensure_scheme(V) end} || V <- Tests].
+
+ensure_scheme_error_test_() ->
+	Tests = [
+		%% Empty.
+		<<>>,
+		%% Invalid first.
+		<<"9http">>,
+		<<"-http">>,
+		<<"+http">>,
+		<<".http">>,
+		<<" http">>,
+		<<"_http">>,
+		%% Invalid chars.
+		<<"a!">>, <<"a#">>, <<"a'">>, <<"a*">>,
+		<<"a^">>, <<"a_">>, <<"a`">>, <<"a|">>, <<"a~">>,
+		<<"a ">>, <<"a,">>, <<"a:">>, <<"a;">>, <<"a\"">>,
+		<<"a(">>, <<"a)">>, <<"a<">>, <<"a>">>, <<"a[">>,
+		<<"a]">>, <<"a{">>, <<"a}">>, <<"a\\">>, <<"a?">>,
+		<<"a@">>, <<"a\r">>, <<"a\n">>, <<"a\0">>,
+		<<$a,16#1f>>, <<$a,16#7f>>, <<$a,16#80>>,
+		<<195,169>>, %% é
+		%% Invalid type.
+		undefined
+	],
+	[{iolist_to_binary(io_lib:format("~0p", [V])),
+		fun() -> {'EXIT', _} = (catch ensure_scheme(V)) end} || V <- Tests].
+
+-endif.
+
 -spec ensure_token(binary()) -> binary().
 
-ensure_token(Token) when Token =/= <<>> ->
+ensure_token(Token) ->
 	ok = validate_token(Token),
 	Token.
 
-validate_token(<<C,R/bits>>) when ?IS_TOKEN(C) -> validate_token(R);
-validate_token(<<>>) -> ok.
+validate_token(Token) when Token =/= <<>> ->
+	validate_token1(Token).
+
+validate_token1(<<C,R/bits>>) when ?IS_TOKEN(C) -> validate_token1(R);
+validate_token1(<<>>) -> ok.
 
 -ifdef(TEST).
+
 ensure_token_test_() ->
 	Tests = [
 		<<$a>>, <<$0>>, <<"!">>, <<"#">>,
@@ -398,7 +493,7 @@ ensure_token_test_() ->
 		<<"foo">>,
 		<<"foo-bar">>,
 		<<"!#$%&'*+-.^_`|~09azAZ">>,
-		%% Long token.
+		%% Long.
 		<< <<$a>> || _ <- lists:seq(1, 1024) >>
 	],
 	[{V, fun() -> V = ensure_token(V) end} || V <- Tests].
@@ -421,4 +516,5 @@ ensure_token_error_test_() ->
 	],
 	[{iolist_to_binary(io_lib:format("~0p", [V])),
 		fun() -> {'EXIT', _} = (catch ensure_token(V)) end} || V <- Tests].
+
 -endif.

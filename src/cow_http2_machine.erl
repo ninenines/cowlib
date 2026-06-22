@@ -660,8 +660,10 @@ format_error(pseudo_header_after_regular) ->
 	'Pseudo-headers were found after regular headers. (RFC7540 8.1.2.1)';
 format_error(trailer_invalid_pseudo_header) ->
 	'Trailer header blocks must not contain pseudo-headers. (RFC7540 8.1.2.1)';
-format_error(uppercase_header_name) ->
+format_error(invalid_header_name) ->
 	'Header names must be lowercase. (RFC7540 8.1.2)';
+format_error(invalid_header_value) ->
+	'Header values must only contain valid characters. (RFC7540 8.1.2)';
 format_error(Reason) ->
 	cow_http:format_semantic_error(Reason).
 

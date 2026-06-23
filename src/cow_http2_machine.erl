@@ -243,8 +243,10 @@ common_preface(State=#http2_machine{opts=Opts, next_settings=NextSettings}) ->
 settings_init(Opts) ->
 	S0 = setting_from_opt(#{}, Opts, max_decode_table_size,
 		header_table_size, 4096),
+	%% We use a default of 100 even though the protocol
+	%% default is infinity.
 	S1 = setting_from_opt(S0, Opts, max_concurrent_streams,
-		max_concurrent_streams, infinity),
+		max_concurrent_streams, infinity, 100),
 	S2 = setting_from_opt(S1, Opts, initial_stream_window_size,
 		initial_window_size, 65535),
 	S3 = setting_from_opt(S2, Opts, max_frame_size_received,
@@ -254,9 +256,15 @@ settings_init(Opts) ->
 		enable_connect_protocol, false).
 
 setting_from_opt(Settings, Opts, OptName, SettingName, Default) ->
-	case maps:get(OptName, Opts, Default) of
-		Default -> Settings;
-		Value -> Settings#{SettingName => Value}
+	setting_from_opt(Settings, Opts, OptName, SettingName, Default, Default).
+
+setting_from_opt(Settings, Opts, OptName, SettingName,
+		Default, DefaultIfMissing) ->
+	case Opts of
+		#{OptName := Default} -> Settings;
+		#{OptName := Value} -> Settings#{SettingName => Value};
+		#{} when Default =:= DefaultIfMissing -> Settings;
+		#{} -> Settings#{SettingName => DefaultIfMissing}
 	end.
 
 -spec terminate(State::http2_machine()) -> ok.

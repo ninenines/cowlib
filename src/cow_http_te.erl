@@ -62,7 +62,7 @@ dripfeed(<< C, Rest/bits >>, Acc, State, F) ->
 %% @doc Decode an identity stream.
 
 -spec stream_identity(Data, State)
-	-> {more, Data, Len, State} | {done, Data, Len, Data}
+	-> {more, Data, Len, State} | {done, Data, no_trailers, Data}
 	when Data::binary(), State::state(), Len::non_neg_integer().
 stream_identity(Data, {Streamed, Total}) ->
 	Streamed2 = Streamed + byte_size(Data),
@@ -72,7 +72,7 @@ stream_identity(Data, {Streamed, Total}) ->
 		true ->
 			Size = Total - Streamed,
 			<< Data2:Size/binary, Rest/bits >> = Data,
-			{done, Data2, Total, Rest}
+			{done, Data2, no_trailers, Rest}
 	end.
 
 -spec identity(Data) -> Data when Data::iodata().
@@ -81,11 +81,11 @@ identity(Data) ->
 
 -ifdef(TEST).
 stream_identity_test() ->
-	{done, <<>>, 0, <<>>}
+	{done, <<>>, no_trailers, <<>>}
 		= stream_identity(identity(<<>>), {0, 0}),
-	{done, <<"\r\n">>, 2, <<>>}
+	{done, <<"\r\n">>, no_trailers, <<>>}
 		= stream_identity(identity(<<"\r\n">>), {0, 2}),
-	{done, << 0:80000 >>, 10000, <<>>}
+	{done, << 0:80000 >>, no_trailers, <<>>}
 		= stream_identity(identity(<< 0:80000 >>), {0, 10000}),
 	ok.
 
@@ -94,7 +94,7 @@ stream_identity_parts_test() ->
 		= stream_identity(<< 0:8000 >>, {0, 2999}),
 	{more, << 0:8000 >>, 999, S2}
 		= stream_identity(<< 0:8000 >>, S1),
-	{done, << 0:7992 >>, 2999, <<>>}
+	{done, << 0:7992 >>, no_trailers, <<>>}
 		= stream_identity(<< 0:7992 >>, S2),
 	ok.
 

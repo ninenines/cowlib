@@ -16,11 +16,15 @@
 -dialyzer(no_improper_lists).
 
 -export([parse_qs/1]).
+-export([parse_qs/2]).
 -export([qs/1]).
 -export([urldecode/1]).
 -export([urlencode/1]).
 
 -include("cow_inline.hrl").
+
+-type parse_opts() :: #{max_keys => non_neg_integer()}.
+-export_type([parse_opts/0]).
 
 -type qs_vals() :: [{binary(), binary() | true}].
 
@@ -33,50 +37,65 @@
 -spec parse_qs(binary()) -> qs_vals().
 
 parse_qs(Binary) ->
-	parse_qs_name(Binary, Binary, 0, 0).
+	parse_qs(Binary, #{}).
+
+-spec parse_qs(binary(), parse_opts()) -> qs_vals().
+
+parse_qs(Binary, Opts) ->
+	MaxKeys = maps:get(max_keys, Opts, 100),
+	parse_qs_name(Binary, Binary, 0, 0, MaxKeys).
 
 -define(IS_NOT_SEP(C), (C =/= $&) andalso (C =/= $=)).
 
-parse_qs_name(<<C1, C2, C3, C4, Rest/bits>>, Orig, Skip, Len)
+parse_qs_name(_, _, _, _, 0) ->
+	error(limit_reached);
+parse_qs_name(<<C1, C2, C3, C4, Rest/bits>>, Orig, Skip, Len, MaxKeys)
 		when ?IS_NOT_SEP(C1) andalso ?IS_NOT_SEP(C2)
 		andalso ?IS_NOT_SEP(C3) andalso ?IS_NOT_SEP(C4) ->
-	parse_qs_name(Rest, Orig, Skip, Len + 4);
-parse_qs_name(<<C, Rest/bits>>, Orig, Skip, Len)
+	parse_qs_name(Rest, Orig, Skip, Len + 4, MaxKeys);
+parse_qs_name(<<C, Rest/bits>>, Orig, Skip, Len, MaxKeys)
 		when ?IS_NOT_SEP(C) ->
-	parse_qs_name(Rest, Orig, Skip, Len + 1);
-parse_qs_name(<<$=, Rest/bits>>, Orig, Skip, Len)
+	parse_qs_name(Rest, Orig, Skip, Len + 1, MaxKeys);
+parse_qs_name(<<$=, Rest/bits>>, Orig, Skip, Len, MaxKeys)
 		when Len =/= 0 ->
 	Name = urldecode(binary:part(Orig, Skip, Len)),
-	parse_qs_value(Rest, Orig, Skip + Len + 1, 0, Name);
-parse_qs_name(<<$&, Rest/bits>>, Orig, Skip, 0) ->
-	parse_qs_name(Rest, Orig, Skip + 1, 0);
-parse_qs_name(<<$&, Rest/bits>>, Orig, Skip, Len) ->
+	parse_qs_value(Rest, Orig, Skip + Len + 1, 0, MaxKeys, Name);
+parse_qs_name(<<$&, Rest/bits>>, Orig, Skip, 0, MaxKeys) ->
+	parse_qs_name(Rest, Orig, Skip + 1, 0, MaxKeys);
+parse_qs_name(<<$&, Rest/bits>>, Orig, Skip, Len, MaxKeys) ->
 	Name = urldecode(binary:part(Orig, Skip, Len)),
-	[{Name, true}|parse_qs_name(Rest, Orig, Skip + Len + 1, 0)];
-parse_qs_name(<<>>, _, _, 0) ->
+	[{Name, true}|parse_qs_name(Rest, Orig, Skip + Len + 1, 0, MaxKeys - 1)];
+parse_qs_name(<<>>, _, _, 0, _) ->
 	[];
-parse_qs_name(<<>>, Orig, Skip, Len) ->
+parse_qs_name(<<>>, Orig, Skip, Len, _) ->
 	Name = urldecode(binary:part(Orig, Skip, Len)),
 	[{Name, true}].
 
-parse_qs_value(<<C1, C2, C3, C4, Rest/bits>>, Orig, Skip, Len, Name)
+parse_qs_value(<<C1, C2, C3, C4, Rest/bits>>, Orig, Skip, Len, MaxKeys, Name)
 		when (C1 =/= $&) andalso (C2 =/= $&)
 		andalso (C3 =/= $&) andalso (C4 =/= $&) ->
-	parse_qs_value(Rest, Orig, Skip, Len + 4, Name);
-parse_qs_value(<<C, Rest/bits>>, Orig, Skip, Len, Name)
+	parse_qs_value(Rest, Orig, Skip, Len + 4, MaxKeys, Name);
+parse_qs_value(<<C, Rest/bits>>, Orig, Skip, Len, MaxKeys, Name)
 		when (C =/= $&) ->
-	parse_qs_value(Rest, Orig, Skip, Len + 1, Name);
-parse_qs_value(<<$&, Rest/bits>>, Orig, Skip, Len, Name) ->
+	parse_qs_value(Rest, Orig, Skip, Len + 1, MaxKeys, Name);
+parse_qs_value(<<$&, Rest/bits>>, Orig, Skip, Len, MaxKeys, Name) ->
 	Value = urldecode(binary:part(Orig, Skip, Len)),
-	[{Name, Value}|parse_qs_name(Rest, Orig, Skip + Len + 1, 0)];
-parse_qs_value(<<>>, _, _, 0, Name) ->
+	[{Name, Value}|parse_qs_name(Rest, Orig, Skip + Len + 1, 0, MaxKeys - 1)];
+parse_qs_value(<<>>, _, _, 0, _, Name) ->
 	[{Name, <<>>}];
-parse_qs_value(<<>>, Orig, Skip, Len, Name) ->
+parse_qs_value(<<>>, Orig, Skip, Len, _, Name) ->
 	Value = urldecode(binary:part(Orig, Skip, Len)),
 	[{Name, Value}].
 
 -ifdef(TEST).
 parse_qs_test_() ->
+	HundredResult = [
+		{<<"a", (integer_to_binary(I))/binary>>, <<"b">>}
+	|| I <- lists:seq(1, 100)],
+	Hundred = iolist_to_binary(lists:join("&", [
+		[Key, $=, Value]
+	|| {Key, Value} <- HundredResult])),
+	HundredPlusOne = <<Hundred/binary,"&a101=b">>,
 	Tests = [
 		{<<>>, []},
 		{<<"&">>, []},
@@ -103,7 +122,10 @@ parse_qs_test_() ->
 		{<<"a%20b=c%20d">>, [{<<"a b">>, <<"c d">>}]},
 		{<<"%25%26%3D=%25%26%3D&_-.=.-_">>, [{<<"%&=">>, <<"%&=">>},
 			{<<"_-.">>, <<".-_">>}]},
-		{<<"for=extend%2Franch">>, [{<<"for">>, <<"extend/ranch">>}]}
+		{<<"for=extend%2Franch">>, [{<<"for">>, <<"extend/ranch">>}]},
+		%% Testing max_keys option.
+		{Hundred, HundredResult},
+		{HundredPlusOne, error}
 	],
 	[{Qs, fun() ->
 		E = try parse_qs(Qs) of

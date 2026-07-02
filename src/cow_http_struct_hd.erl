@@ -414,8 +414,8 @@ inner_list({list, List, Params}) ->
 
 bare_item({string, String}) ->
 	[$", escape_string(String, <<>>), $"];
-%% @todo Must fail if Token has invalid characters.
 bare_item({token, Token}) ->
+	ok = validate_token(Token),
 	Token;
 bare_item({binary, Binary}) ->
 	[$:, base64:encode(Binary), $:];
@@ -483,6 +483,16 @@ bare_item(true) ->
 bare_item(false) ->
 	<<"?0">>.
 
+validate_token(<<C,R/bits>>)
+		when ?IS_ALPHA(C) or (C =:= $*) ->
+	validate_token1(R).
+
+validate_token1(<<C,R/bits>>)
+		when ?IS_TOKEN(C) or (C =:= $:) or (C =:= $/) ->
+	validate_token1(R);
+validate_token1(<<>>) ->
+	ok.
+
 exp_div(0) -> 1;
 exp_div(N) -> 10 * exp_div(N + 1).
 
@@ -524,4 +534,9 @@ struct_hd_identity_test_() ->
 			<<"expected">> := Expected0
 		} <- Tests]
 	end || File <- Files]).
+
+struct_hd_item_test() ->
+	<<"token">> = iolist_to_binary(item({item, {token, <<"token">>}, []})),
+	?assertError(_, item({item, {token, <<"tok\0en">>}, []})),
+	ok.
 -endif.

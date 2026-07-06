@@ -31,6 +31,7 @@
 -export_type([version/0]).
 
 -include("cow_inline.hrl").
+-include("cow_swar.hrl").
 
 -ifdef(TEST).
 -include_lib("stdlib/include/assert.hrl").
@@ -182,6 +183,14 @@ parse_header(<< $\r, $\n, Rest/bits >>, Acc) ->
 parse_header(Data, Acc) ->
 	parse_hd_name(Data, Acc, <<>>).
 
+%% SWAR fast path: 7 bytes are ASCII (< 128) and none of them is
+%% the terminator $: (0x3A) nor the whitespace error sentinels $\s
+%% (0x20) and $\t (0x09). On a match the 7 bytes are lowercased in
+%% parallel via ?swar_lower and appended in one bit-string operation,
+%% preserving the per-byte ?LOWER semantics of the slow path.
+parse_hd_name(<< W:56, Rest/bits >>, Acc, SoFar)
+		when ?is_safe_ascii_swar(W, $:, $\s, $\t) ->
+	parse_hd_name(Rest, Acc, << SoFar/binary, (?swar_lower(W)):56 >>);
 parse_hd_name(<< C, Rest/bits >>, Acc, SoFar) ->
 	case C of
 		$: -> parse_hd_before_value(Rest, Acc, SoFar);
@@ -204,6 +213,11 @@ parse_hd_before_value(<< $\t, Rest/bits >>, Acc, Name) ->
 parse_hd_before_value(Data, Acc, Name) ->
 	parse_hd_value(Data, Acc, Name, <<>>).
 
+%% SWAR fast path: 7 bytes that are ASCII (< 128) and none is $\r (0x0D).
+%% Carriage return is the only delimiter for header values in HTTP/1.
+parse_hd_value(<< W:56, Rest/bits >>, Acc, Name, SoFar)
+		when ?is_safe_ascii_swar(W, $\r) ->
+	parse_hd_value(Rest, Acc, Name, << SoFar/binary, W:56 >>);
 parse_hd_value(<< $\r, Rest/bits >>, Acc, Name, SoFar) ->
 	case Rest of
 		<< $\n, C, Rest2/bits >> when C =:= $\s; C =:= $\t ->
@@ -276,6 +290,26 @@ horse_parse_headers() ->
 			"Content-Type: text/plain\r\n"
 			"\r\nRest">>)
 	).
+
+horse_parse_headers_lower() ->
+	horse:repeat(50000,
+		parse_headers(<<"server: Erlang/R17\r\n"
+			"date: Sun, 23 Feb 2014 09:30:39 GMT\r\n"
+			"x-forwarded-for: 198.51.100.42, 203.0.113.7\r\n"
+			"content-length: 12\r\n"
+			"content-type: text/plain\r\n"
+			"\r\nRest">>)
+	).
+
+horse_parse_headers_mixed_case() ->
+	horse:repeat(50000,
+		parse_headers(<<"X-Forwarded-For-Original-Value: 1\r\n"
+			"X-Request-ID: abc\r\n"
+			"X-Amzn-Trace-Id: Root=1-5759e988-bd862e3fe1be46a994272793\r\n"
+			"Strict-Transport-Security: max-age=63072000\r\n"
+			"Cache-Control: no-cache, no-store, must-revalidate\r\n"
+			"\r\nRest">>)
+	).
 -endif.
 
 %% @doc Extract path and query string from a binary,
@@ -288,10 +322,17 @@ parse_fullpath(Fullpath) ->
 parse_fullpath(<<>>, Path) -> {Path, <<>>};
 parse_fullpath(<< $#, _/bits >>, Path) -> {Path, <<>>};
 parse_fullpath(<< $?, Qs/bits >>, Path) -> parse_fullpath_query(Qs, Path, <<>>);
+%% SWAR fast path: 7 bytes that are ASCII (< 128) and contain
+%% neither $# nor $?, the only delimiters for the path segment.
+parse_fullpath(<< W:56, Rest/bits >>, SoFar) when ?is_safe_ascii_swar(W, $#, $?) ->
+	parse_fullpath(Rest, << SoFar/binary, W:56 >>);
 parse_fullpath(<< C, Rest/bits >>, SoFar) -> parse_fullpath(Rest, << SoFar/binary, C >>).
 
 parse_fullpath_query(<<>>, Path, Query) -> {Path, Query};
 parse_fullpath_query(<< $#, _/bits >>, Path, Query) -> {Path, Query};
+%% SWAR fast path: 7 bytes that are ASCII (< 128) and contain no $#.
+parse_fullpath_query(<< W:56, Rest/bits >>, Path, SoFar) when ?is_safe_ascii_swar(W, $#) ->
+	parse_fullpath_query(Rest, Path, << SoFar/binary, W:56 >>);
 parse_fullpath_query(<< C, Rest/bits >>, Path, SoFar) ->
 	parse_fullpath_query(Rest, Path, << SoFar/binary, C >>).
 
@@ -307,6 +348,26 @@ parse_fullpath_test() ->
 	{<<"/path/to/resource">>, <<"q=cowboy">>}
 		= parse_fullpath(<<"/path/to/resource?q=cowboy">>),
 	ok.
+
+horse_parse_fullpath_short() ->
+	horse:repeat(200000,
+		parse_fullpath(<<"/api/v1/users/42">>)
+	).
+
+horse_parse_fullpath_long() ->
+	horse:repeat(200000,
+		parse_fullpath(<<"/path/to/some/deeper/resource/in/the/api">>)
+	).
+
+horse_parse_fullpath_query() ->
+	horse:repeat(200000,
+		parse_fullpath(<<"/search?q=erlang+cowboy&sort=updated&state=open">>)
+	).
+
+horse_parse_fullpath_fragment() ->
+	horse:repeat(200000,
+		parse_fullpath(<<"/path/to/resource#anchor-name-here">>)
+	).
 -endif.
 
 %% @doc Convert an HTTP version to atom.

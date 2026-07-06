@@ -31,11 +31,18 @@
 -export([encode/2]).
 -export([encode/3]).
 
+-export([bench/0]).
+
 -record(state, {
 	size = 0 :: non_neg_integer(),
 	max_size = 4096 :: non_neg_integer(),
 	configured_max_size = 4096 :: non_neg_integer(),
-	dyn_table = [] :: [{pos_integer(), {binary(), binary()}}]
+	dyn_table = [] :: [{pos_integer(), {binary(), binary()}}],
+	%% Map indices for O(1) lookup during encoding.
+	%% Maps store sequence numbers; actual index = 62 + (count - 1 - seq)
+	%% where count = maps:size(dyn_field_idx).
+	dyn_field_idx = #{} :: #{{binary(), binary()} => non_neg_integer()},
+	dyn_name_idx = #{} :: #{binary() => non_neg_integer()}
 }).
 
 -opaque state() :: #state{}.
@@ -907,12 +914,16 @@ table_find_field({<<"user-agent">>, <<>>}, _) -> 58;
 table_find_field({<<"vary">>, <<>>}, _) -> 59;
 table_find_field({<<"via">>, <<>>}, _) -> 60;
 table_find_field({<<"www-authenticate">>, <<>>}, _) -> 61;
-table_find_field(Header, #state{dyn_table=DynamicTable}) ->
-	table_find_field_dyn(Header, DynamicTable, 62).
+table_find_field(Header, State) ->
+	table_find_field_dyn(Header, State).
 
-table_find_field_dyn(_, [], _) -> not_found;
-table_find_field_dyn(Header, [{_, Header}|_], Index) -> Index;
-table_find_field_dyn(Header, [_|Tail], Index) -> table_find_field_dyn(Header, Tail, Index + 1).
+%% O(1) lookup using map index.
+%% Maps store sequence numbers; convert to actual index.
+table_find_field_dyn(Header, #state{dyn_field_idx=FieldIdx}) ->
+	case FieldIdx of
+		#{Header := Seq} -> 62 + maps:size(FieldIdx) - 1 - Seq;
+		_ -> not_found
+	end.
 
 table_find_name(<<":authority">>, _) -> 1;
 table_find_name(<<":method">>, _) -> 2;
@@ -966,12 +977,16 @@ table_find_name(<<"user-agent">>, _) -> 58;
 table_find_name(<<"vary">>, _) -> 59;
 table_find_name(<<"via">>, _) -> 60;
 table_find_name(<<"www-authenticate">>, _) -> 61;
-table_find_name(Name, #state{dyn_table=DynamicTable}) ->
-	table_find_name_dyn(Name, DynamicTable, 62).
+table_find_name(Name, State) ->
+	table_find_name_dyn(Name, State).
 
-table_find_name_dyn(_, [], _) -> not_found;
-table_find_name_dyn(Name, [{Name, _}|_], Index) -> Index;
-table_find_name_dyn(Name, [_|Tail], Index) -> table_find_name_dyn(Name, Tail, Index + 1).
+%% O(1) lookup using map index.
+%% Maps store sequence numbers; convert to actual index.
+table_find_name_dyn(Name, #state{dyn_field_idx=FieldIdx, dyn_name_idx=NameIdx}) ->
+	case NameIdx of
+		#{Name := Seq} -> 62 + maps:size(FieldIdx) - 1 - Seq;
+		_ -> not_found
+	end.
 
 table_get(1, _) -> {<<":authority">>, <<>>};
 table_get(2, _) -> {<<":method">>, <<"GET">>};
@@ -1103,22 +1118,38 @@ table_get_name(Index, #state{dyn_table=DynamicTable}) ->
 	{_, {Name, _}} = lists:nth(Index - 61, DynamicTable),
 	Name.
 
-table_insert(Entry = {Name, Value}, State=#state{size=Size, max_size=MaxSize, dyn_table=DynamicTable}) ->
+table_insert(Entry = {Name, Value}, State=#state{size=Size, max_size=MaxSize,
+		dyn_table=DynamicTable, dyn_field_idx=FieldIdx, dyn_name_idx=NameIdx}) ->
 	EntrySize = byte_size(Name) + byte_size(Value) + 32,
 	if
 		EntrySize + Size =< MaxSize ->
-			%% Add entry without eviction
-			State#state{size=Size + EntrySize, dyn_table=[{EntrySize, Entry}|DynamicTable]};
+			%% Add entry without eviction.
+			%% Store sequence number = current count (0-indexed).
+			%% New entry gets highest seq, maps to index 62 after computation.
+			Seq = maps:size(FieldIdx),
+			State#state{
+				size=Size + EntrySize,
+				dyn_table=[{EntrySize, Entry}|DynamicTable],
+				dyn_field_idx=FieldIdx#{Entry => Seq},
+				dyn_name_idx=NameIdx#{Name => Seq}
+			};
 		EntrySize =< MaxSize ->
-			%% Evict, then add entry
+			%% Evict, then add entry. Rebuild maps from new table.
 			{DynamicTable2, Size2} = table_resize(DynamicTable, MaxSize - EntrySize, 0, []),
-			State#state{size=Size2 + EntrySize, dyn_table=[{EntrySize, Entry}|DynamicTable2]};
+			NewTable = [{EntrySize, Entry}|DynamicTable2],
+			{FieldIdx2, NameIdx2} = table_rebuild_indices(NewTable),
+			State#state{
+				size=Size2 + EntrySize,
+				dyn_table=NewTable,
+				dyn_field_idx=FieldIdx2,
+				dyn_name_idx=NameIdx2
+			};
 		EntrySize > MaxSize ->
 			%% "an attempt to add an entry larger than the
 			%% maximum size causes the table to be emptied
 			%% of all existing entries and results in an
 			%% empty table" (RFC 7541, 4.4)
-			State#state{size=0, dyn_table=[]}
+			State#state{size=0, dyn_table=[], dyn_field_idx=#{}, dyn_name_idx=#{}}
 	end.
 
 table_resize([], _, Size, Acc) ->
@@ -1128,14 +1159,42 @@ table_resize([{EntrySize, _}|_], MaxSize, Size, Acc) when Size + EntrySize > Max
 table_resize([Entry = {EntrySize, _}|Tail], MaxSize, Size, Acc) ->
 	table_resize(Tail, MaxSize, Size + EntrySize, [Entry|Acc]).
 
+%% Rebuild map indices from dynamic table list.
+%% We iterate newest to oldest, assigning decreasing seq numbers.
+%% Final count = maps:size(FieldIdx), used in lookup formula.
+table_rebuild_indices(DynTable) ->
+	%% First build with positions 0,1,2... then adjust to seq numbers.
+	%% Seq = (Count - 1) - Position, so newest (pos 0) gets highest seq.
+	{FieldIdx0, NameIdx0, Count} = table_rebuild_indices(DynTable, 0, #{}, #{}),
+	%% Convert positions to seq numbers: seq = count - 1 - pos
+	FieldIdx = maps:map(fun(_, Pos) -> Count - 1 - Pos end, FieldIdx0),
+	NameIdx = maps:map(fun(_, Pos) -> Count - 1 - Pos end, NameIdx0),
+	{FieldIdx, NameIdx}.
+
+table_rebuild_indices([], Pos, FieldIdx, NameIdx) ->
+	{FieldIdx, NameIdx, Pos};
+table_rebuild_indices([{_, Entry = {Name, _}}|Tail], Pos, FieldIdx, NameIdx) ->
+	%% Only store first occurrence (lowest position = lowest index) for each key.
+	FieldIdx2 = case maps:is_key(Entry, FieldIdx) of
+		true -> FieldIdx;
+		false -> FieldIdx#{Entry => Pos}
+	end,
+	NameIdx2 = case maps:is_key(Name, NameIdx) of
+		true -> NameIdx;
+		false -> NameIdx#{Name => Pos}
+	end,
+	table_rebuild_indices(Tail, Pos + 1, FieldIdx2, NameIdx2).
+
 table_update_size(0, State) ->
-	State#state{size=0, max_size=0, dyn_table=[]};
+	State#state{size=0, max_size=0, dyn_table=[], dyn_field_idx=#{}, dyn_name_idx=#{}};
 table_update_size(MaxSize, State=#state{size=CurrentSize})
 		when CurrentSize =< MaxSize ->
 	State#state{max_size=MaxSize};
 table_update_size(MaxSize, State=#state{dyn_table=DynTable}) ->
 	{DynTable2, Size} = table_resize(DynTable, MaxSize, 0, []),
-	State#state{size=Size, max_size=MaxSize, dyn_table=DynTable2}.
+	{FieldIdx, NameIdx} = table_rebuild_indices(DynTable2),
+	State#state{size=Size, max_size=MaxSize, dyn_table=DynTable2,
+		dyn_field_idx=FieldIdx, dyn_name_idx=NameIdx}.
 
 -ifdef(TEST).
 prop_str_raw() ->
@@ -1148,3 +1207,42 @@ prop_str_huffman() ->
 		{Str, <<>>} =:= dec_str(iolist_to_binary(enc_str(Str, huffman)))
 	end).
 -endif.
+
+%% Benchmark for dynamic table lookup performance.
+%% Run with: cow_hpack:bench().
+bench() ->
+	%% Build a state with many dynamic table entries
+	Headers = [
+		{<<"x-custom-", (integer_to_binary(N))/binary>>, <<"value-", (integer_to_binary(N))/binary>>}
+		|| N <- lists:seq(1, 50)
+	],
+	State0 = init(16384), % Large table to avoid eviction
+	State = lists:foldl(fun(H, S) -> table_insert(H, S) end, State0, Headers),
+
+	%% Headers to look up (mix of existing and non-existing)
+	LookupHeaders = [
+		{<<"x-custom-1">>, <<"value-1">>},
+		{<<"x-custom-25">>, <<"value-25">>},
+		{<<"x-custom-50">>, <<"value-50">>},
+		{<<"x-nonexistent">>, <<"value">>},
+		{<<":status">>, <<"200">>}, % static table
+		{<<"content-type">>, <<>>} % static table
+	],
+
+	Iterations = 100000,
+
+	{Time, _} = timer:tc(fun() ->
+		bench_loop(Iterations, LookupHeaders, State)
+	end),
+
+	io:format("HPACK table_find benchmark~n"),
+	io:format("Dynamic table entries: ~p~n", [length(Headers)]),
+	io:format("Iterations: ~p~n", [Iterations * length(LookupHeaders)]),
+	io:format("Time: ~p us (~.3f us/lookup)~n",
+		[Time, Time / (Iterations * length(LookupHeaders))]),
+	ok.
+
+bench_loop(0, _, _) -> ok;
+bench_loop(N, Headers, State) ->
+	_ = [table_find(H, State) || H <- Headers],
+	bench_loop(N - 1, Headers, State).

@@ -19,6 +19,11 @@
 -export([cookie/1]).
 -export([setcookie/3]).
 
+%% The -unsafe attribute is validated starting from OTP-29.
+%% On earlier OTP versions it is treated as a wild attribute.
+-unsafe([{cookie, 1, "the Name and Value must be safe, "
+	"meaning they do not contain invalid characters"}]).
+
 -type cookie_attrs() :: #{
 	expires => calendar:datetime(),
 	max_age => calendar:datetime(),

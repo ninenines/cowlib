@@ -499,7 +499,11 @@ exp_div(N) -> 10 * exp_div(N + 1).
 escape_string(<<>>, Acc) -> Acc;
 escape_string(<<$\\,R/bits>>, Acc) -> escape_string(R, <<Acc/binary,$\\,$\\>>);
 escape_string(<<$",R/bits>>, Acc) -> escape_string(R, <<Acc/binary,$\\,$">>);
-escape_string(<<C,R/bits>>, Acc) -> escape_string(R, <<Acc/binary,C>>).
+%% A structured field string may only contain printable ASCII (RFC 8941
+%% sf-string, %x20-7E). Reject any other byte to prevent header injection
+%% (e.g. CR/LF response splitting) when building headers from strings.
+escape_string(<<C,R/bits>>, Acc) when C >= 16#20, C =< 16#7e ->
+	escape_string(R, <<Acc/binary,C>>).
 
 params(Params) ->
 	[case Param of
@@ -538,5 +542,13 @@ struct_hd_identity_test_() ->
 struct_hd_item_test() ->
 	<<"token">> = iolist_to_binary(item({item, {token, <<"token">>}, []})),
 	?assertError(_, item({item, {token, <<"tok\0en">>}, []})),
+	ok.
+
+struct_hd_string_test() ->
+	<<"\"string\"">> = iolist_to_binary(item({item, {string, <<"string">>}, []})),
+	<<"\"\\\"\\\\\"">> = iolist_to_binary(item({item, {string, <<$",$\\>>}, []})),
+	?assertError(_, item({item, {string, <<"bad\r\nstring">>}, []})),
+	?assertError(_, item({item, {string, <<"bad\0string">>}, []})),
+	?assertError(_, item({item, {string, <<"bad\tstring">>}, []})),
 	ok.
 -endif.

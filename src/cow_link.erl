@@ -368,10 +368,10 @@ link(Links) ->
 	lists:join(<<", ">>, [do_link(Link) || Link <- Links]).
 
 do_link(#{target := TargetURI, rel := Rel, attributes := Params}) ->
-	SafeTarget = ensure_uri_reference(iolist_to_binary(TargetURI)),
+	ok = validate_uri_reference(iolist_to_binary(TargetURI)),
 	SafeRel = escape(iolist_to_binary(Rel), <<>>),
 	[
-		$<, SafeTarget, <<">"
+		$<, TargetURI, <<">"
 		"; rel=\"">>, SafeRel, $",
 		[do_link_kv(Key, Value) || {Key, Value} <- Params]
 	].
@@ -380,10 +380,6 @@ do_link_kv(Key, Value) ->
 	SafeKey = cow_http:ensure_token(iolist_to_binary(Key)),
 	SafeValue = escape(iolist_to_binary(Value), <<>>),
 	[<<"; ">>, SafeKey, <<"=\"">>, SafeValue, $"].
-
-ensure_uri_reference(URI) ->
-	ok = validate_uri_reference(URI),
-	URI.
 
 validate_uri_reference(<<>>) -> ok;
 validate_uri_reference(<<C,R/bits>>) when ?IS_URI_CHAR(C) -> validate_uri_reference(R).

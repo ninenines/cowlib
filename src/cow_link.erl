@@ -369,10 +369,10 @@ link(Links) ->
 
 do_link(#{target := TargetURI, rel := Rel, attributes := Params}) ->
 	ok = validate_uri_reference(iolist_to_binary(TargetURI)),
-	SafeRel = escape(iolist_to_binary(Rel), <<>>),
+	ok = validate_rel(iolist_to_binary(Rel)),
 	[
 		$<, TargetURI, <<">"
-		"; rel=\"">>, SafeRel, $",
+		"; rel=\"">>, Rel, $",
 		[do_link_kv(Key, Value) || {Key, Value} <- Params]
 	].
 
@@ -383,6 +383,9 @@ do_link_kv(Key, Value) ->
 
 validate_uri_reference(<<>>) -> ok;
 validate_uri_reference(<<C,R/bits>>) when ?IS_URI_CHAR(C) -> validate_uri_reference(R).
+
+validate_rel(<<>>) -> ok;
+validate_rel(<<C,R/bits>>) when ?IS_URI_CHAR(C) or (C =:= $\s) -> validate_rel(R).
 
 escape(<<>>, Acc) -> Acc;
 escape(<<$\\,R/bits>>, Acc) -> escape(R, <<Acc/binary,$\\,$\\>>);
@@ -452,10 +455,10 @@ link_test_() ->
 				]
 			}
 		]},
-		{<<"</>; rel=\"self\\\", <https://example.org/>; rel=\\\"preconnect\"">>, [
+		{<<"</>; rel=\"start http://example.net/relation/other\"">>, [
 			#{
 				target => <<"/">>,
-				rel => <<"self\", <https://example.org/>; rel=\"preconnect">>,
+				rel => <<"start http://example.net/relation/other">>,
 				attributes => []
 			}
 		]}
@@ -469,6 +472,11 @@ link_error_test_() ->
 			rel => <<"self">>, attributes => []}],
 		[#{target => <<"</">>, rel => <<"self">>, attributes => []}],
 		[#{target => <<"/ ">>, rel => <<"self">>, attributes => []}],
+		[#{target => <<"/">>,
+			rel => <<"self\", <https://example.org/>; rel=\"preconnect">>,
+			attributes => []}],
+		[#{target => <<"/">>, rel => <<"self\\">>, attributes => []}],
+		[#{target => <<"/">>, rel => <<"self\r\n">>, attributes => []}],
 		[#{target => <<"/">>, rel => <<"self">>,
 			attributes => [{<<"a\"; rel=\"preconnect">>, <<"b">>}]}],
 		[#{target => <<"/">>, rel => <<"self">>, attributes => [{<<"a b">>, <<"c">>}]}],

@@ -23,6 +23,10 @@
 -include("cow_inline.hrl").
 -include("cow_parse.hrl").
 
+-ifdef(TEST).
+-include_lib("stdlib/include/assert.hrl").
+-endif.
+
 -type link() :: #{
 	target := binary(),
 	rel := binary(),
@@ -364,12 +368,25 @@ link(Links) ->
 	lists:join(<<", ">>, [do_link(Link) || Link <- Links]).
 
 do_link(#{target := TargetURI, rel := Rel, attributes := Params}) ->
+	SafeTarget = ensure_uri_reference(iolist_to_binary(TargetURI)),
+	SafeRel = escape(iolist_to_binary(Rel), <<>>),
 	[
-		$<, TargetURI, <<">"
-		"; rel=\"">>, Rel, $",
-		[[<<"; ">>, Key, <<"=\"">>, escape(iolist_to_binary(Value), <<>>), $"]
-			|| {Key, Value} <- Params]
+		$<, SafeTarget, <<">"
+		"; rel=\"">>, SafeRel, $",
+		[do_link_kv(Key, Value) || {Key, Value} <- Params]
 	].
+
+do_link_kv(Key, Value) ->
+	SafeKey = cow_http:ensure_token(iolist_to_binary(Key)),
+	SafeValue = escape(iolist_to_binary(Value), <<>>),
+	[<<"; ">>, SafeKey, <<"=\"">>, SafeValue, $"].
+
+ensure_uri_reference(URI) ->
+	ok = validate_uri_reference(URI),
+	URI.
+
+validate_uri_reference(<<>>) -> ok;
+validate_uri_reference(<<C,R/bits>>) when ?IS_URI_CHAR(C) -> validate_uri_reference(R).
 
 escape(<<>>, Acc) -> Acc;
 escape(<<$\\,R/bits>>, Acc) -> escape(R, <<Acc/binary,$\\,$\\>>);
@@ -438,8 +455,29 @@ link_test_() ->
 					{<<"quoted">>, <<"name=\"value\"">>}
 				]
 			}
+		]},
+		{<<"</>; rel=\"self\\\", <https://example.org/>; rel=\\\"preconnect\"">>, [
+			#{
+				target => <<"/">>,
+				rel => <<"self\", <https://example.org/>; rel=\"preconnect">>,
+				attributes => []
+			}
 		]}
 	],
 	[{iolist_to_binary(io_lib:format("~0p", [V])),
 		fun() -> R = iolist_to_binary(link(V)) end} || {R, V} <- Tests].
+
+link_error_test_() ->
+	Tests = [
+		[#{target => <<"/>; rel=\"preconnect\", <https://example.org/">>,
+			rel => <<"self">>, attributes => []}],
+		[#{target => <<"</">>, rel => <<"self">>, attributes => []}],
+		[#{target => <<"/ ">>, rel => <<"self">>, attributes => []}],
+		[#{target => <<"/">>, rel => <<"self">>,
+			attributes => [{<<"a\"; rel=\"preconnect">>, <<"b">>}]}],
+		[#{target => <<"/">>, rel => <<"self">>, attributes => [{<<"a b">>, <<"c">>}]}],
+		[#{target => <<"/">>, rel => <<"self">>, attributes => [{<<>>, <<"c">>}]}]
+	],
+	[{iolist_to_binary(io_lib:format("~0p", [V])),
+		fun() -> ?assertError(_, iolist_to_binary(link(V))) end} || V <- Tests].
 -endif.

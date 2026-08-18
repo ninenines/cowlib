@@ -75,6 +75,10 @@
 	(C =:= $() or (C =:= $)) or (C =:= $*) or (C =:= $+) or
 	(C =:= $,) or (C =:= $;) or (C =:= $=)).
 
+-define(IS_URI_CHAR(C),
+	?IS_URI_UNRESERVED(C) or ?IS_URI_GEN_DELIMS(C) or
+	?IS_URI_SUB_DELIMS(C) or (C =:= $%)).
+
 -define(IS_VCHAR(C), C =:= $\t; C > 31, C < 127).
 -define(IS_VCHAR_OBS(C), C =:= $\t; C > 31, C =/= 127).
 -define(IS_WS(C), (C =:= $\s) or (C =:= $\t)).

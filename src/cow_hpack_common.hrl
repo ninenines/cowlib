@@ -46,6 +46,11 @@ dec_big_int(<<1:1, Value:7, Rest/bits>>, Int, M) when M < 32 ->
 
 %% Prefix encoding.
 
+enc_int4(Int, Prefix) when Int < 15 ->
+	<<Prefix:4, Int:4>>;
+enc_int4(Int, Prefix) ->
+	enc_big_int(Int - 15, <<Prefix:4, 2#1111:4>>).
+
 enc_int5(Int, Prefix) when Int < 31 ->
 	<<Prefix:3, Int:5>>;
 enc_int5(Int, Prefix) ->

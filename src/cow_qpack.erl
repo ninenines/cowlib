@@ -837,11 +837,6 @@ enc_int3(Int, Prefix) when Int < 7 ->
 enc_int3(Int, Prefix) ->
 	enc_big_int(Int - 7, <<Prefix:5, 2#111:3>>).
 
-enc_int4(Int, Prefix) when Int < 15 ->
-	<<Prefix:4, Int:4>>;
-enc_int4(Int, Prefix) ->
-	enc_big_int(Int - 15, <<Prefix:4, 2#1111:4>>).
-
 enc_str4(Str, huffman, Prefix) ->
 	Str2 = enc_huffman(Str, <<>>),
 	[enc_int3(byte_size(Str2), Prefix * 2 + 2#1)|Str2];

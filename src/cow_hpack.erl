@@ -577,7 +577,6 @@ encode(Headers, State0=#state{configured_max_size=MaxSize}, Opts) ->
 huffman_opt(#{huffman := false}) -> no_huffman;
 huffman_opt(_) -> huffman.
 
-%% @todo Honor never-indexed / no-index when encoding (see decode).
 encode([], State, _, Acc) ->
 	{lists:reverse(Acc), State};
 encode([{Name, Value0}|Tail], State, HuffmanOpt, Acc) ->
@@ -588,24 +587,70 @@ encode([{Name, Value0}|Tail], State, HuffmanOpt, Acc) ->
 		true -> iolist_to_binary(Value0)
 	end,
 	Header = {Name, Value},
-	case table_find(Header, State) of
-		%% Indexed header field representation.
-		{field, Index} ->
+	case {table_find(Header, State), can_index(Name)} of
+		{{field, Index}, _} ->
 			encode(Tail, State, HuffmanOpt,
 				[enc_int7(Index, 2#1)|Acc]);
-		%% Literal header field representation: indexed name.
-		{name, Index} ->
+		{{name, Index}, true} ->
 			State2 = table_insert(Header, State),
 			encode(Tail, State2, HuffmanOpt,
 				[[enc_int6(Index, 2#01)|enc_str(Value, HuffmanOpt)]|Acc]);
-		%% Literal header field representation: new name.
-		not_found ->
+		{{name, Index}, false} ->
+			encode(Tail, State, HuffmanOpt,
+				[[enc_int4(Index, 2#0001)|enc_str(Value, HuffmanOpt)]|Acc]);
+		{not_found, true} ->
 			State2 = table_insert(Header, State),
 			encode(Tail, State2, HuffmanOpt,
-				[[<< 0:1, 1:1, 0:6 >>|[enc_str(Name, HuffmanOpt)|enc_str(Value, HuffmanOpt)]]|Acc])
+				[[<< 0:1, 1:1, 0:6 >>|[enc_str(Name, HuffmanOpt)|enc_str(Value, HuffmanOpt)]]|Acc]);
+		{not_found, false} ->
+			encode(Tail, State, HuffmanOpt,
+				[[<< 0:3, 1:1, 0:4 >>|[enc_str(Name, HuffmanOpt)|enc_str(Value, HuffmanOpt)]]|Acc])
 	end.
 
+%% Header names that may be inserted into the dynamic table.
+%% When updating this also update encode_indexed_names.
+can_index(<<":authority">>) -> true;
+can_index(<<":method">>) -> true;
+can_index(<<":path">>) -> true;
+can_index(<<":scheme">>) -> true;
+can_index(<<":status">>) -> true;
+can_index(<<"accept">>) -> true;
+can_index(<<"accept-encoding">>) -> true;
+can_index(<<"accept-language">>) -> true;
+can_index(<<"accept-ranges">>) -> true;
+can_index(<<"access-control-allow-credentials">>) -> true;
+can_index(<<"access-control-allow-headers">>) -> true;
+can_index(<<"access-control-allow-methods">>) -> true;
+can_index(<<"access-control-allow-origin">>) -> true;
+can_index(<<"access-control-expose-headers">>) -> true;
+can_index(<<"access-control-max-age">>) -> true;
+can_index(<<"allow">>) -> true;
+can_index(<<"cache-control">>) -> true;
+can_index(<<"content-encoding">>) -> true;
+can_index(<<"content-language">>) -> true;
+can_index(<<"content-security-policy">>) -> true;
+can_index(<<"content-type">>) -> true;
+can_index(<<"cross-origin-embedder-policy">>) -> true;
+can_index(<<"cross-origin-opener-policy">>) -> true;
+can_index(<<"cross-origin-resource-policy">>) -> true;
+can_index(<<"link">>) -> true;
+can_index(<<"location">>) -> true;
+can_index(<<"permissions-policy">>) -> true;
+can_index(<<"referrer-policy">>) -> true;
+can_index(<<"server">>) -> true;
+can_index(<<"strict-transport-security">>) -> true;
+can_index(<<"te">>) -> true;
+can_index(<<"trailer">>) -> true;
+can_index(<<"user-agent">>) -> true;
+can_index(<<"vary">>) -> true;
+can_index(<<"x-content-type-options">>) -> true;
+can_index(<<"x-frame-options">>) -> true;
+can_index(<<"x-xss-protection">>) -> true;
+can_index(_) -> false.
+
 -ifdef(TEST).
+%% This test comes from RFC7540 examples but was modified
+%% to match the current implementation.
 req_encode_test() ->
 	%% First request (raw then huffman).
 	Headers1 = [
@@ -643,15 +688,16 @@ req_encode_test() ->
 		{<<"custom-key">>, <<"custom-value">>}
 	],
 	{Raw3, State3} = encode(Headers3, State2, #{huffman => false}),
-	<< 16#828785bf400a637573746f6d2d6b65790c637573746f6d2d76616c7565:232 >> = iolist_to_binary(Raw3),
+	<< 16#828785bf100a637573746f6d2d6b65790c637573746f6d2d76616c7565:232 >> = iolist_to_binary(Raw3),
 	{Huff3, State3} = encode(Headers3, State2),
-	<< 16#828785bf408825a849e95ba97d7f8925a849e95bb8e8b4bf:192 >> = iolist_to_binary(Huff3),
-	#state{size=164, dyn_table=[
-		{54,{<<"custom-key">>, <<"custom-value">>}},
+	<< 16#828785bf108825a849e95ba97d7f8925a849e95bb8e8b4bf:192 >> = iolist_to_binary(Huff3),
+	#state{size=110, dyn_table=[
 		{53,{<<"cache-control">>, <<"no-cache">>}},
 		{57,{<<":authority">>, <<"www.example.com">>}}]} = State3,
 	ok.
 
+%% This test comes from RFC7540 examples but was modified
+%% to match the current implementation.
 resp_encode_test() ->
 	%% Use a max_size of 256 to trigger header evictions.
 	State0 = init(256),
@@ -663,12 +709,11 @@ resp_encode_test() ->
 		{<<"location">>, <<"https://www.example.com">>}
 	],
 	{Raw1, State1} = encode(Headers1, State0, #{huffman => false}),
-	<< 16#4803333032580770726976617465611d4d6f6e2c203231204f637420323031332032303a31333a323120474d546e1768747470733a2f2f7777772e6578616d706c652e636f6d:560 >> = iolist_to_binary(Raw1),
+	{Headers1, _} = decode(iolist_to_binary(Raw1), State0),
 	{Huff1, State1} = encode(Headers1, State0),
-	<< 16#488264025885aec3771a4b6196d07abe941054d444a8200595040b8166e082a62d1bff6e919d29ad171863c78f0b97c8e9ae82ae43d3:432 >> = iolist_to_binary(Huff1),
-	#state{size=222, dyn_table=[
+	{Headers1, _} = decode(iolist_to_binary(Huff1), State0),
+	#state{size=157, dyn_table=[
 		{63,{<<"location">>, <<"https://www.example.com">>}},
-		{65,{<<"date">>, <<"Mon, 21 Oct 2013 20:13:21 GMT">>}},
 		{52,{<<"cache-control">>, <<"private">>}},
 		{42,{<<":status">>, <<"302">>}}]} = State1,
 	%% Second response (raw then huffman).
@@ -679,14 +724,14 @@ resp_encode_test() ->
 		{<<"location">>, <<"https://www.example.com">>}
 	],
 	{Raw2, State2} = encode(Headers2, State1, #{huffman => false}),
-	<< 16#4803333037c1c0bf:64 >> = iolist_to_binary(Raw2),
+	{Headers2, _} = decode(iolist_to_binary(Raw2), State1),
 	{Huff2, State2} = encode(Headers2, State1),
-	<< 16#4883640effc1c0bf:64 >> = iolist_to_binary(Huff2),
-	#state{size=222, dyn_table=[
+	{Headers2, _} = decode(iolist_to_binary(Huff2), State1),
+	#state{size=199, dyn_table=[
 		{42,{<<":status">>, <<"307">>}},
 		{63,{<<"location">>, <<"https://www.example.com">>}},
-		{65,{<<"date">>, <<"Mon, 21 Oct 2013 20:13:21 GMT">>}},
-		{52,{<<"cache-control">>, <<"private">>}}]} = State2,
+		{52,{<<"cache-control">>, <<"private">>}},
+		{42,{<<":status">>, <<"302">>}}]} = State2,
 	%% Third response (raw then huffman).
 	Headers3 = [
 		{<<":status">>, <<"200">>},
@@ -697,13 +742,17 @@ resp_encode_test() ->
 		{<<"set-cookie">>, <<"foo=ASDJKHQKBZXOQWEOPIUAXQWEOIU; max-age=3600; version=1">>}
 	],
 	{Raw3, State3} = encode(Headers3, State2, #{huffman => false}),
-	<< 16#88c1611d4d6f6e2c203231204f637420323031332032303a31333a323220474d54c05a04677a69707738666f6f3d4153444a4b48514b425a584f5157454f50495541585157454f49553b206d61782d6167653d333630303b2076657273696f6e3d31:784 >> = iolist_to_binary(Raw3),
+	{Headers3, _} = decode(iolist_to_binary(Raw3), State2),
 	{Huff3, State3} = encode(Headers3, State2),
-	<< 16#88c16196d07abe941054d444a8200595040b8166e084a62d1bffc05a839bd9ab77ad94e7821dd7f2e6c7b335dfdfcd5b3960d5af27087f3672c1ab270fb5291f9587316065c003ed4ee5b1063d5007:632 >> = iolist_to_binary(Huff3),
-	#state{size=215, dyn_table=[
-		{98,{<<"set-cookie">>, <<"foo=ASDJKHQKBZXOQWEOPIUAXQWEOIU; max-age=3600; version=1">>}},
+	{Headers3, _} = decode(iolist_to_binary(Huff3), State2),
+	#state{size=251, dyn_table=[
 		{52,{<<"content-encoding">>, <<"gzip">>}},
-		{65,{<<"date">>, <<"Mon, 21 Oct 2013 20:13:22 GMT">>}}]} = State3,
+		{42,{<<":status">>, <<"307">>}},
+		{63,{<<"location">>, <<"https://www.example.com">>}},
+		{52,{<<"cache-control">>, <<"private">>}},
+		{42,{<<":status">>, <<"302">>}}]} = State3,
+	false = lists:keymember(<<"date">>, 1, [H || {_, H} <- State3#state.dyn_table]),
+	false = lists:keymember(<<"set-cookie">>, 1, [H || {_, H} <- State3#state.dyn_table]),
 	ok.
 
 %% This test assumes that table updates work correctly when decoding.
@@ -720,14 +769,12 @@ table_update_encode_test() ->
 	],
 	{Encoded1, EncState1} = encode(Headers1, EncState0),
 	{Headers1, DecState1} = decode(iolist_to_binary(Encoded1), DecState0),
-	#state{size=222, configured_max_size=256, dyn_table=[
+	#state{size=157, configured_max_size=256, dyn_table=[
 		{63,{<<"location">>, <<"https://www.example.com">>}},
-		{65,{<<"date">>, <<"Mon, 21 Oct 2013 20:13:21 GMT">>}},
 		{52,{<<"cache-control">>, <<"private">>}},
 		{42,{<<":status">>, <<"302">>}}]} = DecState1,
-	#state{size=222, configured_max_size=256, dyn_table=[
+	#state{size=157, configured_max_size=256, dyn_table=[
 		{63,{<<"location">>, <<"https://www.example.com">>}},
-		{65,{<<"date">>, <<"Mon, 21 Oct 2013 20:13:21 GMT">>}},
 		{52,{<<"cache-control">>, <<"private">>}},
 		{42,{<<":status">>, <<"302">>}}]} = EncState1,
 	%% Set a new configured max_size to avoid header evictions.
@@ -742,16 +789,14 @@ table_update_encode_test() ->
 	],
 	{Encoded2, EncState3} = encode(Headers2, EncState2),
 	{Headers2, DecState3} = decode(iolist_to_binary(Encoded2), DecState2),
-	#state{size=264, max_size=512, dyn_table=[
+	#state{size=199, max_size=512, dyn_table=[
 		{42,{<<":status">>, <<"307">>}},
 		{63,{<<"location">>, <<"https://www.example.com">>}},
-		{65,{<<"date">>, <<"Mon, 21 Oct 2013 20:13:21 GMT">>}},
 		{52,{<<"cache-control">>, <<"private">>}},
 		{42,{<<":status">>, <<"302">>}}]} = DecState3,
-	#state{size=264, max_size=512, dyn_table=[
+	#state{size=199, max_size=512, dyn_table=[
 		{42,{<<":status">>, <<"307">>}},
 		{63,{<<"location">>, <<"https://www.example.com">>}},
-		{65,{<<"date">>, <<"Mon, 21 Oct 2013 20:13:21 GMT">>}},
 		{52,{<<"cache-control">>, <<"private">>}},
 		{42,{<<":status">>, <<"302">>}}]} = EncState3,
 	ok.
@@ -804,11 +849,43 @@ encode_iolist_test() ->
 	{_, _} = encode(Headers),
 	ok.
 
+encode_indexed_names() -> [
+	<<":authority">>, <<":method">>, <<":path">>, <<":scheme">>, <<":status">>,
+	<<"accept">>, <<"accept-encoding">>, <<"accept-language">>, <<"accept-ranges">>,
+	<<"access-control-allow-credentials">>, <<"access-control-allow-headers">>,
+	<<"access-control-allow-methods">>, <<"access-control-allow-origin">>,
+	<<"access-control-expose-headers">>, <<"access-control-max-age">>,
+	<<"allow">>, <<"cache-control">>, <<"content-encoding">>, <<"content-language">>,
+	<<"content-security-policy">>, <<"content-type">>,
+	<<"cross-origin-embedder-policy">>, <<"cross-origin-opener-policy">>,
+	<<"cross-origin-resource-policy">>, <<"link">>, <<"location">>,
+	<<"permissions-policy">>, <<"referrer-policy">>, <<"server">>,
+	<<"strict-transport-security">>, <<"te">>, <<"trailer">>, <<"user-agent">>,
+	<<"vary">>, <<"x-content-type-options">>, <<"x-frame-options">>,
+	<<"x-xss-protection">>
+].
+
 dyn_field_names(#state{dyn_table=DynTable}) ->
 	[Name || {_, {Name, _}} <- DynTable].
 
+encode_allowlisted_inserted_test_() ->
+	[{binary_to_list(Name), fun() ->
+		{Encoded, State} = encode([{Name, <<"x">>}], init(), #{huffman => false}),
+		{[{Name, <<"x">>}], _} = decode(iolist_to_binary(Encoded), init()),
+		true = lists:member(Name, dyn_field_names(State))
+	end} || Name <- encode_indexed_names()].
+
+encode_allowlisted_reused_test() ->
+	Headers = [{<<"content-type">>, <<"application/json">>}],
+	{Enc1, State1} = encode(Headers, init(), #{huffman => false}),
+	{Enc2, State2} = encode(Headers, State1, #{huffman => false}),
+	<<2#1:1, _/bits>> = iolist_to_binary(Enc2),
+	{Headers, _} = decode(iolist_to_binary(Enc1), init()),
+	{Headers, _} = decode(iolist_to_binary(Enc2), State1),
+	true = State1#state.dyn_table =:= State2#state.dyn_table.
+
 encode_allowlisted_dynamic_name_reuse_test() ->
-	%% te is not in the static table.
+	%% te is allowlisted and not in the static table.
 	{Enc1, State1} = encode([{<<"te">>, <<"trailers">>}], init(), #{huffman => false}),
 	<<16#40, _/bits>> = iolist_to_binary(Enc1),
 	{_, State2} = encode([{<<"user-agent">>, <<"Gun">>}], State1, #{huffman => false}),
@@ -818,6 +895,96 @@ encode_allowlisted_dynamic_name_reuse_test() ->
 		[iolist_to_binary(Enc3), Prefix]) =:= byte_size(Prefix),
 	[<<"te">>, <<"user-agent">>, <<"te">>] = dyn_field_names(State3),
 	{[{<<"te">>, <<"gzip">>}], _} = decode(iolist_to_binary(Enc3), State2).
+
+encode_never_index_static_name_test_() ->
+	%% Static name index, never-indexed prefix 0001, value not inserted.
+	Tests = [
+		{<<"cookie">>, 32},
+		{<<"set-cookie">>, 55},
+		{<<"authorization">>, 23},
+		{<<"proxy-authorization">>, 49},
+		{<<"date">>, 33},
+		{<<"content-length">>, 28},
+		{<<"accept-charset">>, 15},
+		{<<"www-authenticate">>, 61},
+		{<<"referer">>, 51}
+	],
+	[{binary_to_list(Name), fun() ->
+		Value = <<"secret">>,
+		{Encoded, State} = encode([{Name, Value}], init(), #{huffman => false}),
+		Bin = iolist_to_binary(Encoded),
+		Prefix = iolist_to_binary(enc_int4(Index, 2#0001)),
+		true = binary:longest_common_prefix([Bin, Prefix]) =:= byte_size(Prefix),
+		false = lists:member(Name, dyn_field_names(State)),
+		{[{Name, Value}], DecState} = decode(Bin, init()),
+		[] = dyn_field_names(DecState)
+	end} || {Name, Index} <- Tests].
+
+encode_never_index_new_name_test_() ->
+	Names = [
+		<<"custom-key">>,
+		<<"x-api-key">>,
+		<<"x-csrf-token">>,
+		<<"content-types">>,
+		<<"content-type-options">>
+	],
+	[{binary_to_list(Name), fun() ->
+		{Encoded, State} = encode([{Name, <<"v">>}], init(), #{huffman => false}),
+		<<16#10, _/bits>> = iolist_to_binary(Encoded),
+		false = lists:member(Name, dyn_field_names(State)),
+		{[{Name, <<"v">>}], DecState} = decode(iolist_to_binary(Encoded), init()),
+		[] = dyn_field_names(DecState)
+	end} || Name <- Names].
+
+encode_never_index_static_field_hit_test() ->
+	%% Empty cookie is in the static table; indexed representation does not insert.
+	{Encoded, State} = encode([{<<"cookie">>, <<>>}], init(), #{huffman => false}),
+	<<16#a0>> = iolist_to_binary(Encoded),
+	[] = dyn_field_names(State).
+
+encode_never_index_repeated_cookie_test() ->
+	Headers = [{<<"cookie">>, <<"sid=abc">>}],
+	{Enc1, State1} = encode(Headers, init(), #{huffman => false}),
+	{Enc2, State2} = encode(Headers, State1, #{huffman => false}),
+	[] = dyn_field_names(State1),
+	[] = dyn_field_names(State2),
+	true = iolist_to_binary(Enc1) =:= iolist_to_binary(Enc2),
+	<<Prefix:16, _/bits>> = iolist_to_binary(Enc1),
+	<<Prefix:16, _/bits>> = iolist_to_binary(enc_int4(32, 2#0001)).
+
+encode_never_index_mixed_block_test() ->
+	Headers = [
+		{<<":method">>, <<"GET">>},
+		{<<":path">>, <<"/api">>},
+		{<<"cookie">>, <<"a=b">>},
+		{<<"authorization">>, <<"Bearer tok">>},
+		{<<"content-type">>, <<"application/json">>},
+		{<<"x-api-key">>, <<"k">>},
+		{<<"user-agent">>, <<"Gun">>}
+	],
+	{Encoded, State} = encode(Headers, init(), #{huffman => false}),
+	{Headers, DecState} = decode(iolist_to_binary(Encoded), init()),
+	Indexed = lists:sort(dyn_field_names(State)),
+	Indexed = lists:sort(dyn_field_names(DecState)),
+	[<<":path">>, <<"content-type">>, <<"user-agent">>] = Indexed.
+
+encode_never_index_iolist_value_test() ->
+	{Encoded, State} = encode([{<<"cookie">>, [<<"a">>, <<"=">>, <<"b">>]}],
+		init(), #{huffman => false}),
+	{[{<<"cookie">>, <<"a=b">>}], _} = decode(iolist_to_binary(Encoded), init()),
+	[] = dyn_field_names(State).
+
+encode_never_index_huffman_test() ->
+	Headers = [{<<"set-cookie">>, <<"sid=xyz">>}, {<<"server">>, <<"Cowboy">>}],
+	{Encoded, State} = encode(Headers),
+	{Headers, _} = decode(iolist_to_binary(Encoded)),
+	[<<"server">>] = dyn_field_names(State).
+
+encode_never_index_large_cookie_test() ->
+	Cookie = binary:copy(<<"a">>, 200),
+	{Encoded, State} = encode([{<<"cookie">>, Cookie}], init(), #{huffman => false}),
+	{[{<<"cookie">>, Cookie}], _} = decode(iolist_to_binary(Encoded), init()),
+	[] = dyn_field_names(State).
 
 horse_encode_raw() ->
 	horse:repeat(20000,

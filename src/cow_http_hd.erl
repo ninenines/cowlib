@@ -18,10 +18,10 @@
 %% function before the build function.
 %%
 %% @todo Parsers still worth adding: authentication-info,
+%% content-disposition,
 %% content-location, digest, forwarded, location, prefer,
 %% proxy-authentication-info, strict-transport-security,
 %% via, want-digest, x-frame-options.
-%% @todo parse_content_disposition/1 can delegate to cow_multipart.
 
 -export([parse_accept/1]).
 -export([parse_accept_charset/1]).

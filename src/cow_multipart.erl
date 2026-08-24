@@ -483,8 +483,8 @@ close(Boundary) ->
 
 -ifdef(TEST).
 build_test() ->
-	Result = string:to_lower(binary_to_list(?TEST1_MIME)),
-	Result = string:to_lower(binary_to_list(iolist_to_binary([
+	Result = string:lowercase(?TEST1_MIME),
+	Result = string:lowercase(iolist_to_binary([
 		<<"This is a message with multiple parts in MIME format.\r\n">>,
 		first_part(?TEST1_BOUNDARY, [{<<"content-type">>, <<"text/plain">>}]),
 		<<"This is the body of the message.">>,
@@ -494,7 +494,7 @@ build_test() ->
 		<<"PGh0bWw+CiAgPGhlYWQ+CiAgPC9oZWFkPgogIDxib2R5PgogICAgPHA+VGhpcyBpcyB0aGUg\r\n"
 			"Ym9keSBvZiB0aGUgbWVzc2FnZS48L3A+CiAgPC9ib2R5Pgo8L2h0bWw+Cg==">>,
 		close(?TEST1_BOUNDARY)
-	]))),
+	])),
 	ok.
 
 identity_test() ->
@@ -583,11 +583,8 @@ form_data_test_() ->
 		fun() -> R = form_data(V) end} || {V, R} <- Tests].
 -endif.
 
-%% @todo parse_content_description
-%% @todo parse_content_id
-
 %% @doc Parse an RFC 2183 content-disposition value.
-%% @todo Support RFC 2231.
+%% @todo Decode RFC 8187/2231 extended parameters.
 
 -spec parse_content_disposition(binary())
 	-> {binary(), [{binary(), binary()}]}.

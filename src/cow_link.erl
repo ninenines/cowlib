@@ -148,10 +148,7 @@ parse_link_test_() ->
 				]
 			}
 		]},
-%		{<<"</TheBook/chapter2>; rel=\"previous\"; title*=UTF-8'de'letztes%20Kapitel, "
-%			"</TheBook/chapter4>; rel=\"next\"; title*=UTF-8'de'n%c3%a4chstes%20Kapitel">>, [
-%			%% @todo
-%		]}
+%% @todo Restore the RFC8288 title* examples once RFC 8187 params are decoded (cow_multipart).
 		{<<"<http://example.org/>; rel=\"start http://example.net/relation/other\"">>, [
 			#{
 				target => <<"http://example.org/">>,
@@ -298,49 +295,8 @@ resolve_link_test_() ->
 		fun() -> R = resolve_link(L, C, O) end} || {L, C, O, R} <- Tests].
 -endif.
 
-%% @todo This function has been added to Erlang/OTP 22.3 as uri_string:resolve/2,3.
 resolve(URI, BaseURI) ->
-	case resolve1(ensure_map_uri(URI), BaseURI) of
-		TargetURI = #{path := Path0} ->
-			%% We remove dot segments. Normalizing the entire URI
-			%% will sometimes add an extra slash we don't want.
-			#{path := Path} = uri_string:normalize(#{path => Path0}, [return_map]),
-			TargetURI#{path => Path};
-		TargetURI ->
-			TargetURI
-	end.
-
-resolve1(URI=#{scheme := _}, _) ->
-	URI;
-resolve1(URI=#{host := _}, BaseURI) ->
-	#{scheme := Scheme} = ensure_map_uri(BaseURI),
-	URI#{scheme => Scheme};
-resolve1(URI=#{path := <<>>}, BaseURI0) ->
-	BaseURI = ensure_map_uri(BaseURI0),
-	Keys = case maps:is_key(query, URI) of
-		true -> [scheme, host, port, path];
-		false -> [scheme, host, port, path, query]
-	end,
-	maps:merge(URI, maps:with(Keys, BaseURI));
-resolve1(URI=#{path := <<"/",_/bits>>}, BaseURI0) ->
-	BaseURI = ensure_map_uri(BaseURI0),
-	maps:merge(URI, maps:with([scheme, host, port], BaseURI));
-resolve1(URI=#{path := Path}, BaseURI0) ->
-	BaseURI = ensure_map_uri(BaseURI0),
-	maps:merge(
-		URI#{path := merge_paths(Path, BaseURI)},
-		maps:with([scheme, host, port], BaseURI)).
-
-merge_paths(Path, #{host := _, path := <<>>}) ->
-	<<$/, Path/binary>>;
-merge_paths(Path, #{path := BasePath0}) ->
-	case string:split(BasePath0, <<$/>>, trailing) of
-		[BasePath, _] -> <<BasePath/binary, $/, Path/binary>>;
-		[_] -> <<$/, Path/binary>>
-	end.
-
-ensure_map_uri(URI) when is_map(URI) -> URI;
-ensure_map_uri(URI) -> uri_string:parse(iolist_to_binary(URI)).
+	uri_string:resolve(URI, BaseURI, [return_map]).
 
 -ifdef(TEST).
 resolve_test_() ->
@@ -459,10 +415,7 @@ link_test_() ->
 				]
 			}
 		]},
-%		{<<"</TheBook/chapter2>; rel=\"previous\"; title*=UTF-8'de'letztes%20Kapitel, "
-%			"</TheBook/chapter4>; rel=\"next\"; title*=UTF-8'de'n%c3%a4chstes%20Kapitel">>, [
-%			%% @todo
-%		]}
+%% @todo Restore the RFC8288 title* examples once RFC 8187 params are decoded (cow_multipart).
 		{<<"<http://example.org/>; rel=\"start http://example.net/relation/other\"">>, [
 			#{
 				target => <<"http://example.org/">>,

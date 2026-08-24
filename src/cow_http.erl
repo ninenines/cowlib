@@ -21,7 +21,7 @@
 %% calls to cow_http1. The type version() was moved
 %% and no fallback is provided.
 %%
-%% @todo Remove the aliases in Cowlib 3.0.
+%% @todo Cowlib 3.0: remove the cow_http1 aliases.
 -export([parse_request_line/1]).
 -export([parse_status_line/1]).
 -export([status_to_integer/1]).
@@ -139,7 +139,7 @@ merge_pseudo_headers(PseudoHeaders, Headers0) ->
 		({status, Status}, Acc) when is_integer(Status) ->
 			[{<<":status">>, integer_to_binary(Status)}|Acc];
 		({Name, Value}, Acc) ->
-			[{iolist_to_binary([$:, atom_to_binary(Name, latin1)]), Value}|Acc]
+			[{iolist_to_binary([$:, atom_to_binary(Name)]), Value}|Acc]
 		end, Headers0, maps:to_list(PseudoHeaders)).
 
 %% Process HTTP/2+ headers. This is done after decoding them.

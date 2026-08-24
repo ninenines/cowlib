@@ -236,7 +236,7 @@ skip_chunk_ext(<< C, R/bits >>, S, A, Len, Skipped) when C =/= $\n, Skipped < 12
 
 -spec chunk(D) -> D when D::iodata().
 chunk(Data) ->
-	[integer_to_list(iolist_size(Data), 16), <<"\r\n">>,
+	[integer_to_binary(iolist_size(Data), 16), <<"\r\n">>,
 		Data, <<"\r\n">>].
 
 %% @doc Encode the last chunk of a chunked stream.
@@ -330,7 +330,7 @@ do_body_to_chunks(ChunkSize, Body, Acc) ->
 		false -> ChunkSize
 	end,
 	<< Chunk:ChunkSize2/binary, Rest/binary >> = Body,
-	ChunkSizeBin = list_to_binary(integer_to_list(ChunkSize2, 16)),
+	ChunkSizeBin = integer_to_binary(ChunkSize2, 16),
 	do_body_to_chunks(ChunkSize, Rest,
 		[<< ChunkSizeBin/binary, "\r\n", Chunk/binary, "\r\n" >>|Acc]).
 

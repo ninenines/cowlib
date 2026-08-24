@@ -138,11 +138,10 @@ decode(<< 0:8, Rest/bits >>, State, Acc, Opts) ->
 decode(<< 0:4, Rest/bits >>, State, Acc, Opts) ->
 	dec_lit_no_index_indexed_name(Rest, State, Acc, Opts);
 %% Literal header field never indexed: new name.
-%% @todo Keep track of "never indexed" headers.
+%% @todo Track never-indexed fields so re-encoding does not insert them.
 decode(<< 0:3, 1:1, 0:4, Rest/bits >>, State, Acc, Opts) ->
 	dec_lit_no_index_new_name(Rest, State, Acc, Opts);
 %% Literal header field never indexed: indexed name.
-%% @todo Keep track of "never indexed" headers.
 decode(<< 0:3, 1:1, Rest/bits >>, State, Acc, Opts) ->
 	dec_lit_no_index_indexed_name(Rest, State, Acc, Opts).
 
@@ -209,8 +208,6 @@ dec_lit_no_index_indexed_name(<<Index:4, Rest/bits>>, State, Acc, Opts) ->
 dec_lit_no_index(Rest, State, Acc, Opts, Name) ->
 	{Value, Rest2} = dec_str(Rest),
 	decode(Rest2, State, [{Name, Value}|Acc], Opts).
-
-%% @todo Literal header field never indexed.
 
 %% Decode a string.
 
@@ -580,7 +577,7 @@ encode(Headers, State0=#state{configured_max_size=MaxSize}, Opts) ->
 huffman_opt(#{huffman := false}) -> no_huffman;
 huffman_opt(_) -> huffman.
 
-%% @todo Handle cases where no/never indexing is expected.
+%% @todo Honor never-indexed / no-index when encoding (see decode).
 encode([], State, _, Acc) ->
 	{lists:reverse(Acc), State};
 encode([{Name, Value0}|Tail], State, HuffmanOpt, Acc) ->
@@ -872,7 +869,6 @@ do_horse_encode_huffman() ->
 
 %% Static and dynamic tables.
 
-%% @todo There must be a more efficient way.
 table_find(Header = {Name, _}, State) ->
 	case table_find_field(Header, State) of
 		not_found ->

@@ -63,29 +63,21 @@ parse(<<>>) ->
 	more;
 %% Skip unknown capsules.
 parse(Data) ->
-	%% @todo This can use maybe_expr in OTP-25+.
-	case cow_http3:parse_int(Data) of
-		more ->
-			more;
-		{_Type, Rest0} ->
-			case cow_http3:parse_int(Rest0) of
-				more ->
-					more;
-				{Len, Rest1} ->
-					case Rest1 of
-						<<_:Len/unit:8, Rest>> ->
-							{ok, Rest};
-						_ ->
-							{skip, Len - byte_size(Rest1)}
-					end
-			end
+	maybe
+		{_Type, Rest0} ?= cow_http3:parse_int(Data),
+		{Len, Rest1} ?= cow_http3:parse_int(Rest0),
+		case Rest1 of
+			<<_:Len/unit:8, Rest>> ->
+				{ok, Rest};
+			_ ->
+				{skip, Len - byte_size(Rest1)}
+		end
 	end.
 
 %% Building.
 
 -spec wt_drain_session() -> binary().
 
-%% @todo Where should I put capsules?
 wt_drain_session() ->
 	<<2:2, 16#78ae:30, 0>>.
 

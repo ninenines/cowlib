@@ -384,7 +384,7 @@ cookie_test_() ->
 %% Initial binary implementation:
 %%   * Copyright 2011 Thomas Burdick <thomas.burdick@gmail.com>
 %%
-%% @todo Rename the function to set_cookie eventually.
+%% @todo Cowlib 3.0: rename to set_cookie/3.
 
 -spec setcookie(iodata(), iodata(), cookie_opts()) -> iolist().
 setcookie(Name, Value, Opts) ->

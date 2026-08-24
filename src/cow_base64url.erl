@@ -30,35 +30,20 @@
 decode(Enc) ->
 	decode(Enc, #{}).
 
-decode(Enc0, Opts) ->
-	Enc1 = << << case C of
-		$- -> $+;
-		$_ -> $/;
-		_ -> C
-	end >> || << C >> <= Enc0 >>,
-	Enc = case Opts of
-		#{padding := false} ->
-			case byte_size(Enc1) rem 4 of
-				0 -> Enc1;
-				2 -> << Enc1/binary, "==" >>;
-				3 -> << Enc1/binary, "=" >>
-			end;
-		_ ->
-			Enc1
-	end,
-	base64:decode(Enc).
+decode(Enc, Opts) ->
+	base64:decode(Enc, #{
+		mode => urlsafe,
+		padding => maps:get(padding, Opts, true)
+	}).
 
 encode(Dec) ->
 	encode(Dec, #{}).
 
 encode(Dec, Opts) ->
-	encode(base64:encode(Dec), Opts, <<>>).
-
-encode(<<$+, R/bits>>, Opts, Acc) -> encode(R, Opts, <<Acc/binary, $->>);
-encode(<<$/, R/bits>>, Opts, Acc) -> encode(R, Opts, <<Acc/binary, $_>>);
-encode(<<$=, _/bits>>, #{padding := false}, Acc) -> Acc;
-encode(<<C, R/bits>>, Opts, Acc) -> encode(R, Opts, <<Acc/binary, C>>);
-encode(<<>>, _, Acc) -> Acc.
+	base64:encode(Dec, #{
+		mode => urlsafe,
+		padding => maps:get(padding, Opts, true)
+	}).
 
 -ifdef(TEST).
 

@@ -342,7 +342,7 @@ expand_uritemplate_test_() ->
 	Files = filelib:wildcard("deps/uritemplate-tests/*.json"),
 	lists:flatten([begin
 		{ok, JSON} = file:read_file(File),
-		Tests = jsx:decode(JSON, [return_maps]),
+		Tests = json:decode(JSON),
 		[begin
 			%% Erlang doesn't have a NULL value.
 			Vars = maps:remove(<<"undef">>, Vars0),

@@ -20,7 +20,8 @@
 
 -export([decode_field_section/3]).
 -export([execute_encoder_instructions/2]).
--export([decoder_cancel_stream/1]). %% @todo Use it.
+%% @todo Call from cow_http3_machine on stream cancel.
+-export([decoder_cancel_stream/1]).
 
 -export([encode_field_section/3]).
 -export([encode_field_section/4]).
@@ -246,8 +247,8 @@ decode(<<2#0001:4,Rest0/bits>>, State, Base, Acc) ->
 	Entry = table_get_dyn_post_base(Index, Base, State),
 	decode(Rest, State, Base, [Entry|Acc]);
 %% Literal field line with name reference.
+%% @todo Track N=1 (never indexed) so re-encoding stays literal.
 decode(<<2#01:2,_N:1,T:1,Rest0/bits>>, State, Base, Acc) ->
-	%% @todo N=1 the encoded field line MUST be encoded as literal, need to return metadata about this?
 	{NameIndex, <<H:1,Rest1/bits>>} = dec_int4(Rest0),
 	Name = case T of
 		0 -> table_get_name_dyn_rel(NameIndex, State);
@@ -258,7 +259,6 @@ decode(<<2#01:2,_N:1,T:1,Rest0/bits>>, State, Base, Acc) ->
 	decode(Rest, State, Base, [{Name, Value}|Acc]);
 %% Literal field line with post-base name reference.
 decode(<<2#0000:4,_N:1,Rest0/bits>>, State, Base, Acc) ->
-	%% @todo N=1 the encoded field line MUST be encoded as literal, need to return metadata about this?
 	{NameIndex, <<H:1,Rest1/bits>>} = dec_int3(Rest0),
 	Name = table_get_name_dyn_post_base(NameIndex, Base, State),
 	{ValueLen, Rest2} = dec_int7(Rest1),
@@ -266,7 +266,6 @@ decode(<<2#0000:4,_N:1,Rest0/bits>>, State, Base, Acc) ->
 	decode(Rest, State, Base, [{Name, Value}|Acc]);
 %% Literal field line with literal name.
 decode(<<2#001:3,_N:1,NameH:1,Rest0/bits>>, State, Base, Acc) ->
-	%% @todo N=1 the encoded field line MUST be encoded as literal, need to return metadata about this?
 	{NameLen, Rest1} = dec_int3(Rest0),
 	<<NameStr:NameLen/binary,ValueH:1,Rest2/bits>> = Rest1,
 	{Name, <<>>} = maybe_dec_huffman(NameStr, NameLen, NameH),
@@ -338,7 +337,7 @@ execute_insert_instruction(Rest, State0, Increment, Entry) ->
 			Error
 	end.
 
-%% @todo Export / spec.
+-spec decoder_cancel_stream(cow_http3:stream_id()) -> binary().
 
 decoder_cancel_stream(StreamID) ->
 	enc_int6(StreamID, 2#01).
@@ -490,7 +489,7 @@ appendix_b_decoder_test() ->
 -spec encode_field_section(cow_http:headers(), cow_http3:stream_id(), State)
 	-> {ok, iolist(), iolist(), State} when State::state().
 
-%% @todo Would be good to know encoder stream flow control to avoid writing there. Opts?
+%% @todo Honor encoder-stream flow control before writing instructions.
 encode_field_section(Headers, StreamID, State0) ->
 	encode_field_section(Headers, StreamID, State0, #{}).
 
@@ -735,8 +734,6 @@ encode_dyn_name([Entry = {Name, Value}|Tail], StreamID,
 			end
 	end.
 
-%% @todo We should make sure we have a large enough flow control window.
-%%
 %% We can never insert before receiving the SETTINGS frame.
 encode_can_insert(_, #state{settings_received=false}) ->
 	false;

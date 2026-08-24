@@ -42,7 +42,9 @@
 -type head_fin() :: head_fin | head_nofin.
 -export_type([head_fin/0]).
 
-%% @todo The PRIORITY mechanism in HTTP/2 is de facto deprecated.
+%% @todo PRIORITY is de facto unused. Parse HEADERS with the
+%% priority flag as normal HEADERS (skip the 5-byte payload)
+%% and treat PRIORITY frames like frames without PRIORITY.
 -type exclusive() :: exclusive | shared.
 -type weight() :: 1..256.
 
@@ -168,6 +170,7 @@ parse(<< Len0:24, 1:8, _:2, 0:1, _:1, 1:1, FlagEndHeaders:1, _:1, FlagEndStream:
 			{connection_error, protocol_error, 'Padding octets MUST be set to zero. (RFC7540 6.2)'}
 	end;
 %% No padding, priority.
+%% @todo Return the same tuple as HEADERS without PRIORITY.
 parse(<< _:24, 1:8, _:2, 1:1, _:1, 0:1, _:4, StreamID:31, _:1, StreamID:31, _/bits >>) ->
 	{connection_error, protocol_error,
 		'HEADERS frames cannot define a stream that depends on itself. (RFC7540 5.3.1)'};
@@ -193,6 +196,7 @@ parse(<< Len0:24, 1:8, _:2, 1:1, _:1, 1:1, FlagEndHeaders:1, _:1, FlagEndStream:
 	end;
 %%
 %% PRIORITY frames.
+%% @todo Treat like a no-op / same as if PRIORITY was absent.
 %%
 parse(<< 5:24, 2:8, _:9, 0:31, _/bits >>) ->
 	{connection_error, protocol_error, 'PRIORITY frames MUST be associated with a stream. (RFC7540 6.3)'};

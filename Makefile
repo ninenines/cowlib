@@ -15,11 +15,10 @@ LOCAL_DEPS = crypto
 
 DOC_DEPS = asciideck
 
-TEST_DEPS = $(if $(CI_ERLANG_MK),ci.erlang.mk) base32 horse proper jsx \
+TEST_DEPS = $(if $(CI_ERLANG_MK),ci.erlang.mk) base32 horse proper \
 	decimal structured-header-tests uritemplate-tests
 dep_base32 = git https://github.com/dnsimple/base32_erlang v1.0.0
 dep_horse = git https://github.com/ninenines/horse.git master
-dep_jsx = git https://github.com/talentdeficit/jsx v2.10.0
 dep_decimal = git https://github.com/egobrain/decimal 0.6.2
 dep_structured-header-tests = git https://github.com/httpwg/structured-header-tests faed1f92942abd4fb5d61b1f9f0dc359f499f1d7
 dep_uritemplate-tests = git https://github.com/uri-templates/uritemplate-test master
@@ -29,8 +28,8 @@ dep_uritemplate-tests = git https://github.com/uri-templates/uritemplate-test ma
 dep_ci.erlang.mk = git https://github.com/ninenines/ci.erlang.mk master
 DEP_EARLY_PLUGINS = ci.erlang.mk
 
-AUTO_CI_OTP ?= OTP-LATEST-24+
-AUTO_CI_WINDOWS ?= OTP-LATEST-24+
+AUTO_CI_OTP ?= OTP-LATEST-27+
+AUTO_CI_WINDOWS ?= OTP-LATEST-27+
 
 # Hex configuration.
 
@@ -49,7 +48,7 @@ endef
 
 include erlang.mk
 
-# Always rebuild from scratch in CI because OTP-25.0+ can't use the older build.
+# Always rebuild from scratch in CI.
 
 ci-setup:: distclean-deps
 	-$(verbose) rm -rf $(ERLANG_MK_TMP)/rebar

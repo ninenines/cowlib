@@ -292,7 +292,7 @@ parse_version_test() ->
 -endif.
 
 %% @doc Return formatted request-line and headers.
-%% @todo Add tests when the corresponding reverse functions are added.
+%% @todo Add tests for request/4, response/3 and headers/1.
 
 -spec request(binary(), iodata(), version(), cow_http:headers()) -> iodata().
 request(Method, Path, Version, Headers) ->

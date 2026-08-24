@@ -307,7 +307,7 @@ parse_struct_hd_test_() ->
 	Files = filelib:wildcard("deps/structured-header-tests/*.json"),
 	lists:flatten([begin
 		{ok, JSON} = file:read_file(File),
-		Tests = jsx:decode(JSON, [return_maps]),
+		Tests = json:decode(JSON),
 		[
 			{iolist_to_binary(io_lib:format("~s: ~s", [filename:basename(File), Name])), fun() ->
 				%% The implementation is strict. We fail whenever we can.
@@ -596,7 +596,7 @@ struct_hd_identity_test_() ->
 	Files = filelib:wildcard("deps/structured-header-tests/*.json"),
 	lists:flatten([begin
 		{ok, JSON} = file:read_file(File),
-		Tests = jsx:decode(JSON, [return_maps]),
+		Tests = json:decode(JSON),
 		[
 			{iolist_to_binary(io_lib:format("~s: ~s", [filename:basename(File), Name])), fun() ->
 				io:format("expected json ~0p~n", [Expected0]),

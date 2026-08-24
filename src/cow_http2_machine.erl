@@ -209,8 +209,8 @@ init(server, Opts) ->
 		local_streamid=2
 	}).
 
-%% @todo In Cowlib 3.0 we should always include MessageTag in the message.
-%% It can be set to 'undefined' if the option is missing.
+%% @todo Cowlib 3.0: always include MessageTag in the timer message
+%% (use 'undefined' if the option is missing).
 start_timer(Name, Opts=#{message_tag := MessageTag}) ->
 	case maps:get(Name, Opts, 5000) of
 		infinity -> undefined;
@@ -255,7 +255,7 @@ settings_init(Opts) ->
 		initial_window_size, 65535),
 	S3 = setting_from_opt(S2, Opts, max_frame_size_received,
 		max_frame_size, 16384),
-	%% @todo max_header_list_size
+	%% @todo Enforce max_header_list_size.
 	setting_from_opt(S3, Opts, enable_connect_protocol,
 		enable_connect_protocol, false).
 
@@ -777,7 +777,8 @@ rst_stream_frame({rst_stream, StreamID, _}, State=#http2_machine{mode=Mode,
 rst_stream_frame({rst_stream, StreamID, Reason}, State=#http2_machine{
 		streams=Streams0, remote_lingering_streams=Lingering0}) ->
 	Streams = maps:remove(StreamID, Streams0),
-	%% We only keep up to 10 streams in this state. @todo Make it configurable?
+	%% We only keep up to 10 streams in this state.
+	%% @todo Make the lingering-stream limit configurable.
 	Lingering = [StreamID|lists:sublist(Lingering0, 10 - 1)],
 	{ok, {rst_stream, StreamID, Reason},
 		State#http2_machine{streams=Streams, remote_lingering_streams=Lingering}}.
@@ -927,8 +928,6 @@ ping_frame({ping, _}, State) ->
 	{ok, State}.
 
 %% Ack for a previously sent PING frame.
-%%
-%% @todo Might want to check contents but probably a waste of time.
 
 ping_ack_frame({ping_ack, _}, State) ->
 	{ok, State}.
@@ -1609,6 +1608,7 @@ stream_reset(StreamID, State, Reason, HumanReadable) ->
 		stream_linger(StreamID, State)}.
 
 stream_linger(StreamID, State=#http2_machine{local_lingering_streams=Lingering0}) ->
-	%% We only keep up to 100 streams in this state. @todo Make it configurable?
+	%% We only keep up to 100 streams in this state.
+	%% @todo Make the lingering-stream limit configurable.
 	Lingering = [StreamID|lists:sublist(Lingering0, 100 - 1)],
 	State#http2_machine{local_lingering_streams=Lingering}.

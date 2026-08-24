@@ -151,7 +151,7 @@ init_settings(Opts) ->
 		qpack_max_table_capacity, 0),
 	S1 = setting_from_opt(S0, Opts, max_decode_blocked_streams,
 		qpack_blocked_streams, 0),
-	%% @todo max_field_section_size
+	%% @todo Enforce max_field_section_size.
 	S2 = setting_from_opt(S1, Opts, enable_connect_protocol,
 		enable_connect_protocol, false),
 	S3 = setting_from_opt(S2, Opts, h3_datagram,
@@ -407,7 +407,7 @@ data_frame(Frame, IsFin, Stream0=#bidi_stream{remote_read_size=StreamRead}, Stat
 	case is_body_size_valid(Stream) of
 		true ->
 			{ok, Frame, State}%;
-%% @todo Implement and update error type/message.
+%% @todo Reject content-length mismatches with h3_message_error (is_body_size_valid/1).
 %		false ->
 %			stream_reset(StreamID, State, protocol_error,
 %				'The total size of DATA frames is different than the content-length. (RFC7540 8.1.2.6)')
@@ -513,7 +513,6 @@ headers_frame(Stream0, State0, IsFin, Type, DecData, Headers, PseudoHeaders, Len
 trailers_frame(Stream0, State0, DecData, Headers) ->
 	Stream = Stream0#bidi_stream{remote=fin},
 	State = stream_store(Stream, State0),
-	%% @todo Error out if we didn't get the full body.
 	case is_body_size_valid(Stream) of
 		true ->
 			{ok, {trailers, Headers},
@@ -522,7 +521,7 @@ trailers_frame(Stream0, State0, DecData, Headers) ->
 					_ -> {decoder_instructions, DecData}
 				end,
 				State}%;
-%% @todo Implement and update error type/message.
+%% @todo Reject content-length mismatches with h3_message_error (is_body_size_valid/1).
 %		false ->
 %			stream_reset(StreamID, State, protocol_error,
 %				'The total size of DATA frames is different than the content-length. (RFC7540 8.1.2.6)')
@@ -629,7 +628,7 @@ max_push_id_frame(Frame, _IsFin, StreamID, State) ->
 
 control_frame({settings, Settings}, State=#http3_machine{
 		peer_control_state=no_settings, encode_state=EncState0}) ->
-	%% @todo max_field_section_size
+	%% @todo Enforce max_field_section_size.
 	%% Send the QPACK values to the encoder.
 	MaxTableCapacity = maps:get(qpack_max_table_capacity, Settings, 0),
 	MaxBlockedStreams = maps:get(qpack_blocked_streams, Settings, 0),

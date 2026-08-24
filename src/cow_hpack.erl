@@ -804,6 +804,21 @@ encode_iolist_test() ->
 	{_, _} = encode(Headers),
 	ok.
 
+dyn_field_names(#state{dyn_table=DynTable}) ->
+	[Name || {_, {Name, _}} <- DynTable].
+
+encode_allowlisted_dynamic_name_reuse_test() ->
+	%% te is not in the static table.
+	{Enc1, State1} = encode([{<<"te">>, <<"trailers">>}], init(), #{huffman => false}),
+	<<16#40, _/bits>> = iolist_to_binary(Enc1),
+	{_, State2} = encode([{<<"user-agent">>, <<"Gun">>}], State1, #{huffman => false}),
+	{Enc3, State3} = encode([{<<"te">>, <<"gzip">>}], State2, #{huffman => false}),
+	Prefix = iolist_to_binary(enc_int6(63, 2#01)),
+	true = binary:longest_common_prefix(
+		[iolist_to_binary(Enc3), Prefix]) =:= byte_size(Prefix),
+	[<<"te">>, <<"user-agent">>, <<"te">>] = dyn_field_names(State3),
+	{[{<<"te">>, <<"gzip">>}], _} = decode(iolist_to_binary(Enc3), State2).
+
 horse_encode_raw() ->
 	horse:repeat(20000,
 		do_horse_encode_raw()
@@ -1006,7 +1021,7 @@ table_find_name(Name, #state{dyn_table=DynamicTable}) ->
 	table_find_name_dyn(Name, DynamicTable, 62).
 
 table_find_name_dyn(_, [], _) -> not_found;
-table_find_name_dyn(Name, [{Name, _}|_], Index) -> Index;
+table_find_name_dyn(Name, [{_, {Name, _}}|_], Index) -> Index;
 table_find_name_dyn(Name, [_|Tail], Index) -> table_find_name_dyn(Name, Tail, Index + 1).
 
 table_get(1, _) -> {<<":authority">>, <<>>};

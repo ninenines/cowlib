@@ -107,9 +107,9 @@
 -include("cow_inline.hrl").
 -include("cow_parse.hrl").
 
-%% The limit of 17 digits ensure the produced integer
-%% is not a big int.
--define(MAX_DIGITS, 17).
+%% The limit of 20 digits allows 64-bit values
+%% while still bounding integer size.
+-define(MAX_DIGITS, 20).
 
 -ifdef(TEST).
 -include_lib("stdlib/include/assert.hrl").
@@ -1682,7 +1682,8 @@ parse_content_length_test_() ->
 		{<<"69">>, 69},
 		{<<"1337">>, 1337},
 		{<<"3495">>, 3495},
-		{<<"1234567890">>, 1234567890}
+		{<<"1234567890">>, 1234567890},
+		{<<"99999999999999999999">>, 99999999999999999999}
 	],
 	[{V, fun() -> R = parse_content_length(V) end} || {V, R} <- Tests].
 
@@ -1695,7 +1696,8 @@ parse_content_length_error_test_() ->
 		<<"-42">>,
 		<<"-0">>,
 		<<"+0">>,
-		<<"+42">>
+		<<"+42">>,
+		<<"999999999999999999999">>
 	],
 	[{V, fun() -> ?assertError(_, parse_content_length(V)) end} || V <- Tests].
 
@@ -2654,13 +2656,23 @@ parse_range_test_() ->
 		{<<"bytes=0-0,-1">>, {bytes, [{0, 0}, -1]}},
 		{<<"bytes=500-600,601-999">>, {bytes, [{500, 600}, {601, 999}]}},
 		{<<"bytes=500-700,601-999">>, {bytes, [{500, 700}, {601, 999}]}},
-		{<<"books=I-III,V-IX">>, {<<"books">>, <<"I-III,V-IX">>}}
+		{<<"books=I-III,V-IX">>, {<<"books">>, <<"I-III,V-IX">>}},
+		{<<"bytes=99999999999999999999-99999999999999999999">>,
+			{bytes, [{99999999999999999999, 99999999999999999999}]}},
+		{<<"bytes=99999999999999999999-">>,
+			{bytes, [{99999999999999999999, infinity}]}},
+		{<<"bytes=-99999999999999999999">>,
+			{bytes, [-99999999999999999999]}}
 	],
 	[{V, fun() -> R = parse_range(V) end} || {V, R} <- Tests].
 
 parse_range_error_test_() ->
 	Tests = [
-		<<>>
+		<<>>,
+		<<"bytes=999999999999999999999-1">>,
+		<<"bytes=0-999999999999999999999">>,
+		<<"bytes=999999999999999999999-">>,
+		<<"bytes=-999999999999999999999">>
 	],
 	[{V, fun() -> ?assertError(_, parse_range(V)) end} || V <- Tests].
 
@@ -2705,13 +2717,15 @@ parse_retry_after(RetryAfter) ->
 parse_retry_after_test_() ->
 	Tests = [
 		{<<"Fri, 31 Dec 1999 23:59:59 GMT">>, {{1999, 12, 31}, {23, 59, 59}}},
-		{<<"120">>, 120}
+		{<<"120">>, 120},
+		{<<"99999999999999999999">>, 99999999999999999999}
 	],
 	[{V, fun() -> R = parse_retry_after(V) end} || {V, R} <- Tests].
 
 parse_retry_after_error_test_() ->
 	Tests = [
-		<<>>
+		<<>>,
+		<<"999999999999999999999">>
 	],
 	[{V, fun() -> ?assertError(_, parse_retry_after(V)) end} || V <- Tests].
 
@@ -3711,7 +3725,8 @@ digits_test_() ->
 	Tests = [
 		{<<"123">>, {123, <<>>}},
 		{<<"123, 456">>, {123, <<", 456">>}},
-		{<<"99999999999999999">>, {99999999999999999, <<>>}}
+		{<<"99999999999999999">>, {99999999999999999, <<>>}},
+		{<<"99999999999999999999">>, {99999999999999999999, <<>>}}
 	],
 	[{V, fun() -> R = digits(V) end} || {V, R} <- Tests].
 
@@ -3719,7 +3734,7 @@ digits_error_test_() ->
 	Tests = [
 		<<>>,
 		<<"hello">>,
-		<<"999999999999999999">>
+		<<"999999999999999999999">>
 	],
 	[{V, fun() -> ?assertError(_, digits(V)) end} || V <- Tests].
 -endif.

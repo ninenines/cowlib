@@ -14,19 +14,23 @@
 
 -module(cow_date).
 
+-include("cow_parse.hrl").
+
 -export([parse_date/1]).
 -export([rfc1123/1]).
 -export([rfc2109/1]).
 -export([rfc7231/1]).
 
 -ifdef(TEST).
+-include_lib("stdlib/include/assert.hrl").
 -include_lib("proper/include/proper.hrl").
 -endif.
 
 %% @doc Parse the HTTP date (IMF-fixdate, rfc850, asctime).
 
--define(DIGITS(A, B), ((A - $0) * 10 + (B - $0))).
--define(DIGITS(A, B, C, D), ((A - $0) * 1000 + (B - $0) * 100 + (C - $0) * 10 + (D - $0))).
+-define(DIGIT(C), (case C of _ when ?IS_DIGIT(C) -> C - $0 end)).
+-define(DIGITS(A, B), (?DIGIT(A) * 10 + ?DIGIT(B))).
+-define(DIGITS(A, B, C, D), (?DIGIT(A) * 1000 + ?DIGIT(B) * 100 + ?DIGIT(C) * 10 + ?DIGIT(D))).
 
 -spec parse_date(binary()) -> calendar:datetime().
 parse_date(DateBin) ->
@@ -137,8 +141,8 @@ asctime_date(<<"Nov ", D1, D2, " ", H1, H2, ":", M1, M2, ":", S1, S2, " ", Y1, Y
 asctime_date(<<"Dec ", D1, D2, " ", H1, H2, ":", M1, M2, ":", S1, S2, " ", Y1, Y2, Y3, Y4 >>) ->
 	{{?DIGITS(Y1, Y2, Y3, Y4), 12, asctime_day(D1, D2)}, {?DIGITS(H1, H2), ?DIGITS(M1, M2), ?DIGITS(S1, S2)}}.
 
-asctime_day($\s, D2) -> (D2 - $0);
-asctime_day(D1, D2) -> (D1 - $0) * 10 + (D2 - $0).
+asctime_day($\s, D2) -> ?DIGIT(D2);
+asctime_day(D1, D2) -> ?DIGITS(D1, D2).
 
 -ifdef(TEST).
 day_name() -> oneof(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]).
@@ -172,32 +176,59 @@ asctime_gen() ->
 			if D < 10 -> << $\s, (D + $0) >>; true -> integer_to_binary(D) end,
 			" ", pad_int(H), ":", pad_int(Mi), ":", pad_int(S), " ", integer_to_binary(Y)])}).
 
-prop_http_date() ->
+prop_parse_date() ->
 	?FORALL({Date, DateBin},
 		oneof([fixdate_gen(), rfc850_gen(), asctime_gen()]),
 		Date =:= parse_date(DateBin)).
 
-http_date_test_() ->
+parse_date_test_() ->
 	Tests = [
 		{<<"Sun, 06 Nov 1994 08:49:37 GMT">>, {{1994, 11, 6}, {8, 49, 37}}},
 		{<<"Sunday, 06-Nov-94 08:49:37 GMT">>, {{1994, 11, 6}, {8, 49, 37}}},
-		{<<"Sun Nov  6 08:49:37 1994">>, {{1994, 11, 6}, {8, 49, 37}}}
+		{<<"Sun Nov  6 08:49:37 1994">>, {{1994, 11, 6}, {8, 49, 37}}},
+		{<<"Sun, 10 Jan 1000 10:00:00 GMT">>, {{1000, 1, 10}, {10, 0, 0}}},
+		{<<"Sun, 09 Jan 0999 09:09:09 GMT">>, {{999, 1, 9}, {9, 9, 9}}},
+		{<<"Sunday, 09-Jan-90 09:09:09 GMT">>, {{1990, 1, 9}, {9, 9, 9}}},
+		{<<"Sunday, 10-Jan-00 19:59:59 GMT">>, {{2000, 1, 10}, {19, 59, 59}}},
+		{<<"Sun Jan 10 10:00:00 1000">>, {{1000, 1, 10}, {10, 0, 0}}},
+		{<<"Sun Jan  9 09:09:09 0999">>, {{999, 1, 9}, {9, 9, 9}}}
 	],
-	[{V, fun() -> R = http_date(V) end} || {V, R} <- Tests].
+	[{V, fun() -> R = parse_date(V) end} || {V, R} <- Tests].
 
-horse_http_date_fixdate() ->
+parse_date_error_test_() ->
+	%% $/ is just below $0 and $: just above $9.
+	Tests = [
+		<<"Sun, 06 Nov 199/ 08:49:37 GMT">>,
+		<<"Sun, 06 Nov 199: 08:49:37 GMT">>,
+		<<"Sun, 06 Nov 1:94 08:49:37 GMT">>,
+		<<"Sun, 06 Nov 19A4 08:49:37 GMT">>,
+		<<"Sun, 0A Nov 1994 08:49:37 GMT">>,
+		<<"Sun, 06 Nov 1994 0@:49:37 GMT">>,
+		<<"Sun, 06 Nov 1994 08:4/:37 GMT">>,
+		<<"Sun, 06 Nov 1994 08:49:3: GMT">>,
+		<<"Sunday, 0A-Nov-94 08:49:37 GMT">>,
+		<<"Sunday, 06-Nov-9: 08:49:37 GMT">>,
+		<<"Sun Nov 0A 08:49:37 1994">>,
+		<<"Sun Nov  6 08:49:37 199:">>,
+		%% Space-padded asctime day. Only the second byte is a digit.
+		<<"Sun Nov  : 08:49:37 1994">>,
+		<<"Sun Nov  A 08:49:37 1994">>
+	],
+	[{V, fun() -> ?assertError(_, parse_date(V)) end} || V <- Tests].
+
+horse_parse_date_fixdate() ->
 	horse:repeat(200000,
-		http_date(<<"Sun, 06 Nov 1994 08:49:37 GMT">>)
+		parse_date(<<"Sun, 06 Nov 1994 08:49:37 GMT">>)
 	).
 
-horse_http_date_rfc850() ->
+horse_parse_date_rfc850() ->
 	horse:repeat(200000,
-		http_date(<<"Sunday, 06-Nov-94 08:49:37 GMT">>)
+		parse_date(<<"Sunday, 06-Nov-94 08:49:37 GMT">>)
 	).
 
-horse_http_date_asctime() ->
+horse_parse_date_asctime() ->
 	horse:repeat(200000,
-		http_date(<<"Sun Nov  6 08:49:37 1994">>)
+		parse_date(<<"Sun Nov  6 08:49:37 1994">>)
 	).
 -endif.
 

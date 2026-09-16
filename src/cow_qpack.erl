@@ -15,6 +15,7 @@
 -module(cow_qpack).
 -dialyzer(no_improper_lists).
 
+-export([init/0]).
 -export([init/1]).
 -export([init/3]).
 
@@ -137,6 +138,11 @@
 -include("cow_hpack_common.hrl").
 
 %% State initialization.
+
+-spec init() -> state().
+
+init() ->
+	init(encoder).
 
 -spec init(decoder | encoder) -> state().
 

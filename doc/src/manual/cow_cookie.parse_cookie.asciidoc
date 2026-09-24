@@ -29,9 +29,15 @@ The cookie header value.
 A list of cookie name/value pairs is returned on success.
 
 An exception is thrown in the event of a parse error.
+A control character in a cookie name or value is a
+parse error. A horizontal tab before a cookie is
+ignored, as are spaces, commas and semicolons in
+that position.
 
 == Changelog
 
+* *2.21*: Every control character in a cookie name or
+          value is now a parse error.
 * *2.19*: Function `parse_cookie/2` introduced with a
           `max_cookies` option.
 * *2.9*: Fixes to the parser may lead to potential incompatibilities.

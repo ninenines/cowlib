@@ -15,9 +15,11 @@ Cookies :: [{Name :: iodata(), Value :: iodata()}]
 
 Generate a cookie header.
 
-Note that this function expects the `Name` and `Value`
-to be safe, meaning they do not contain invalid characters
-according to RFC6265 section 4.2.1.
+Names and values are written as given, including octets
+that are not valid `cookie-octet` characters. An exception
+is raised when the result would not be a single header
+value: a semicolon in a name or a value, an `=` in a name,
+or a control character other than tab.
 
 == Arguments
 
@@ -31,6 +33,9 @@ An iolist with the generated cookie header value.
 
 == Changelog
 
+* *2.21*: A semicolon in a name or a value, an `=` in
+          a name, or a control character other than
+          tab results in an exception.
 * *2.9*: Function introduced.
 
 == Examples

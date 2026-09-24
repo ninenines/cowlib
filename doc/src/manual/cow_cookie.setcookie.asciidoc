@@ -16,10 +16,14 @@ setcookie(Name  :: iodata(),
 
 Generate a set-cookie header.
 
-Note that this function expects the `Name`, `Value` arguments
-as well as the `domain` or `path` options to be safe, meaning
-they do not contain invalid characters according to RFC6265
-section 4.1.1.
+The name must be a token. The value must be a sequence of
+cookie octets, or the same sequence wrapped in double quotes.
+The quotes are part of the value. `domain` and `path` must
+be av-octets: US-ASCII, no control character, no semicolon,
+and no octet above 127.
+
+`max_age` is emitted as a `Max-Age` attribute and nothing
+else, including when it is `0`.
 
 == Arguments
 
@@ -41,6 +45,10 @@ An iolist with the generated set-cookie header value.
 
 == Changelog
 
+* *2.21*: Names, values, domains and paths that do not
+          match the set-cookie grammar result in an
+          exception. `max_age` no longer also emits an
+          `Expires` attribute.
 * *2.12*: The `Version` attribute is no longer generated.
 * *1.0*: Function introduced.
 

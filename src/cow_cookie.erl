@@ -47,6 +47,25 @@
 -include("cow_inline.hrl").
 -include("cow_parse.hrl").
 
+%% RFC6265bis 5.6. Name plus value, after trimming.
+-define(MAX_COOKIE_OCTETS, 4096).
+%% RFC6265bis 5.5. Recommended maximum cookie lifetime.
+-define(MAX_COOKIE_AGE, 34560000).
+
+%% cookie-octet, excluding CTLs, whitespace, DQUOTE, comma, semicolon
+%% and backslash.
+-define(IS_COOKIE_OCTET(C),
+	(C =:= 16#21) orelse
+	(C >= 16#23 andalso C =< 16#2B) orelse
+	(C >= 16#2D andalso C =< 16#3A) orelse
+	(C >= 16#3C andalso C =< 16#5B) orelse
+	(C >= 16#5D andalso C =< 16#7E)).
+
+%% av-octet: any CHAR except CTLs or ";".
+-define(IS_AV_OCTET(C),
+	(C >= 16#20 andalso C =< 16#3A) orelse
+	(C >= 16#3C andalso C =< 16#7E)).
+
 -ifdef(TEST).
 -include_lib("stdlib/include/assert.hrl").
 -endif.
@@ -87,15 +106,7 @@ parse_cookie_name(<< $,, _/binary >>, _, _, _) ->
 	error(badarg);
 parse_cookie_name(<< $;, Rest/binary >>, Acc, Name, Max) ->
 	parse_cookie(Rest, [{<<>>, parse_cookie_trim(Name)}|Acc], Max);
-parse_cookie_name(<< $\t, _/binary >>, _, _, _) ->
-	error(badarg);
-parse_cookie_name(<< $\r, _/binary >>, _, _, _) ->
-	error(badarg);
-parse_cookie_name(<< $\n, _/binary >>, _, _, _) ->
-	error(badarg);
-parse_cookie_name(<< $\013, _/binary >>, _, _, _) ->
-	error(badarg);
-parse_cookie_name(<< $\014, _/binary >>, _, _, _) ->
+parse_cookie_name(<< C, _/binary >>, _, _, _) when C < 32; C =:= 127 ->
 	error(badarg);
 parse_cookie_name(<< C, Rest/binary >>, Acc, Name, Max) ->
 	parse_cookie_name(Rest, Acc, << Name/binary, C >>, Max).
@@ -104,15 +115,7 @@ parse_cookie_value(<<>>, Acc, Name, Value, _) ->
 	lists:reverse([{Name, parse_cookie_trim(Value)}|Acc]);
 parse_cookie_value(<< $;, Rest/binary >>, Acc, Name, Value, Max) ->
 	parse_cookie(Rest, [{Name, parse_cookie_trim(Value)}|Acc], Max);
-parse_cookie_value(<< $\t, _/binary >>, _, _, _, _) ->
-	error(badarg);
-parse_cookie_value(<< $\r, _/binary >>, _, _, _, _) ->
-	error(badarg);
-parse_cookie_value(<< $\n, _/binary >>, _, _, _, _) ->
-	error(badarg);
-parse_cookie_value(<< $\013, _/binary >>, _, _, _, _) ->
-	error(badarg);
-parse_cookie_value(<< $\014, _/binary >>, _, _, _, _) ->
+parse_cookie_value(<< C, _/binary >>, _, _, _, _) when C < 32; C =:= 127 ->
 	error(badarg);
 parse_cookie_value(<< C, Rest/binary >>, Acc, Name, Value, Max) ->
 	parse_cookie_value(Rest, Acc, Name, << Value/binary, C >>, Max).
@@ -182,6 +185,28 @@ parse_cookie_error_test_() ->
 	],
 	[{V, fun() -> ?assertError(badarg, parse_cookie(V)) end} || V <- Tests].
 
+parse_cookie_ctl_test_() ->
+	Ctl = lists:seq(0, 31) ++ [127],
+	Inside = [{<<C>>, fun() ->
+		?assertError(badarg, parse_cookie(<<"a=", C>>)),
+		?assertError(badarg, parse_cookie(<<C, "=b">>))
+	end} || C <- Ctl],
+	Edges = [
+		{<<"space in value">>, fun() ->
+			[{<<"a">>, <<"b c">>}] = parse_cookie(<<"a=b c">>)
+		end},
+		{<<"tilde">>, fun() ->
+			[{<<"a">>, <<"~">>}] = parse_cookie(<<"a=~">>)
+		end},
+		{<<"leading tab">>, fun() ->
+			[{<<"a">>, <<"b">>}] = parse_cookie(<<$\t, "a=b">>)
+		end},
+		{<<"tab inside name">>, fun() ->
+			?assertError(badarg, parse_cookie(<<"a", $\t, "=b">>))
+		end}
+	],
+	Inside ++ Edges.
+
 parse_cookie_max_cookies_test() ->
 	Pair = <<"a=b">>,
 	%% 100 pairs accepted by default.
@@ -216,6 +241,8 @@ parse_set_cookie(SetCookie) ->
 			end,
 			case {Name, Value} of
 				{<<>>, <<>>} ->
+					ignore;
+				_ when byte_size(Name) + byte_size(Value) > ?MAX_COOKIE_OCTETS ->
 					ignore;
 				_ ->
 					Attrs = parse_set_cookie_attrs(UnparsedAttrs, #{}),
@@ -265,7 +292,7 @@ trim(String) ->
 parse_set_cookie_attr(<<"expires">>, Value) ->
 	try cow_date:parse_date(Value) of
 		DateTime ->
-			{ok, expires, DateTime}
+			{ok, expires, cap_cookie_expiry(DateTime)}
 	catch _:_ ->
 		ignore
 	end;
@@ -277,7 +304,8 @@ parse_set_cookie_attr(<<"max-age">>, Value = <<C, _/bits>>) when ?IS_DIGIT(C); C
 		MaxAge ->
 			CurrentTime = erlang:universaltime(),
 			{ok, max_age, calendar:gregorian_seconds_to_datetime(
-				calendar:datetime_to_gregorian_seconds(CurrentTime) + MaxAge)}
+				calendar:datetime_to_gregorian_seconds(CurrentTime)
+				+ min(MaxAge, ?MAX_COOKIE_AGE))}
 	catch _:_ ->
 		ignore
 	end;
@@ -319,6 +347,16 @@ parse_set_cookie_attr(<<"samesite">>, Value) ->
 parse_set_cookie_attr(_, _) ->
 	ignore.
 
+%% Expiry more than 400 days out is reduced to 400 days.
+cap_cookie_expiry(DateTime) ->
+	Now = erlang:universaltime(),
+	Limit = calendar:gregorian_seconds_to_datetime(
+		calendar:datetime_to_gregorian_seconds(Now) + ?MAX_COOKIE_AGE),
+	case DateTime > Limit of
+		true -> Limit;
+		false -> DateTime
+	end.
+
 -ifdef(TEST).
 parse_set_cookie_test_() ->
 	Tests = [
@@ -348,6 +386,61 @@ parse_set_cookie_test_() ->
 	],
 	[{SetCookie, fun() -> Res = parse_set_cookie(SetCookie) end}
 		|| {SetCookie, Res} <- Tests].
+
+parse_set_cookie_size_test() ->
+	A4096 = binary:copy(<<"a">>, 4096),
+	A4097 = binary:copy(<<"a">>, 4097),
+	B4095 = binary:copy(<<"b">>, 4095),
+	B4096 = binary:copy(<<"b">>, 4096),
+	{ok, A4096, <<>>, #{}} = parse_set_cookie(<<A4096/binary, "=">>),
+	{ok, <<>>, A4096, #{}} = parse_set_cookie(A4096),
+	{ok, <<"a">>, B4095, #{}} = parse_set_cookie(<<"a=", B4095/binary>>),
+	ignore = parse_set_cookie(<<A4097/binary, "=">>),
+	ignore = parse_set_cookie(A4097),
+	ignore = parse_set_cookie(<<"a=", B4096/binary>>),
+	%% Trimmed whitespace does not count toward the limit.
+	{ok, A4096, <<>>, #{}} = parse_set_cookie(<<$\s, A4096/binary, $=, $\s>>),
+	ignore = parse_set_cookie(<<$\s, A4097/binary>>),
+	ok.
+
+parse_set_cookie_age_limit_test() ->
+	Before = erlang:universaltime(),
+	{ok, <<"a">>, <<"b">>, #{max_age := AtLimit}} =
+		parse_set_cookie(<<"a=b; Max-Age=",
+			(integer_to_binary(?MAX_COOKIE_AGE))/binary>>),
+	{ok, <<"a">>, <<"b">>, #{max_age := Over}} =
+		parse_set_cookie(<<"a=b; Max-Age=",
+			(integer_to_binary(?MAX_COOKIE_AGE + 1))/binary>>),
+	{ok, <<"a">>, <<"b">>, #{max_age := Huge}} =
+		parse_set_cookie(<<"a=b; Max-Age=",
+			(integer_to_binary(?MAX_COOKIE_AGE * 10))/binary>>),
+	After = erlang:universaltime(),
+	true = expiry_in_window(AtLimit, Before, After),
+	true = expiry_in_window(Over, Before, After),
+	true = expiry_in_window(Huge, Before, After),
+	%% A date inside the window is kept. A date past it is reduced.
+	Near = calendar:gregorian_seconds_to_datetime(
+		calendar:datetime_to_gregorian_seconds(erlang:universaltime()) + 86400),
+	Far = calendar:gregorian_seconds_to_datetime(
+		calendar:datetime_to_gregorian_seconds(erlang:universaltime())
+		+ ?MAX_COOKIE_AGE + 86400 * 10),
+	NearBin = cow_date:rfc1123(Near),
+	FarBin = cow_date:rfc1123(Far),
+	{ok, <<"a">>, <<"b">>, #{expires := Near}} =
+		parse_set_cookie(<<"a=b; Expires=", NearBin/binary>>),
+	Before2 = erlang:universaltime(),
+	{ok, <<"a">>, <<"b">>, #{expires := Capped}} =
+		parse_set_cookie(<<"a=b; Expires=", FarBin/binary>>),
+	After2 = erlang:universaltime(),
+	true = expiry_in_window(Capped, Before2, After2),
+	false = Capped =:= Far,
+	ok.
+
+expiry_in_window(Got, Before, After) ->
+	GotSecs = calendar:datetime_to_gregorian_seconds(Got),
+	Low = calendar:datetime_to_gregorian_seconds(Before) + ?MAX_COOKIE_AGE,
+	High = calendar:datetime_to_gregorian_seconds(After) + ?MAX_COOKIE_AGE,
+	GotSecs >= Low andalso GotSecs =< High.
 -endif.
 
 %% Build a cookie header.
@@ -356,13 +449,28 @@ parse_set_cookie_test_() ->
 cookie([]) ->
 	[];
 cookie([{<<>>, Value}]) ->
-	[Value];
+	[cookie_chars(Value, value)];
 cookie([{Name, Value}]) ->
-	[Name, $=, Value];
+	[cookie_chars(Name, name), $=, cookie_chars(Value, value)];
 cookie([{<<>>, Value}|Tail]) ->
-	[Value, $;, $\s|cookie(Tail)];
+	[cookie_chars(Value, value), $;, $\s|cookie(Tail)];
 cookie([{Name, Value}|Tail]) ->
-	[Name, $=, Value, $;, $\s|cookie(Tail)].
+	[cookie_chars(Name, name), $=, cookie_chars(Value, value), $;, $\s|cookie(Tail)].
+
+cookie_chars(Chars, Kind) ->
+	Bin = iolist_to_binary(Chars),
+	ok = validate_cookie_chars(Bin, Kind),
+	Bin.
+
+validate_cookie_chars(<<>>, _) ->
+	ok;
+validate_cookie_chars(<<C, _/bits>>, _)
+		when C < 32, C =/= $\t; C =:= 127; C =:= $; ->
+	error(badarg);
+validate_cookie_chars(<<$=, _/bits>>, name) ->
+	error(badarg);
+validate_cookie_chars(<<_, R/bits>>, Kind) ->
+	validate_cookie_chars(R, Kind).
 
 -ifdef(TEST).
 cookie_test_() ->
@@ -371,10 +479,42 @@ cookie_test_() ->
 		{[{<<"a">>, <<"b">>}], <<"a=b">>},
 		{[{<<"a">>, <<"b">>}, {<<"c">>, <<"d">>}], <<"a=b; c=d">>},
 		{[{<<>>, <<"b">>}, {<<"c">>, <<"d">>}], <<"b; c=d">>},
-		{[{<<"a">>, <<"b">>}, {<<>>, <<"d">>}], <<"a=b; d">>}
+		{[{<<"a">>, <<"b">>}, {<<>>, <<"d">>}], <<"a=b; d">>},
+		%% Octets outside cookie-octet are echoed.
+		{[{<<"a">>, <<"b c">>}], <<"a=b c">>},
+		{[{<<"a">>, <<"b,c">>}], <<"a=b,c">>},
+		{[{<<"a b">>, <<"c">>}], <<"a b=c">>},
+		{[{<<"a">>, <<"\"b\"">>}], <<"a=\"b\"">>},
+		{[{<<"a">>, <<"b\tc">>}], <<"a=b\tc">>},
+		{[{<<"a">>, <<"b=c">>}], <<"a=b=c">>},
+		{[{<<>>, <<"test=2">>}], <<"test=2">>},
+		{[{<<"a">>, <<128>>}], <<"a=", 128>>},
+		{[{<<"a">>, <<195, 169>>}], <<"a=", 195, 169>>},
+		{[{[<<"a">>], [<<"b">>, <<"c">>]}], <<"a=bc">>}
 	],
 	[{Res, fun() -> Res = iolist_to_binary(cookie(Cookies)) end}
 		|| {Cookies, Res} <- Tests].
+
+cookie_error_test_() ->
+	Tests = [
+		[{<<"a">>, <<"b;c">>}],
+		[{<<"a;b">>, <<"c">>}],
+		[{<<>>, <<"a;b">>}],
+		[{<<"a">>, <<"b">>}, {<<"c">>, <<"d;e">>}],
+		[{[<<"a;">>], <<"b">>}],
+		[{<<"a">>, <<"b\r\nX: y">>}],
+		[{<<"a\n">>, <<"b">>}],
+		[{<<"a\r">>, <<"b">>}],
+		[{<<>>, <<"b\n">>}],
+		[{<<"a">>, <<0>>}],
+		[{<<1>>, <<"b">>}],
+		[{<<"a">>, <<31>>}],
+		[{<<"a">>, <<127>>}],
+		[{<<"a=b">>, <<"c">>}],
+		[{[<<"a">>, <<$\n>>], <<"b">>}]
+	],
+	[{iolist_to_binary(io_lib:format("~p failure", [V])),
+		fun() -> ?assertError(_, cookie(V)) end} || V <- Tests].
 -endif.
 
 %% Convert a cookie name, value and options to its iodata form.
@@ -387,32 +527,59 @@ cookie_test_() ->
 %% @todo Cowlib 3.0: rename to set_cookie/3.
 
 -spec setcookie(iodata(), iodata(), cookie_opts()) -> iolist().
-setcookie(Name, Value, Opts) ->
-	nomatch = binary:match(iolist_to_binary(Name), [<<$=>>, <<$,>>, <<$;>>,
-			<<$\s>>, <<$\t>>, <<$\r>>, <<$\n>>, <<$\013>>, <<$\014>>]),
-	nomatch = binary:match(iolist_to_binary(Value), [<<$,>>, <<$;>>,
-			<<$\s>>, <<$\t>>, <<$\r>>, <<$\n>>, <<$\013>>, <<$\014>>]),
+setcookie(Name0, Value0, Opts) ->
+	Name = iolist_to_binary(Name0),
+	Value = iolist_to_binary(Value0),
+	validate_cookie_name(Name),
+	validate_cookie_value(Value),
 	[Name, <<"=">>, Value, attributes(maps:to_list(Opts))].
+
+validate_cookie_name(<<>>) ->
+	error(badarg);
+validate_cookie_name(Name) ->
+	validate_token(Name).
+
+validate_token(<<>>) ->
+	ok;
+validate_token(<<C, R/bits>>) when ?IS_TOKEN(C) ->
+	validate_token(R).
+
+%% cookie-value is *cookie-octet or a quoted run of cookie-octets.
+%% The quotes are part of the value.
+validate_cookie_value(<<$", R/bits>>) ->
+	validate_quoted_cookie_value(R);
+validate_cookie_value(Value) ->
+	validate_cookie_octets(Value).
+
+validate_quoted_cookie_value(<<$">>) ->
+	ok;
+validate_quoted_cookie_value(<<C, R/bits>>) when ?IS_COOKIE_OCTET(C) ->
+	validate_quoted_cookie_value(R).
+
+validate_cookie_octets(<<>>) ->
+	ok;
+validate_cookie_octets(<<C, R/bits>>) when ?IS_COOKIE_OCTET(C) ->
+	validate_cookie_octets(R).
+
+validate_av_octets(<<>>) ->
+	ok;
+validate_av_octets(<<C, R/bits>>) when ?IS_AV_OCTET(C) ->
+	validate_av_octets(R).
 
 attributes([]) -> [];
 attributes([{domain, Domain0}|Tail]) ->
 	Domain = iolist_to_binary(Domain0),
-	nomatch = binary:match(Domain, <<$;>>),
+	validate_av_octets(Domain),
 	[<<"; Domain=">>, Domain|attributes(Tail)];
 attributes([{http_only, false}|Tail]) -> attributes(Tail);
 attributes([{http_only, true}|Tail]) -> [<<"; HttpOnly">>|attributes(Tail)];
-%% MSIE requires an Expires date in the past to delete a cookie.
-attributes([{max_age, 0}|Tail]) ->
-	[<<"; Expires=Thu, 01-Jan-1970 00:00:01 GMT; Max-Age=0">>|attributes(Tail)];
-attributes([{max_age, MaxAge}|Tail]) when is_integer(MaxAge), MaxAge > 0 ->
-	Secs = calendar:datetime_to_gregorian_seconds(calendar:universal_time()),
-	Expires = cow_date:rfc2109(calendar:gregorian_seconds_to_datetime(Secs + MaxAge)),
-	[<<"; Expires=">>, Expires, <<"; Max-Age=">>, integer_to_list(MaxAge)|attributes(Tail)];
+attributes([{max_age, MaxAge}|Tail]) when is_integer(MaxAge), MaxAge >= 0 ->
+	[<<"; Max-Age=">>, integer_to_binary(MaxAge)|attributes(Tail)];
 attributes([Opt={max_age, _}|_]) ->
 	error({badarg, Opt});
 attributes([{path, Path0}|Tail]) ->
 	Path = iolist_to_binary(Path0),
-	nomatch = binary:match(Path, <<$;>>),
+	validate_av_octets(Path),
 	[<<"; Path=">>, Path|attributes(Tail)];
 attributes([{secure, false}|Tail]) -> attributes(Tail);
 attributes([{secure, true}|Tail]) -> [<<"; Secure">>|attributes(Tail)];
@@ -461,21 +628,82 @@ setcookie_test_() ->
 
 setcookie_max_age_test() ->
 	F = fun(N, V, O) ->
-		binary:split(iolist_to_binary(
-			setcookie(N, V, O)), <<";">>, [global])
+		iolist_to_binary(setcookie(N, V, O))
 	end,
-	[<<"Customer=WILE_E_COYOTE">>,
-		<<" Expires=", _/binary>>,
-		<<" Max-Age=111">>,
-		<<" Secure">>] = F(<<"Customer">>, <<"WILE_E_COYOTE">>,
-			#{max_age => 111, secure => true}),
+	<<"Customer=WILE_E_COYOTE; Max-Age=0">> = F(<<"Customer">>, <<"WILE_E_COYOTE">>,
+		#{max_age => 0}),
+	<<"Customer=WILE_E_COYOTE; Max-Age=111; Secure">> = F(<<"Customer">>, <<"WILE_E_COYOTE">>,
+		#{max_age => 111, secure => true}),
 	?assertError({badarg, {max_age, -111}},
 		F(<<"Customer">>, <<"WILE_E_COYOTE">>, #{max_age => -111})),
-	[<<"Customer=WILE_E_COYOTE">>,
-		<<" Expires=", _/binary>>,
-		<<" Max-Age=86417">>] = F(<<"Customer">>, <<"WILE_E_COYOTE">>,
-			 #{max_age => 86417}),
+	<<"Customer=WILE_E_COYOTE; Max-Age=86417">> = F(<<"Customer">>, <<"WILE_E_COYOTE">>,
+		#{max_age => 86417}),
 	ok.
+
+setcookie_grammar_test_() ->
+	Tests = [
+		{<<"!">>, <<"!">>, <<"!=!">>},
+		{[<<"Na">>, <<"me">>], <<"a=b">>, <<"Name=a=b">>},
+		{<<"Name">>, <<"\"ab\"">>, <<"Name=\"ab\"">>},
+		{<<"Name">>, <<"\"\"">>, <<"Name=\"\"">>},
+		{<<"Name">>, <<16#21>>, <<"Name=", 16#21>>},
+		{<<"Name">>, <<16#7E>>, <<"Name=", 16#7E>>},
+		{<<"Name">>, <<16#5D>>, <<"Name=", 16#5D>>}
+	],
+	[{R, fun() -> R = iolist_to_binary(setcookie(N, V, #{})) end}
+		|| {N, V, R} <- Tests].
+
+setcookie_grammar_error_test_() ->
+	Tests = [
+		{<<>>, <<"Value">>},
+		{<<" ">>, <<"Value">>},
+		{<<"(">>, <<"Value">>},
+		{<<"/">>, <<"Value">>},
+		{<<":">>, <<"Value">>},
+		{<<"Na=me">>, <<"Value">>},
+		{<<"Name">>, <<" ">>},
+		{<<"Name">>, <<",">>},
+		{<<"Name">>, <<";">>},
+		{<<"Name">>, <<"\\">>},
+		{<<"Name">>, <<"\"">>},
+		{<<"Name">>, <<"\"a b\"">>},
+		{<<"Name">>, <<"\"b">>},
+		{<<"Name">>, <<"\"ab\"c">>},
+		{<<"Name">>, <<"\"a\"b\"">>},
+		{<<"Name">>, <<16#20>>},
+		{<<"Name">>, <<16#7F>>},
+		{<<"Name">>, <<16#22>>}
+	],
+	[{iolist_to_binary(io_lib:format("{~p, ~p} failure", [N, V])),
+		fun() -> ?assertError(_, setcookie(N, V, #{})) end}
+		|| {N, V} <- Tests].
+
+setcookie_attr_grammar_test_() ->
+	Tests = [
+		{#{path => <<"foo">>}, <<"Name=Value; Path=foo">>},
+		{#{path => <<"/a b">>}, <<"Name=Value; Path=/a b">>},
+		{#{path => <<"/", 16#7E>>}, <<"Name=Value; Path=/", 16#7E>>},
+		{#{domain => <<"ex ample.com">>}, <<"Name=Value; Domain=ex ample.com">>},
+		{#{domain => <<".example.org">>}, <<"Name=Value; Domain=.example.org">>},
+		{#{path => [<<"/a">>, <<"/b">>]}, <<"Name=Value; Path=/a/b">>}
+	],
+	[{R, fun() -> R = iolist_to_binary(setcookie(<<"Name">>, <<"Value">>, O)) end}
+		|| {O, R} <- Tests].
+
+setcookie_attr_grammar_error_test_() ->
+	Tests = [
+		#{path => <<"/a;b">>},
+		#{path => <<"/a", 0>>},
+		#{path => <<"/a", 31>>},
+		#{path => <<"/a", 127>>},
+		#{path => <<"/a", 128>>},
+		#{domain => <<"ex.com;">>},
+		#{domain => <<"ex.com", 10>>},
+		#{domain => <<"ex", 16#7F, ".com">>}
+	],
+	[{iolist_to_binary(io_lib:format("~p failure", [O])),
+		fun() -> ?assertError(_, setcookie(<<"Name">>, <<"Value">>, O)) end}
+		|| O <- Tests].
 
 setcookie_failures_test_() ->
 	F = fun(N, V) ->

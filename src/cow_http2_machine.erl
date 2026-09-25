@@ -120,7 +120,8 @@
 
 	%% Connection-wide frame processing state.
 	state = settings :: settings | normal
-		| {continuation, request | response | trailers | push_promise, continued_frame()},
+		| {continuation, request | response | trailers | push_promise
+			| linger | linger_push, continued_frame()},
 
 	%% Timer for the connection preface.
 	preface_timer = undefined :: undefined | reference(),
@@ -931,6 +932,14 @@ push_promise_frame(_, State=#http2_machine{mode=server}) ->
 push_promise_frame(_, State=#http2_machine{local_settings=#{enable_push := false}}) ->
 	{error, {connection_error, protocol_error,
 		'PUSH_PROMISE frame received despite SETTINGS_ENABLE_PUSH set to 0. (RFC7540 6.6)'},
+		State};
+%% Promised ids are server-initiated: even and non-zero. Id 0 is even,
+%% so it is rejected here rather than treated as an idle server stream.
+%% (RFC7540 5.1.1, RFC7540 6.6)
+push_promise_frame(#push_promise{promised_id=PromisedStreamID}, State)
+		when PromisedStreamID =:= 0; not ?IS_SERVER_LOCAL(PromisedStreamID) ->
+	{error, {connection_error, protocol_error,
+		'PUSH_PROMISE promised an invalid stream id. (RFC7540 5.1.1, RFC7540 6.6)'},
 		State};
 push_promise_frame(#push_promise{promised_id=PromisedStreamID},
 		State=#http2_machine{remote_streamid=RemoteStreamID})

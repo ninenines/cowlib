@@ -41,6 +41,11 @@
 -export([is_remote_concurrency_limit_reached/1]).
 -export([is_lingering_stream/2]).
 
+-ifdef(TEST).
+-export([headers_on_lingering_stream_after_reset_test/0]).
+-export([headers_on_closed_non_lingering_stream_test/0]).
+-endif.
+
 -type opts() :: #{
 	connection_window_margin_size => 0..16#7fffffff,
 	connection_window_update_threshold => 0..16#7fffffff,
@@ -120,7 +125,7 @@
 
 	%% Connection-wide frame processing state.
 	state = settings :: settings | normal
-		| {continuation, request | response | trailers | push_promise, continued_frame()},
+		| {continuation, request | response | trailers | push_promise | discard, continued_frame()},
 
 	%% Timer for the connection preface.
 	preface_timer = undefined :: undefined | reference(),
@@ -313,6 +318,43 @@ collect_timeout_messages(PTRef, STRef) ->
 	after 0 ->
 		[]
 	end.
+
+headers_on_lingering_stream_after_reset_test() ->
+	{ok, _, State0} = init(client, #{
+		preface_timeout => infinity,
+		settings_timeout => infinity
+	}),
+	%% Move to normal state as if the preface SETTINGS were received.
+	State1 = State0#http2_machine{state=normal, preface_timer=undefined},
+	{ok, StreamID, State2} = init_stream(<<"GET">>, State1),
+	{ok, State3} = reset_stream(StreamID, State2),
+	true = is_lingering_stream(StreamID, State3),
+	%% Minimal valid response header block: :status 200 from static table.
+	{HeaderBlock0, _} = cow_hpack:encode([{<<":status">>, <<"200">>}], cow_hpack:init()),
+	HeaderBlock = iolist_to_binary(HeaderBlock0),
+	Frame = {headers, StreamID, fin, head_fin, HeaderBlock},
+	{ok, State4} = frame(Frame, State3),
+	true = is_lingering_stream(StreamID, State4),
+	%% HPACK state remains usable for a subsequent stream.
+	{ok, StreamID2, State5} = init_stream(<<"GET">>, State4),
+	{ok, State6} = reset_stream(StreamID2, State5),
+	{ok, _} = frame({headers, StreamID2, fin, head_fin, HeaderBlock}, State6),
+	ok.
+
+headers_on_closed_non_lingering_stream_test() ->
+	{ok, _, State0} = init(client, #{
+		preface_timeout => infinity,
+		settings_timeout => infinity
+	}),
+	State1 = State0#http2_machine{state=normal, preface_timer=undefined},
+	{ok, StreamID, State2} = init_stream(<<"GET">>, State1),
+	%% Remove the stream without lingering (as when both sides finish).
+	State3 = State2#http2_machine{streams=#{}},
+	{HeaderBlock0, _} = cow_hpack:encode([{<<":status">>, <<"200">>}], cow_hpack:init()),
+	HeaderBlock = iolist_to_binary(HeaderBlock0),
+	{error, {connection_error, stream_closed, _}, _} =
+		frame({headers, StreamID, fin, head_fin, HeaderBlock}, State3),
+	ok.
 
 -endif.
 
@@ -556,9 +598,7 @@ server_headers_frame(Frame=#headers{id=StreamID, fin=IsFin, head=IsHeadFin}, Sta
 				'Trailing HEADERS frame received without the END_STREAM flag set. (RFC7540 8.1, RFC7540 8.1.2.6)'},
 				State};
 		_ ->
-			{error, {connection_error, stream_closed,
-				'HEADERS frame received on a stream in closed or half-closed state. (RFC7540 5.1)'},
-				State}
+			discard_or_reject_headers_frame(Frame, State)
 	end.
 
 %% Either a HEADERS frame received on an (half-)closed stream,
@@ -587,9 +627,7 @@ client_headers_frame(Frame=#headers{id=StreamID, fin=IsFin, head=IsHeadFin},
 				'Trailing HEADERS frame received without the END_STREAM flag set. (RFC7540 8.1, RFC7540 8.1.2.6)'},
 				State};
 		_ ->
-			{error, {connection_error, stream_closed,
-				'HEADERS frame received on a stream in closed or half-closed state. (RFC7540 5.1)'},
-				State}
+			discard_or_reject_headers_frame(Frame, State)
 	end;
 %% Reject HEADERS frames received on idle streams.
 client_headers_frame(_, State) ->
@@ -597,10 +635,27 @@ client_headers_frame(_, State) ->
 		'HEADERS frame received on an idle stream. (RFC7540 5.1.1)'},
 		State}.
 
+%% After we send RST_STREAM the peer may still send HEADERS (for example
+%% a response that was already in flight). Keep HPACK in sync and discard.
+discard_or_reject_headers_frame(Frame=#headers{id=StreamID, head=IsHeadFin},
+		State=#http2_machine{local_lingering_streams=Lingering}) ->
+	case lists:member(StreamID, Lingering) of
+		true when IsHeadFin =:= head_fin ->
+			headers_decode(Frame, State, discard, undefined);
+		true ->
+			{ok, State#http2_machine{state={continuation, discard, Frame}}};
+		false ->
+			{error, {connection_error, stream_closed,
+				'HEADERS frame received on a stream in closed or half-closed state. (RFC7540 5.1)'},
+				State}
+	end.
+
 headers_decode(Frame=#headers{head=head_fin, data=HeaderData},
 		State=#http2_machine{opts=Opts, decode_state=DecodeState0},
 		Type, Stream) ->
 	try cow_hpack:decode(HeaderData, DecodeState0, Opts) of
+		{_Headers, DecodeState} when Type =:= discard ->
+			{ok, State#http2_machine{decode_state=DecodeState}};
 		{Headers, DecodeState} when Type =:= request ->
 			headers_enforce_concurrency_limit(Frame,
 				State#http2_machine{decode_state=DecodeState}, Type, Stream, Headers);

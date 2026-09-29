@@ -37,6 +37,12 @@
 -export([format_semantic_error/1]).
 -export([merge_pseudo_headers/2]).
 -export([process_headers/5]).
+
+-ifdef(TEST).
+-export([response_204_content_length_zero_test/0]).
+-export([response_204_content_length_nonzero_test/0]).
+-export([response_204_without_content_length_test/0]).
+-endif.
 -export([remove_http1_headers/1]).
 -export([parse_fullpath/1]).
 
@@ -126,7 +132,7 @@ format_semantic_error(invalid_content_length_header) ->
 format_semantic_error(invalid_content_length_header_1xx) ->
 	'Content-length header received in a 1xx response. (RFC7230 3.3.2)';
 format_semantic_error(invalid_content_length_header_204) ->
-	'Content-length header received in a 204 response. (RFC7230 3.3.2)';
+	'Non-zero content-length header received in a 204 response. (RFC9110 15.3.5)';
 format_semantic_error(multiple_content_length_headers) ->
 	'Multiple content-length headers were received. (RFC7230 3.3.2)'.
 
@@ -354,6 +360,10 @@ response_expected_size(Headers, ReqMethod, IsFin, PseudoHeaders = #{status := St
 			return_headers(Headers, PseudoHeaders, undefined);
 		[_] when Status >= 100, Status =< 199 ->
 			{error, invalid_content_length_header_1xx};
+		%% 204 may include Content-Length: 0; other values are rejected.
+		%% (RFC9110 15.3.5, RFC9112 6)
+		[<<"0">>] when Status =:= 204 ->
+			return_headers(Headers, PseudoHeaders, 0);
 		[_] when Status =:= 204 ->
 			{error, invalid_content_length_header_204};
 		[_] when Status >= 200, Status =< 299, ReqMethod =:= <<"CONNECT">> ->
@@ -390,6 +400,32 @@ return_push_promise(Headers, PseudoHeaders) ->
 
 return_trailers(Headers) ->
 	{trailers, Headers}.
+
+-ifdef(TEST).
+response_204_content_length_zero_test() ->
+	Headers = [
+		{<<":status">>, <<"204">>},
+		{<<"content-length">>, <<"0">>}
+	],
+	{headers, [{<<"content-length">>, <<"0">>}], #{status := 204}, 0}
+		= process_headers(Headers, response, <<"GET">>, fin, #{}),
+	ok.
+
+response_204_content_length_nonzero_test() ->
+	Headers = [
+		{<<":status">>, <<"204">>},
+		{<<"content-length">>, <<"5">>}
+	],
+	{error, invalid_content_length_header_204}
+		= process_headers(Headers, response, <<"GET">>, fin, #{}),
+	ok.
+
+response_204_without_content_length_test() ->
+	Headers = [{<<":status">>, <<"204">>}],
+	{headers, [], #{status := 204}, 0}
+		= process_headers(Headers, response, <<"GET">>, fin, #{}),
+	ok.
+-endif.
 
 %% Remove HTTP/1-specific headers.
 

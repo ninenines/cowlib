@@ -2088,8 +2088,7 @@ horse_parse_expires_invalid() ->
 %% differentiate them.
 %%
 %% The following valid hosts are currently rejected: IPv6
-%% addresses with a zone identifier; IPvFuture addresses;
-%% and percent-encoded addresses.
+%% addresses with a zone identifier; and IPvFuture addresses.
 
 -spec parse_host(binary()) -> {binary(), 0..65535 | undefined}.
 parse_host(<< $[, R/bits >>) ->
@@ -2110,6 +2109,10 @@ reg_name(<<>>, Name) ->
 reg_name(<< $:, Port0/bits >>, Name) when byte_size(Port0) =< 5 ->
 	{Port, <<>>} = digits(Port0),
 	{Name, Port};
+%% Percent-encoded octets are allowed in reg-name. (RFC3986 3.2.2)
+%% A percent-encoded ":" (%3A) is part of the name, not a port separator.
+reg_name(<< $%, H, L, R/bits >>, Name) when ?IS_HEX(H), ?IS_HEX(L) ->
+	reg_name(R, << Name/binary, $%, (?LC(H)), (?LC(L)) >>);
 reg_name(<< C, R/bits >>, Name) when ?IS_URI_UNRESERVED(C) or ?IS_URI_SUB_DELIMS(C) ->
 	?LOWER(reg_name, R, Name).
 
@@ -2142,7 +2145,14 @@ parse_host_test_() ->
 		{<<"[2001:db8::1]:8080">>, {<<"[2001:db8::1]">>, 8080}},
 		{<<"[2001:db8::1]">>, {<<"[2001:db8::1]">>, undefined}},
 		{<<"[::ffff:192.0.2.1]:8080">>, {<<"[::ffff:192.0.2.1]">>, 8080}},
-		{<<"[::ffff:192.0.2.1]">>, {<<"[::ffff:192.0.2.1]">>, undefined}}
+		{<<"[::ffff:192.0.2.1]">>, {<<"[::ffff:192.0.2.1]">>, undefined}},
+		%% Percent-encoded reg-name (RFC3986 3.2.2). Hex digits are lowercased.
+		{<<"%2ftmp%2ferllambda.sock">>, {<<"%2ftmp%2ferllambda.sock">>, undefined}},
+		{<<"%2Ftmp%2Ferllambda.sock">>, {<<"%2ftmp%2ferllambda.sock">>, undefined}},
+		{<<"%2ftmp%2ferllambda.sock:8080">>, {<<"%2ftmp%2ferllambda.sock">>, 8080}},
+		%% Percent-encoded ":" is not a port separator.
+		{<<"example%3Aorg">>, {<<"example%3aorg">>, undefined}},
+		{<<"example%3Aorg:8080">>, {<<"example%3aorg">>, 8080}}
 	],
 	[{V, fun() -> R = parse_host(V) end} || {V, R} <- Tests].
 
@@ -2155,7 +2165,11 @@ parse_host_error_test_() ->
 		<<"[2001:db8::1]:-8080">>,
 		<<"[2001:db8::1]:-0">>,
 		<<"[2001:db8::1]:+0">>,
-		<<"[2001:db8::1]:+8080">>
+		<<"[2001:db8::1]:+8080">>,
+		<<"%">>,
+		<<"%2">>,
+		<<"%zz">>,
+		<<"example%">>
 	],
 	[{V, fun() -> ?assertError(_, parse_host(V)) end} || V <- Tests].
 
@@ -2441,6 +2455,8 @@ origin_reg_name(<< $\s, R/bits >>, Acc, Scheme, Name) ->
 	origin_scheme(R, [{Scheme, Name, default_port(Scheme)}|Acc]);
 origin_reg_name(<< $:, Port/bits >>, Acc, Scheme, Name) ->
 	origin_port(Port, Acc, Scheme, Name, <<>>);
+origin_reg_name(<< $%, H, L, R/bits >>, Acc, Scheme, Name) when ?IS_HEX(H), ?IS_HEX(L) ->
+	origin_reg_name(R, Acc, Scheme, << Name/binary, $%, (?LC(H)), (?LC(L)) >>);
 origin_reg_name(<< C, R/bits >>, Acc, Scheme, Name) when ?IS_URI_UNRESERVED(C) or ?IS_URI_SUB_DELIMS(C) ->
 	?LOWER(origin_reg_name, R, Acc, Scheme, Name).
 

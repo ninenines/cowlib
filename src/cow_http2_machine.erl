@@ -121,7 +121,7 @@
 	%% Connection-wide frame processing state.
 	state = settings :: settings | normal
 		| {continuation, request | response | trailers | push_promise
-			| linger, continued_frame()},
+			| linger | linger_push, continued_frame()},
 
 	%% Timer for the connection preface.
 	preface_timer = undefined :: undefined | reference(),
@@ -614,6 +614,33 @@ linger_headers(Frame, State=#http2_machine{local_lingering_streams=Lingering}) -
 				State}
 	end.
 
+linger_push_promise(head_nofin, _HeaderData, Frame, _PromisedStreamID, State) ->
+	{ok, State#http2_machine{state={continuation, linger_push, Frame}}};
+linger_push_promise(head_fin, HeaderData, _Frame, PromisedStreamID, State) ->
+	linger_push_promise_decode(HeaderData, PromisedStreamID, State).
+
+linger_push_promise_decode(HeaderData, PromisedStreamID, State0) ->
+	case linger_headers_decode(HeaderData, State0) of
+		{ok, State} when PromisedStreamID rem 2 =:= 0 ->
+			{error, {stream_error, PromisedStreamID, cancel,
+				'PUSH_PROMISE received on a stream that was reset. (RFC7540 6.6)'},
+				stream_linger(PromisedStreamID,
+					advance_remote_streamid(State, PromisedStreamID))};
+		%% RFC7540 5.1.1, 6.6. A promised id must be a new server stream.
+		{ok, State} ->
+			{error, {connection_error, protocol_error,
+				'PUSH_PROMISE promised an invalid stream id. (RFC7540 5.1.1, RFC7540 6.6)'},
+				State};
+		Error ->
+			Error
+	end.
+
+advance_remote_streamid(State=#http2_machine{remote_streamid=Remote}, StreamID)
+		when StreamID > Remote ->
+	State#http2_machine{remote_streamid=StreamID};
+advance_remote_streamid(State, _) ->
+	State.
+
 linger_headers1(#headers{head=head_nofin}=Frame, State) ->
 	{ok, State#http2_machine{state={continuation, linger, Frame}}};
 linger_headers1(#headers{head=head_fin, data=HeaderData}, State) ->
@@ -931,13 +958,19 @@ push_promise_frame(Frame=#push_promise{id=StreamID, head=IsHeadFin,
 				head_nofin ->
 					{ok, State#http2_machine{state={continuation, push_promise, Frame}}}
 			end;
+		undefined ->
+			case lists:member(StreamID, State#http2_machine.local_lingering_streams) of
+				%% RFC7540 6.6. A PUSH_PROMISE that was in flight when we
+				%% reset the parent must not tear the connection down.
+				true ->
+					linger_push_promise(IsHeadFin, HeaderData, Frame,
+						PromisedStreamID, State);
+				false ->
+					{error, {connection_error, stream_closed,
+						'PUSH_PROMISE frame received on a stream in closed or half-closed state. (RFC7540 5.1, RFC7540 6.6)'},
+						State}
+			end;
 		_ ->
-			%% @todo Check if the stream is lingering. If it is, decode the frame
-			%% and do what? That's the big question and why it's not implemented yet.
-%   However, an endpoint that
-%   has sent RST_STREAM on the associated stream MUST handle PUSH_PROMISE
-%   frames that might have been created before the RST_STREAM frame is
-%   received and processed. (RFC7540 6.6)
 			{error, {connection_error, stream_closed,
 				'PUSH_PROMISE frame received on a stream in closed or half-closed state. (RFC7540 5.1, RFC7540 6.6)'},
 				State}
@@ -1025,6 +1058,16 @@ unexpected_continuation_frame(#continuation{}, State) ->
 		'CONTINUATION frames MUST be preceded by a HEADERS or PUSH_PROMISE frame. (RFC7540 6.10)'},
 		State}.
 
+continuation_frame(#continuation{id=StreamID, head=head_fin, data=HeaderFragment1},
+		State=#http2_machine{state={continuation, linger_push, #push_promise{
+			id=StreamID, promised_id=PromisedStreamID, data=HeaderFragment0}}}) ->
+	case continuation_frame_append(HeaderFragment0, HeaderFragment1, State) of
+		{ok, HeaderData} ->
+			linger_push_promise_decode(HeaderData, PromisedStreamID,
+				State#http2_machine{state=normal});
+		Error ->
+			Error
+	end;
 continuation_frame(#continuation{id=StreamID, head=head_fin, data=HeaderFragment1},
 		State=#http2_machine{state={continuation, linger,
 			#headers{id=StreamID, data=HeaderFragment0}}}) ->
@@ -1490,10 +1533,22 @@ update_window(StreamID, Size, State)
 reset_stream(StreamID, State=#http2_machine{streams=Streams0}) ->
 	case maps:take(StreamID, Streams0) of
 		{_, Streams} ->
-			{ok, stream_linger(StreamID, State#http2_machine{streams=Streams})};
+			{ok, stream_linger(StreamID, retarget_continuation(
+				State#http2_machine{streams=Streams}, StreamID))};
 		error ->
 			{error, not_found}
 	end.
+
+%% A header block for this stream may still be incomplete. Decode and
+%% drop the rest instead of looking the stream up again.
+retarget_continuation(State=#http2_machine{state={continuation, _,
+		Frame=#headers{id=StreamID}}}, StreamID) ->
+	State#http2_machine{state={continuation, linger, Frame}};
+retarget_continuation(State=#http2_machine{state={continuation, _,
+		Frame=#push_promise{id=StreamID}}}, StreamID) ->
+	State#http2_machine{state={continuation, linger_push, Frame}};
+retarget_continuation(State, _) ->
+	State.
 
 %% Retrieve the buffer size for all streams.
 

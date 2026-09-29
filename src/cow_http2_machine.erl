@@ -120,7 +120,8 @@
 
 	%% Connection-wide frame processing state.
 	state = settings :: settings | normal
-		| {continuation, request | response | trailers | push_promise, continued_frame()},
+		| {continuation, request | response | trailers | push_promise
+			| linger, continued_frame()},
 
 	%% Timer for the connection preface.
 	preface_timer = undefined :: undefined | reference(),
@@ -555,6 +556,8 @@ server_headers_frame(Frame=#headers{id=StreamID, fin=IsFin, head=IsHeadFin}, Sta
 			{error, {connection_error, protocol_error,
 				'Trailing HEADERS frame received without the END_STREAM flag set. (RFC7540 8.1, RFC7540 8.1.2.6)'},
 				State};
+		undefined ->
+			linger_headers(Frame, State);
 		_ ->
 			{error, {connection_error, stream_closed,
 				'HEADERS frame received on a stream in closed or half-closed state. (RFC7540 5.1)'},
@@ -586,6 +589,8 @@ client_headers_frame(Frame=#headers{id=StreamID, fin=IsFin, head=IsHeadFin},
 			{error, {connection_error, protocol_error,
 				'Trailing HEADERS frame received without the END_STREAM flag set. (RFC7540 8.1, RFC7540 8.1.2.6)'},
 				State};
+		undefined ->
+			linger_headers(Frame, State);
 		_ ->
 			{error, {connection_error, stream_closed,
 				'HEADERS frame received on a stream in closed or half-closed state. (RFC7540 5.1)'},
@@ -596,6 +601,38 @@ client_headers_frame(_, State) ->
 	{error, {connection_error, protocol_error,
 		'HEADERS frame received on an idle stream. (RFC7540 5.1.1)'},
 		State}.
+
+%% A stream that was reset. The header block must still be decoded
+%% so the HPACK table stays aligned with the peer, and the fields
+%% themselves are dropped. (RFC7540 5.1, RFC7540 6.2)
+linger_headers(Frame, State=#http2_machine{local_lingering_streams=Lingering}) ->
+	case lists:member(Frame#headers.id, Lingering) of
+		true -> linger_headers1(Frame, State);
+		false ->
+			{error, {connection_error, stream_closed,
+				'HEADERS frame received on a stream in closed or half-closed state. (RFC7540 5.1)'},
+				State}
+	end.
+
+linger_headers1(#headers{head=head_nofin}=Frame, State) ->
+	{ok, State#http2_machine{state={continuation, linger, Frame}}};
+linger_headers1(#headers{head=head_fin, data=HeaderData}, State) ->
+	linger_headers_decode(HeaderData, State).
+
+linger_headers_decode(HeaderData, State=#http2_machine{opts=Opts, decode_state=DecodeState0}) ->
+	try cow_hpack:decode(HeaderData, DecodeState0, Opts) of
+		{_, DecodeState} ->
+			{ok, State#http2_machine{decode_state=DecodeState}}
+	catch
+		error:max_headers ->
+			{error, {connection_error, enhance_your_calm,
+				'The number of headers is larger than configuration allows. (RFC9110 5.4)'},
+				State};
+		_:_ ->
+			{error, {connection_error, compression_error,
+				'Error while trying to decode HPACK-encoded header block. (RFC7540 4.3)'},
+				State}
+	end.
 
 headers_decode(Frame=#headers{head=head_fin, data=HeaderData},
 		State=#http2_machine{opts=Opts, decode_state=DecodeState0},
@@ -895,8 +932,8 @@ push_promise_frame(Frame=#push_promise{id=StreamID, head=IsHeadFin,
 					{ok, State#http2_machine{state={continuation, push_promise, Frame}}}
 			end;
 		_ ->
-%% @todo Check if the stream is lingering. If it is, decode the frame
-%% and do what? That's the big question and why it's not implemented yet.
+			%% @todo Check if the stream is lingering. If it is, decode the frame
+			%% and do what? That's the big question and why it's not implemented yet.
 %   However, an endpoint that
 %   has sent RST_STREAM on the associated stream MUST handle PUSH_PROMISE
 %   frames that might have been created before the RST_STREAM frame is
@@ -988,6 +1025,15 @@ unexpected_continuation_frame(#continuation{}, State) ->
 		'CONTINUATION frames MUST be preceded by a HEADERS or PUSH_PROMISE frame. (RFC7540 6.10)'},
 		State}.
 
+continuation_frame(#continuation{id=StreamID, head=head_fin, data=HeaderFragment1},
+		State=#http2_machine{state={continuation, linger,
+			#headers{id=StreamID, data=HeaderFragment0}}}) ->
+	case continuation_frame_append(HeaderFragment0, HeaderFragment1, State) of
+		{ok, HeaderData} ->
+			linger_headers_decode(HeaderData, State#http2_machine{state=normal});
+		Error ->
+			Error
+	end;
 continuation_frame(#continuation{id=StreamID, head=head_fin, data=HeaderFragment1},
 		State=#http2_machine{state={continuation, Type,
 			Frame=#headers{id=StreamID, data=HeaderFragment0}}}) ->

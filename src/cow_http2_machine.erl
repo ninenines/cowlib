@@ -387,7 +387,6 @@ frame(Frame, State=#http2_machine{state=normal}) ->
 	Result = case element(1, Frame) of
 		data -> data_frame(Frame, State);
 		headers -> headers_frame(Frame, State);
-		priority -> priority_frame(Frame, State);
 		rst_stream -> rst_stream_frame(Frame, State);
 		settings -> settings_frame(Frame, State);
 		push_promise -> push_promise_frame(Frame, State);
@@ -511,16 +510,6 @@ headers_frame(Frame=#headers{}, State=#http2_machine{mode=Mode}) ->
 	case Mode of
 		server -> server_headers_frame(Frame, State);
 		client -> client_headers_frame(Frame, State)
-	end;
-%% The PRIORITY mechanism is seen as flawed and deprecated.
-%% We will not implement it.
-headers_frame({headers, StreamID, IsFin, IsHeadFin,
-		_IsExclusive, _DepStreamID, _Weight, HeaderData},
-		State=#http2_machine{mode=Mode}) ->
-	HeadersFrame = #headers{id=StreamID, fin=IsFin, head=IsHeadFin, data=HeaderData},
-	case Mode of
-		server -> server_headers_frame(HeadersFrame, State);
-		client -> client_headers_frame(HeadersFrame, State)
 	end.
 
 %% Reject HEADERS frames with even-numbered streamid.
@@ -756,14 +745,6 @@ trailers_frame(#headers{id=StreamID}, State0, Stream0, Headers) ->
 			stream_reset(StreamID, State, protocol_error,
 				'The total size of DATA frames is different than the content-length. (RFC7540 8.1.2.6)')
 	end.
-
-%% PRIORITY frame.
-%%
-%% The PRIORITY mechanism is seen as flawed and deprecated.
-%% We will not implement it.
-
-priority_frame(_Frame, State) ->
-	{ok, State}.
 
 %% RST_STREAM frame.
 

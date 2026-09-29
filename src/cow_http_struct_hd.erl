@@ -27,6 +27,8 @@
 %% Token: {token, binary()}
 %% Byte sequence: {binary, binary()}
 %% Boolean: boolean()
+%% Date: {date, integer()}
+%% Display string: {display_string, binary()}
 
 -module(cow_http_struct_hd).
 
@@ -45,7 +47,8 @@
 -type sh_dictionary() :: [{binary(), sh_item() | sh_inner_list()}].
 -type sh_item() :: {item, sh_bare_item(), sh_params()}.
 -type sh_bare_item() :: integer() | sh_decimal() | boolean()
-	| {string | token | binary, binary()}.
+	| {string | token | binary | display_string, binary()}
+	| {date, integer()}.
 -type sh_decimal() :: {decimal, {integer(), integer()}}.
 
 -define(IS_LC_ALPHA(C),
@@ -190,7 +193,16 @@ parse_bare_item(<<C,R/bits>>) when ?IS_ALPHA(C) or (C =:= $*) -> parse_token(R, 
 parse_bare_item(<<$:,R/bits>>) -> parse_binary(R, <<>>);
 %% Boolean.
 parse_bare_item(<<"?0",R/bits>>) -> {false, R};
-parse_bare_item(<<"?1",R/bits>>) -> {true, R}.
+parse_bare_item(<<"?1",R/bits>>) -> {true, R};
+%% Date.
+parse_bare_item(<<$@,R0/bits>>) ->
+	case parse_bare_item(R0) of
+		{Int, R} when is_integer(Int) ->
+			{{date, Int}, R}
+	end;
+%% Display string.
+parse_bare_item(<<$%,$",R/bits>>) ->
+	parse_display_string(R, <<>>).
 
 parse_number(<<C,R/bits>>, L, Acc) when ?IS_DIGIT(C) ->
 	parse_number(R, L+1, <<Acc/binary,C>>);
@@ -207,9 +219,9 @@ parse_decimal(R, L1, L2, IntAcc, FracAcc0) when L1 =< 12, L2 >= 1, L2 =< 3 ->
 		<<$0>> -> <<>>;
 		<<$0,$0>> -> <<>>;
 		<<$0,$0,$0>> -> <<>>;
-		<<A,B,$0>> -> <<A,B>>;
 		<<A,$0,$0>> -> <<A>>;
 		<<A,$0>> -> <<A>>;
+		<<A,B,$0>> -> <<A,B>>;
 		_ -> FracAcc0
 	end,
 	Mul = case byte_size(FracAcc) of
@@ -235,14 +247,14 @@ parse_decimal_signed_zero_test_() ->
 		{<<"0.05">>, {item, {decimal, {5, -2}}, []}},
 		{<<"0.005">>, {item, {decimal, {5, -3}}, []}},
 		{<<"0.50">>, {item, {decimal, {5, -1}}, []}},
-		{<<"0.500">>, {item, {decimal, {50, -2}}, []}},
+		{<<"0.500">>, {item, {decimal, {5, -1}}, []}},
 		{<<"0.050">>, {item, {decimal, {5, -2}}, []}},
 		{<<"0.0">>, {item, {decimal, {0, 0}}, []}},
 		{<<"-0.5">>, {item, {decimal, {-5, -1}}, []}},
 		{<<"-0.05">>, {item, {decimal, {-5, -2}}, []}},
 		{<<"-0.005">>, {item, {decimal, {-5, -3}}, []}},
 		{<<"-0.50">>, {item, {decimal, {-5, -1}}, []}},
-		{<<"-0.500">>, {item, {decimal, {-50, -2}}, []}},
+		{<<"-0.500">>, {item, {decimal, {-5, -1}}, []}},
 		{<<"-0.050">>, {item, {decimal, {-5, -2}}, []}},
 		{<<"-0.1">>, {item, {decimal, {-1, -1}}, []}},
 		{<<"-0.01">>, {item, {decimal, {-1, -2}}, []}},
@@ -301,6 +313,19 @@ parse_binary(<<$:,R/bits>>, Acc) ->
 	{{binary, base64:decode(Acc)}, R};
 parse_binary(<<C,R/bits>>, Acc) when ?IS_ALPHANUM(C) or (C =:= $+) or (C =:= $/) or (C =:= $=) ->
 	parse_binary(R, <<Acc/binary,C>>).
+
+parse_display_string(<<$",R/bits>>, Acc) ->
+	case unicode:characters_to_list(Acc, utf8) of
+		L when is_list(L) ->
+			{{display_string, Acc}, R}
+	end;
+parse_display_string(<<$%,A,B,R/bits>>, Acc)
+		when ?IS_LHEX(A), ?IS_LHEX(B) ->
+	Byte = list_to_integer([A, B], 16),
+	parse_display_string(R, <<Acc/binary, Byte>>);
+parse_display_string(<<C,R/bits>>, Acc)
+		when C >= 16#20, C =< 16#7e, C =/= $%, C =/= $" ->
+	parse_display_string(R, <<Acc/binary, C>>).
 
 -ifdef(TEST).
 parse_struct_hd_test_() ->
@@ -396,6 +421,10 @@ e2tb(#{<<"__type">> := <<"token">>, <<"value">> := V}) ->
 	{token, V};
 e2tb(#{<<"__type">> := <<"binary">>, <<"value">> := V}) ->
 	{binary, base32:decode(V)};
+e2tb(#{<<"__type">> := <<"date">>, <<"value">> := V}) ->
+	{date, V};
+e2tb(#{<<"__type">> := <<"displaystring">>, <<"value">> := V}) ->
+	{display_string, V};
 e2tb(V) when is_binary(V) ->
 	{string, V};
 e2tb(V) when is_float(V) ->
@@ -525,6 +554,10 @@ bare_item({decimal, {Base, Exp}}) ->
 			{Int0, Frac1}
 	end,
 	[decimal_int(Base, Int), $., decimal_frac(Frac, 3)];
+bare_item({date, Integer}) when is_integer(Integer) ->
+	[$@, integer_to_binary(Integer)];
+bare_item({display_string, String}) ->
+	[$%, $", encode_display_string(String, <<>>), $"];
 bare_item(Integer) when is_integer(Integer) ->
 	integer_to_binary(Integer);
 bare_item(true) ->
@@ -563,6 +596,18 @@ escape_string(<<>>, Acc) -> Acc;
 escape_string(<<$\\,R/bits>>, Acc) -> escape_string(R, <<Acc/binary,$\\,$\\>>);
 escape_string(<<$",R/bits>>, Acc) -> escape_string(R, <<Acc/binary,$\\,$">>);
 escape_string(<<C,R/bits>>, Acc) -> escape_string(R, <<Acc/binary,C>>).
+
+encode_display_string(<<>>, Acc) ->
+	Acc;
+encode_display_string(<<C,R/bits>>, Acc)
+		when C >= 16#20, C =< 16#7e, C =/= $%, C =/= $" ->
+	encode_display_string(R, <<Acc/binary, C>>);
+encode_display_string(<<C,R/bits>>, Acc) ->
+	<<H:4, L:4>> = <<C>>,
+	encode_display_string(R, <<Acc/binary, $%, (hex_digit(H)), (hex_digit(L))>>).
+
+hex_digit(N) when N =< 9 -> $0 + N;
+hex_digit(N) -> $a + N - 10.
 
 params(Params) ->
 	[case Param of

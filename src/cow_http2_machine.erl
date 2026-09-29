@@ -172,7 +172,7 @@
 
 	%% HPACK decoding and encoding state.
 	decode_state = cow_hpack:init() :: cow_hpack:state(),
-	encode_state = cow_hpack:init() :: cow_hpack:state()
+	encode_state = cow_hpack:init(0) :: cow_hpack:state()
 }).
 
 -opaque http2_machine() :: #http2_machine{}.
@@ -313,6 +313,34 @@ collect_timeout_messages(PTRef, STRef) ->
 	after 0 ->
 		[]
 	end.
+
+encoder_starts_below_protocol_default_test() ->
+	{ok, _, #http2_machine{encode_state=Enc}} = init(server, #{
+		preface_timeout => infinity, settings_timeout => infinity}),
+	%% Protocol default is 4096; encoder must start lower (0).
+	%% cow_hpack state fields: size, max_size, configured_max_size, ...
+	0 = element(3, Enc),
+	0 = element(4, Enc),
+	ok.
+
+encoder_respects_max_encode_table_size_test() ->
+	{ok, _, State0} = init(server, #{preface_timeout => infinity,
+		settings_timeout => infinity, max_encode_table_size => 1024}),
+	{ok, #http2_machine{encode_state=Enc}} = frame(
+		{settings, #{header_table_size => 4096}},
+		State0#http2_machine{state=normal}),
+	%% min(peer 4096, local max 1024) = 1024 (configured; applied on encode).
+	1024 = element(4, Enc),
+	ok.
+
+encoder_uses_protocol_default_when_setting_omitted_test() ->
+	{ok, _, State0} = init(client, #{preface_timeout => infinity,
+		settings_timeout => infinity}),
+	{ok, #http2_machine{encode_state=Enc}} = frame({settings, #{}},
+		State0#http2_machine{state=normal}),
+	%% Peer omitted SETTINGS_HEADER_TABLE_SIZE => protocol default 4096.
+	4096 = element(4, Enc),
+	ok.
 
 -endif.
 
@@ -789,19 +817,22 @@ settings_frame({settings, Settings}, State0=#http2_machine{
 		opts=Opts, remote_settings=Settings0}) ->
 	State1 = State0#http2_machine{remote_settings=maps:merge(Settings0, Settings)},
 	State2 = maps:fold(fun
-		(header_table_size, NewSize, State=#http2_machine{encode_state=EncodeState0}) ->
-			MaxSize = maps:get(max_encode_table_size, Opts, 4096),
-			EncodeState = cow_hpack:set_max_size(min(NewSize, MaxSize), EncodeState0),
-			State#http2_machine{encode_state=EncodeState};
 		(initial_window_size, NewWindowSize, State) ->
 			OldWindowSize = maps:get(initial_window_size, Settings0, 65535),
 			streams_update_local_window(State, NewWindowSize - OldWindowSize);
 		(_, _, State) ->
 			State
 	end, State1, Settings),
+	%% Encoder starts at 0 (below the protocol default of 4096) and is
+	%% raised here once we know the peer's SETTINGS_HEADER_TABLE_SIZE.
+	RemoteSize = maps:get(header_table_size, State2#http2_machine.remote_settings, 4096),
+	MaxEncode = maps:get(max_encode_table_size, Opts, 4096),
+	EncodeState = cow_hpack:set_max_size(min(RemoteSize, MaxEncode),
+		State2#http2_machine.encode_state),
+	State3 = State2#http2_machine{encode_state=EncodeState},
 	case Settings of
-		#{initial_window_size := _} -> send_data(State2);
-		_ -> {ok, State2}
+		#{initial_window_size := _} -> send_data(State3);
+		_ -> {ok, State3}
 	end;
 %% We expect to receive a SETTINGS frame as part of the preface.
 settings_frame(_F, State=#http2_machine{mode=server}) ->

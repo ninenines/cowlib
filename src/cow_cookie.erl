@@ -550,9 +550,7 @@ validate_cookie_name(Name) ->
 validate_token(<<>>) ->
 	ok;
 validate_token(<<C, R/bits>>) when ?IS_TOKEN(C) ->
-	validate_token(R);
-validate_token(<<_, _/bits>>) ->
-	error(badarg).
+	validate_token(R).
 
 %% cookie-value is *cookie-octet or a quoted run of cookie-octets.
 %% The quotes are part of the value.
@@ -570,16 +568,12 @@ validate_cookie_value(Value) ->
 validate_cookie_octets(<<>>) ->
 	ok;
 validate_cookie_octets(<<C, R/bits>>) when ?IS_COOKIE_OCTET(C) ->
-	validate_cookie_octets(R);
-validate_cookie_octets(<<_, _/bits>>) ->
-	error(badarg).
+	validate_cookie_octets(R).
 
 validate_av_octets(<<>>) ->
 	ok;
 validate_av_octets(<<C, R/bits>>) when ?IS_AV_OCTET(C) ->
-	validate_av_octets(R);
-validate_av_octets(<<_, _/bits>>) ->
-	error(badarg).
+	validate_av_octets(R).
 
 attributes([]) -> [];
 attributes([{domain, Domain0}|Tail]) ->

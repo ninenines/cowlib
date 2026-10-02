@@ -36,8 +36,6 @@ that position.
 
 == Changelog
 
-* *2.21*: Every control character in a cookie name or
-          value is now a parse error.
 * *2.19*: Function `parse_cookie/2` introduced with a
           `max_cookies` option.
 * *2.9*: Fixes to the parser may lead to potential incompatibilities.

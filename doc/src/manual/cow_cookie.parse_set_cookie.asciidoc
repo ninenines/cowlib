@@ -39,9 +39,6 @@ is reduced to 400 days. Dates are parsed with
 
 == Changelog
 
-* *2.21*: Cookies whose name and value together exceed
-          4096 octets are ignored. Expiry is limited
-          to 400 days.
 * *2.9*: Function introduced.
 
 == Examples

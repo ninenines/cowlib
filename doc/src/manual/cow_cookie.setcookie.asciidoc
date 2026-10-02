@@ -22,9 +22,6 @@ The quotes are part of the value. `domain` and `path` must
 be av-octets: US-ASCII, no control character, no semicolon,
 and no octet above 127.
 
-`max_age` is emitted as a `Max-Age` attribute and nothing
-else, including when it is `0`.
-
 == Arguments
 
 Name::
@@ -45,10 +42,6 @@ An iolist with the generated set-cookie header value.
 
 == Changelog
 
-* *2.21*: Names, values, domains and paths that do not
-          match the set-cookie grammar result in an
-          exception. `max_age` no longer also emits an
-          `Expires` attribute.
 * *2.12*: The `Version` attribute is no longer generated.
 * *1.0*: Function introduced.
 

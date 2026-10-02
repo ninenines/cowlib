@@ -538,8 +538,8 @@ cookie_header_safe_test_() ->
 setcookie(Name0, Value0, Opts) ->
 	Name = iolist_to_binary(Name0),
 	Value = iolist_to_binary(Value0),
-	ok = validate_cookie_name(Name),
-	ok = validate_cookie_value(Value),
+	validate_cookie_name(Name),
+	validate_cookie_value(Value),
 	[Name, <<"=">>, Value, attributes(maps:to_list(Opts))].
 
 validate_cookie_name(<<>>) ->
@@ -584,7 +584,7 @@ validate_av_octets(<<_, _/bits>>) ->
 attributes([]) -> [];
 attributes([{domain, Domain0}|Tail]) ->
 	Domain = iolist_to_binary(Domain0),
-	ok = validate_av_octets(Domain),
+	validate_av_octets(Domain),
 	[<<"; Domain=">>, Domain|attributes(Tail)];
 attributes([{http_only, false}|Tail]) -> attributes(Tail);
 attributes([{http_only, true}|Tail]) -> [<<"; HttpOnly">>|attributes(Tail)];
@@ -594,7 +594,7 @@ attributes([Opt={max_age, _}|_]) ->
 	error({badarg, Opt});
 attributes([{path, Path0}|Tail]) ->
 	Path = iolist_to_binary(Path0),
-	ok = validate_av_octets(Path),
+	validate_av_octets(Path),
 	[<<"; Path=">>, Path|attributes(Tail)];
 attributes([{secure, false}|Tail]) -> attributes(Tail);
 attributes([{secure, true}|Tail]) -> [<<"; Secure">>|attributes(Tail)];

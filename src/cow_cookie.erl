@@ -554,16 +554,15 @@ validate_token(<<C, R/bits>>) when ?IS_TOKEN(C) ->
 
 %% cookie-value is *cookie-octet or a quoted run of cookie-octets.
 %% The quotes are part of the value.
-validate_cookie_value(<<$", Rest/bits>>) when byte_size(Rest) > 0 ->
-	Size = byte_size(Rest) - 1,
-	case Rest of
-		<<Inner:Size/binary, $">> ->
-			validate_cookie_octets(Inner);
-		_ ->
-			validate_cookie_octets(<<$", Rest/bits>>)
-	end;
+validate_cookie_value(<<$", R/bits>>) ->
+	validate_quoted_cookie_value(R);
 validate_cookie_value(Value) ->
 	validate_cookie_octets(Value).
+
+validate_quoted_cookie_value(<<$">>) ->
+	ok;
+validate_quoted_cookie_value(<<C, R/bits>>) when ?IS_COOKIE_OCTET(C) ->
+	validate_quoted_cookie_value(R).
 
 validate_cookie_octets(<<>>) ->
 	ok;
@@ -678,6 +677,8 @@ setcookie_grammar_error_test_() ->
 		{<<"Name">>, <<"\"">>},
 		{<<"Name">>, <<"\"a b\"">>},
 		{<<"Name">>, <<"\"b">>},
+		{<<"Name">>, <<"\"ab\"c">>},
+		{<<"Name">>, <<"\"a\"b\"">>},
 		{<<"Name">>, <<16#20>>},
 		{<<"Name">>, <<16#7F>>},
 		{<<"Name">>, <<16#22>>}

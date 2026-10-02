@@ -490,6 +490,11 @@ cookie_test_() ->
 		{[{<<"a">>, <<"b,c">>}], <<"a=b,c">>},
 		{[{<<"a b">>, <<"c">>}], <<"a b=c">>},
 		{[{<<"a">>, <<"\"b\"">>}], <<"a=\"b\"">>},
+		{[{<<"a">>, <<"b\tc">>}], <<"a=b\tc">>},
+		{[{<<"a">>, <<"b=c">>}], <<"a=b=c">>},
+		{[{<<>>, <<"test=2">>}], <<"test=2">>},
+		{[{<<"a">>, <<128>>}], <<"a=", 128>>},
+		{[{<<"a">>, <<195, 169>>}], <<"a=", 195, 169>>},
 		{[{[<<"a">>], [<<"b">>, <<"c">>]}], <<"a=bc">>}
 	],
 	[{Res, fun() -> Res = iolist_to_binary(cookie(Cookies)) end}
@@ -517,16 +522,6 @@ cookie_error_test_() ->
 	],
 	[{iolist_to_binary(io_lib:format("~p failure", [V])),
 		fun() -> ?assertError(_, cookie(V)) end} || V <- Tests].
-
-cookie_header_safe_test_() ->
-	Tests = [
-		{[{<<"a">>, <<"b\tc">>}], <<"a=b\tc">>},
-		{[{<<"a">>, <<"b=c">>}], <<"a=b=c">>},
-		{[{<<>>, <<"test=2">>}], <<"test=2">>},
-		{[{<<"a">>, <<128>>}], <<"a=", 128>>},
-		{[{<<"a">>, <<195, 169>>}], <<"a=", 195, 169>>}
-	],
-	[{R, fun() -> R = iolist_to_binary(cookie(V)) end} || {V, R} <- Tests].
 -endif.
 
 %% Convert a cookie name, value and options to its iodata form.

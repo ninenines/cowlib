@@ -30,7 +30,12 @@ An `ok` tuple with the cookie name, value and attributes
 is returned on success.
 
 An atom `ignore` is returned when the cookie has both
-an empty name and an empty value, and must be ignored.
+an empty name and an empty value, or when the combined
+length of the name and value is greater than 4096 octets.
+
+An `expires` or `max_age` more than 400 days in the future
+is reduced to 400 days. Dates are parsed with
+`cow_date:parse_date/1`.
 
 == Changelog
 

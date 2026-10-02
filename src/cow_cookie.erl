@@ -408,20 +408,24 @@ parse_set_cookie_size_test() ->
 parse_set_cookie_age_limit_test() ->
 	Before = erlang:universaltime(),
 	{ok, <<"a">>, <<"b">>, #{max_age := AtLimit}} =
-		parse_set_cookie(<<"a=b; Max-Age=34560000">>),
+		parse_set_cookie(<<"a=b; Max-Age=",
+			(integer_to_binary(?MAX_COOKIE_AGE))/binary>>),
 	{ok, <<"a">>, <<"b">>, #{max_age := Over}} =
-		parse_set_cookie(<<"a=b; Max-Age=34560001">>),
+		parse_set_cookie(<<"a=b; Max-Age=",
+			(integer_to_binary(?MAX_COOKIE_AGE + 1))/binary>>),
 	{ok, <<"a">>, <<"b">>, #{max_age := Huge}} =
-		parse_set_cookie(<<"a=b; Max-Age=", (integer_to_binary(34560000 * 10))/binary>>),
+		parse_set_cookie(<<"a=b; Max-Age=",
+			(integer_to_binary(?MAX_COOKIE_AGE * 10))/binary>>),
 	After = erlang:universaltime(),
-	true = expiry_in_window(AtLimit, Before, After, 34560000),
-	true = expiry_in_window(Over, Before, After, 34560000),
-	true = expiry_in_window(Huge, Before, After, 34560000),
+	true = expiry_in_window(AtLimit, Before, After),
+	true = expiry_in_window(Over, Before, After),
+	true = expiry_in_window(Huge, Before, After),
 	%% A date inside the window is kept. A date past it is reduced.
 	Near = calendar:gregorian_seconds_to_datetime(
 		calendar:datetime_to_gregorian_seconds(erlang:universaltime()) + 86400),
 	Far = calendar:gregorian_seconds_to_datetime(
-		calendar:datetime_to_gregorian_seconds(erlang:universaltime()) + 34560000 + 86400 * 10),
+		calendar:datetime_to_gregorian_seconds(erlang:universaltime())
+		+ ?MAX_COOKIE_AGE + 86400 * 10),
 	NearBin = cow_date:rfc1123(Near),
 	FarBin = cow_date:rfc1123(Far),
 	{ok, <<"a">>, <<"b">>, #{expires := Near}} =
@@ -430,14 +434,14 @@ parse_set_cookie_age_limit_test() ->
 	{ok, <<"a">>, <<"b">>, #{expires := Capped}} =
 		parse_set_cookie(<<"a=b; Expires=", FarBin/binary>>),
 	After2 = erlang:universaltime(),
-	true = expiry_in_window(Capped, Before2, After2, 34560000),
+	true = expiry_in_window(Capped, Before2, After2),
 	false = Capped =:= Far,
 	ok.
 
-expiry_in_window(Got, Before, After, Offset) ->
+expiry_in_window(Got, Before, After) ->
 	GotSecs = calendar:datetime_to_gregorian_seconds(Got),
-	Low = calendar:datetime_to_gregorian_seconds(Before) + Offset,
-	High = calendar:datetime_to_gregorian_seconds(After) + Offset,
+	Low = calendar:datetime_to_gregorian_seconds(Before) + ?MAX_COOKIE_AGE,
+	High = calendar:datetime_to_gregorian_seconds(After) + ?MAX_COOKIE_AGE,
 	GotSecs >= Low andalso GotSecs =< High.
 -endif.
 

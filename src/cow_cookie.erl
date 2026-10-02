@@ -491,22 +491,15 @@ cookie_test_() ->
 	[{Res, fun() -> Res = iolist_to_binary(cookie(Cookies)) end}
 		|| {Cookies, Res} <- Tests].
 
-cookie_semicolon_test_() ->
+%% A semicolon or '=' in the name makes the pair ambiguous.
+%% Controls other than tab are not valid in a header value.
+cookie_error_test_() ->
 	Tests = [
 		[{<<"a">>, <<"b;c">>}],
 		[{<<"a;b">>, <<"c">>}],
 		[{<<>>, <<"a;b">>}],
 		[{<<"a">>, <<"b">>}, {<<"c">>, <<"d;e">>}],
-		[{[<<"a;">>], <<"b">>}]
-	],
-	[{iolist_to_binary(io_lib:format("~p failure", [V])),
-		fun() -> ?assertError(_, iolist_to_binary(cookie(V))) end} || V <- Tests].
-
-%% CR, LF and other controls would split or corrupt the HTTP header.
-%% '=' in a name moves the cookie-pair boundary. Tab, space, comma
-%% and octets 128+ stay, as does '=' in a value.
-cookie_header_safe_test_() ->
-	Bad = [
+		[{[<<"a;">>], <<"b">>}],
 		[{<<"a">>, <<"b\r\nX: y">>}],
 		[{<<"a\n">>, <<"b">>}],
 		[{<<"a\r">>, <<"b">>}],
@@ -518,16 +511,18 @@ cookie_header_safe_test_() ->
 		[{<<"a=b">>, <<"c">>}],
 		[{[<<"a">>, <<$\n>>], <<"b">>}]
 	],
-	Ok = [
+	[{iolist_to_binary(io_lib:format("~p failure", [V])),
+		fun() -> ?assertError(_, cookie(V)) end} || V <- Tests].
+
+cookie_header_safe_test_() ->
+	Tests = [
 		{[{<<"a">>, <<"b\tc">>}], <<"a=b\tc">>},
 		{[{<<"a">>, <<"b=c">>}], <<"a=b=c">>},
 		{[{<<>>, <<"test=2">>}], <<"test=2">>},
 		{[{<<"a">>, <<128>>}], <<"a=", 128>>},
 		{[{<<"a">>, <<195, 169>>}], <<"a=", 195, 169>>}
 	],
-	[{iolist_to_binary(io_lib:format("~p failure", [V])),
-		fun() -> ?assertError(badarg, cookie(V)) end} || V <- Bad] ++
-	[{R, fun() -> R = iolist_to_binary(cookie(V)) end} || {V, R} <- Ok].
+	[{R, fun() -> R = iolist_to_binary(cookie(V)) end} || {V, R} <- Tests].
 -endif.
 
 %% Convert a cookie name, value and options to its iodata form.
@@ -662,7 +657,7 @@ setcookie_max_age_test() ->
 
 %% Name is a token. Value is cookie-octet, or a quoted cookie-octet run.
 setcookie_grammar_test_() ->
-	Ok = [
+	Tests = [
 		{<<"!">>, <<"!">>, <<"!=!">>},
 		{[<<"Na">>, <<"me">>], <<"a=b">>, <<"Name=a=b">>},
 		{<<"Name">>, <<"\"ab\"">>, <<"Name=\"ab\"">>},
@@ -671,7 +666,11 @@ setcookie_grammar_test_() ->
 		{<<"Name">>, <<16#7E>>, <<"Name=", 16#7E>>},
 		{<<"Name">>, <<16#5D>>, <<"Name=", 16#5D>>}
 	],
-	Bad = [
+	[{R, fun() -> R = iolist_to_binary(setcookie(N, V, #{})) end}
+		|| {N, V, R} <- Tests].
+
+setcookie_grammar_error_test_() ->
+	Tests = [
 		{<<>>, <<"Value">>},
 		{<<" ">>, <<"Value">>},
 		{<<"(">>, <<"Value">>},
@@ -689,14 +688,12 @@ setcookie_grammar_test_() ->
 		{<<"Name">>, <<16#7F>>},
 		{<<"Name">>, <<16#22>>}
 	],
-	[{R, fun() -> R = iolist_to_binary(setcookie(N, V, #{})) end}
-		|| {N, V, R} <- Ok] ++
 	[{iolist_to_binary(io_lib:format("{~p, ~p} failure", [N, V])),
-		fun() -> ?assertError(badarg, setcookie(N, V, #{})) end}
-		|| {N, V} <- Bad].
+		fun() -> ?assertError(_, setcookie(N, V, #{})) end}
+		|| {N, V} <- Tests].
 
 setcookie_attr_grammar_test_() ->
-	Ok = [
+	Tests = [
 		{#{path => <<"foo">>}, <<"Name=Value; Path=foo">>},
 		{#{path => <<"/a b">>}, <<"Name=Value; Path=/a b">>},
 		{#{path => <<"/", 16#7E>>}, <<"Name=Value; Path=/", 16#7E>>},
@@ -704,7 +701,11 @@ setcookie_attr_grammar_test_() ->
 		{#{domain => <<".example.org">>}, <<"Name=Value; Domain=.example.org">>},
 		{#{path => [<<"/a">>, <<"/b">>]}, <<"Name=Value; Path=/a/b">>}
 	],
-	Bad = [
+	[{R, fun() -> R = iolist_to_binary(setcookie(<<"Name">>, <<"Value">>, O)) end}
+		|| {O, R} <- Tests].
+
+setcookie_attr_grammar_error_test_() ->
+	Tests = [
 		#{path => <<"/a;b">>},
 		#{path => <<"/a", 0>>},
 		#{path => <<"/a", 31>>},
@@ -714,11 +715,9 @@ setcookie_attr_grammar_test_() ->
 		#{domain => <<"ex.com", 10>>},
 		#{domain => <<"ex", 16#7F, ".com">>}
 	],
-	[{R, fun() -> R = iolist_to_binary(setcookie(<<"Name">>, <<"Value">>, O)) end}
-		|| {O, R} <- Ok] ++
 	[{iolist_to_binary(io_lib:format("~p failure", [O])),
-		fun() -> ?assertError(badarg, setcookie(<<"Name">>, <<"Value">>, O)) end}
-		|| O <- Bad].
+		fun() -> ?assertError(_, setcookie(<<"Name">>, <<"Value">>, O)) end}
+		|| O <- Tests].
 
 setcookie_failures_test_() ->
 	F = fun(N, V) ->

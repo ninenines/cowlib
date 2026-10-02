@@ -185,8 +185,6 @@ parse_cookie_error_test_() ->
 	],
 	[{V, fun() -> ?assertError(badarg, parse_cookie(V)) end} || V <- Tests].
 
-%% Every CTL, including those previously accepted, is rejected inside
-%% a name or a value. Leading tab is still a separator.
 parse_cookie_ctl_test_() ->
 	Ctl = lists:seq(0, 31) ++ [127],
 	Inside = [{<<C>>, fun() ->
@@ -459,9 +457,6 @@ cookie([{<<>>, Value}|Tail]) ->
 cookie([{Name, Value}|Tail]) ->
 	[cookie_chars(Name, name), $=, cookie_chars(Value, value), $;, $\s|cookie(Tail)].
 
-%% Echo stored octets, including those outside cookie-octet.
-%% A semicolon or an '=' in the name makes the pair ambiguous.
-%% Controls other than tab are not valid in a header value.
 cookie_chars(Chars, Kind) ->
 	Bin = iolist_to_binary(Chars),
 	ok = validate_cookie_chars(Bin, Kind),
@@ -500,8 +495,6 @@ cookie_test_() ->
 	[{Res, fun() -> Res = iolist_to_binary(cookie(Cookies)) end}
 		|| {Cookies, Res} <- Tests].
 
-%% A semicolon or '=' in the name makes the pair ambiguous.
-%% Controls other than tab are not valid in a header value.
 cookie_error_test_() ->
 	Tests = [
 		[{<<"a">>, <<"b;c">>}],
@@ -647,7 +640,6 @@ setcookie_max_age_test() ->
 		#{max_age => 86417}),
 	ok.
 
-%% Name is a token. Value is cookie-octet, or a quoted cookie-octet run.
 setcookie_grammar_test_() ->
 	Tests = [
 		{<<"!">>, <<"!">>, <<"!=!">>},

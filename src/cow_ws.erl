@@ -339,6 +339,8 @@ parse_header(<< _:1, Rsv:3, _/bits >>, Extensions, _) when Extensions =:= #{}, R
 %% Last 2 RSV bits MUST be 0 if deflate-frame extension is used.
 parse_header(<< _:2, 1:1, _/bits >>, #{deflate := _}, _) -> error;
 parse_header(<< _:3, 1:1, _/bits >>, #{deflate := _}, _) -> error;
+%% No extension defines RSV1 for control frames.
+parse_header(<< _:1, 1:1, _:2, Opcode:4, _/bits >>, _, _) when Opcode >= 8 -> error;
 %% Invalid opcode. Note that these opcodes may be used by extensions.
 parse_header(<< _:4, 3:4, _/bits >>, _, _) -> error;
 parse_header(<< _:4, 4:4, _/bits >>, _, _) -> error;
@@ -885,6 +887,30 @@ parse_deflate_empty_fin_data_error_test() ->
 	{error, badframe}
 		= parse_payload(<<>>, undefined, 0, 0, fragment, 0, FinState, Exts, <<0:3>>),
 	ok.
+
+parse_header_rejects_rsv1_control_test_() ->
+	{ok, _, Exts} = negotiate_permessage_deflate([], #{}, #{}),
+	%% {opcode, payload, extensions, fragmentation state}.
+	Tests = [
+		{9, <<"ab">>, deflate, undefined},
+		{9, <<>>, deflate, undefined},
+		{10, <<"ab">>, deflate, undefined},
+		{8, <<1000:16>>, deflate, undefined},
+		{9, <<"ab">>, deflate, {nofin, text, <<0:3>>}},
+		{9, <<"ab">>, none, undefined},
+		{9, <<"ab">>, other, undefined}
+	],
+	[{iolist_to_binary(io_lib:format("~p ~p ~p ~p", [Opcode, Payload, ExtName, Frag])),
+		fun() ->
+			Len = byte_size(Payload),
+			Frame = <<1:1, 1:1, 0:2, Opcode:4, 0:1, Len:7, Payload/binary>>,
+			Ext = case ExtName of
+				deflate -> Exts;
+				none -> #{};
+				other -> #{other => true}
+			end,
+			error = parse_header(Frame, Ext, Frag)
+		end} || {Opcode, Payload, ExtName, Frag} <- Tests].
 
 -endif.
 

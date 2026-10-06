@@ -139,14 +139,18 @@ stream_chunked(Data, State) ->
 	stream_chunked(Data, State, <<>>).
 
 %% New chunk.
-stream_chunked(Data = << C, _/bits >>, {0, Streamed}, Acc) when C =/= $\r ->
-	case chunked_len(Data, Streamed, Acc, 0, 0) of
-		{next, Rest, State, Acc2} ->
-			stream_chunked(Rest, State, Acc2);
-		{more, State, Acc2} ->
-			{more, Acc2, Data, State};
-		Ret ->
-			Ret
+stream_chunked(Data = << C, _/bits >>, State = {0, Streamed}, Acc) when C =/= $\r ->
+	case chunked_len(Data, Streamed, 0, 0) of
+		{next, Rest, State2} ->
+			stream_chunked(Rest, State2, Acc);
+		more when Acc =:= <<>> ->
+			more;
+		more ->
+			{more, Acc, Data, State};
+		{done, HasTrailers, Rest} when Acc =:= <<>> ->
+			{done, HasTrailers, Rest};
+		{done, HasTrailers, Rest} ->
+			{done, Acc, HasTrailers, Rest}
 	end;
 %% Trailing \r\n before next chunk.
 stream_chunked(<< "\r\n", Rest/bits >>, {2, Streamed}, Acc) ->
@@ -176,61 +180,58 @@ stream_chunked(Data, {Rem, Streamed}, Acc) when Rem > 2 ->
 			{more, << Acc/binary, Data/binary >>, Rem2, {Rem2, Streamed + DataSize}}
 	end.
 
-chunked_len(<< $0, R/bits >>, S, A, Len, D) when D < 16 -> chunked_len(R, S, A, Len * 16, D + 1);
-chunked_len(<< $1, R/bits >>, S, A, Len, D) when D < 16 -> chunked_len(R, S, A, Len * 16 + 1, D + 1);
-chunked_len(<< $2, R/bits >>, S, A, Len, D) when D < 16 -> chunked_len(R, S, A, Len * 16 + 2, D + 1);
-chunked_len(<< $3, R/bits >>, S, A, Len, D) when D < 16 -> chunked_len(R, S, A, Len * 16 + 3, D + 1);
-chunked_len(<< $4, R/bits >>, S, A, Len, D) when D < 16 -> chunked_len(R, S, A, Len * 16 + 4, D + 1);
-chunked_len(<< $5, R/bits >>, S, A, Len, D) when D < 16 -> chunked_len(R, S, A, Len * 16 + 5, D + 1);
-chunked_len(<< $6, R/bits >>, S, A, Len, D) when D < 16 -> chunked_len(R, S, A, Len * 16 + 6, D + 1);
-chunked_len(<< $7, R/bits >>, S, A, Len, D) when D < 16 -> chunked_len(R, S, A, Len * 16 + 7, D + 1);
-chunked_len(<< $8, R/bits >>, S, A, Len, D) when D < 16 -> chunked_len(R, S, A, Len * 16 + 8, D + 1);
-chunked_len(<< $9, R/bits >>, S, A, Len, D) when D < 16 -> chunked_len(R, S, A, Len * 16 + 9, D + 1);
-chunked_len(<< $A, R/bits >>, S, A, Len, D) when D < 16 -> chunked_len(R, S, A, Len * 16 + 10, D + 1);
-chunked_len(<< $B, R/bits >>, S, A, Len, D) when D < 16 -> chunked_len(R, S, A, Len * 16 + 11, D + 1);
-chunked_len(<< $C, R/bits >>, S, A, Len, D) when D < 16 -> chunked_len(R, S, A, Len * 16 + 12, D + 1);
-chunked_len(<< $D, R/bits >>, S, A, Len, D) when D < 16 -> chunked_len(R, S, A, Len * 16 + 13, D + 1);
-chunked_len(<< $E, R/bits >>, S, A, Len, D) when D < 16 -> chunked_len(R, S, A, Len * 16 + 14, D + 1);
-chunked_len(<< $F, R/bits >>, S, A, Len, D) when D < 16 -> chunked_len(R, S, A, Len * 16 + 15, D + 1);
-chunked_len(<< $a, R/bits >>, S, A, Len, D) when D < 16 -> chunked_len(R, S, A, Len * 16 + 10, D + 1);
-chunked_len(<< $b, R/bits >>, S, A, Len, D) when D < 16 -> chunked_len(R, S, A, Len * 16 + 11, D + 1);
-chunked_len(<< $c, R/bits >>, S, A, Len, D) when D < 16 -> chunked_len(R, S, A, Len * 16 + 12, D + 1);
-chunked_len(<< $d, R/bits >>, S, A, Len, D) when D < 16 -> chunked_len(R, S, A, Len * 16 + 13, D + 1);
-chunked_len(<< $e, R/bits >>, S, A, Len, D) when D < 16 -> chunked_len(R, S, A, Len * 16 + 14, D + 1);
-chunked_len(<< $f, R/bits >>, S, A, Len, D) when D < 16 -> chunked_len(R, S, A, Len * 16 + 15, D + 1);
+chunked_len(<< $0, R/bits >>, S, Len, D) when D < 16 -> chunked_len(R, S, Len * 16, D + 1);
+chunked_len(<< $1, R/bits >>, S, Len, D) when D < 16 -> chunked_len(R, S, Len * 16 + 1, D + 1);
+chunked_len(<< $2, R/bits >>, S, Len, D) when D < 16 -> chunked_len(R, S, Len * 16 + 2, D + 1);
+chunked_len(<< $3, R/bits >>, S, Len, D) when D < 16 -> chunked_len(R, S, Len * 16 + 3, D + 1);
+chunked_len(<< $4, R/bits >>, S, Len, D) when D < 16 -> chunked_len(R, S, Len * 16 + 4, D + 1);
+chunked_len(<< $5, R/bits >>, S, Len, D) when D < 16 -> chunked_len(R, S, Len * 16 + 5, D + 1);
+chunked_len(<< $6, R/bits >>, S, Len, D) when D < 16 -> chunked_len(R, S, Len * 16 + 6, D + 1);
+chunked_len(<< $7, R/bits >>, S, Len, D) when D < 16 -> chunked_len(R, S, Len * 16 + 7, D + 1);
+chunked_len(<< $8, R/bits >>, S, Len, D) when D < 16 -> chunked_len(R, S, Len * 16 + 8, D + 1);
+chunked_len(<< $9, R/bits >>, S, Len, D) when D < 16 -> chunked_len(R, S, Len * 16 + 9, D + 1);
+chunked_len(<< $A, R/bits >>, S, Len, D) when D < 16 -> chunked_len(R, S, Len * 16 + 10, D + 1);
+chunked_len(<< $B, R/bits >>, S, Len, D) when D < 16 -> chunked_len(R, S, Len * 16 + 11, D + 1);
+chunked_len(<< $C, R/bits >>, S, Len, D) when D < 16 -> chunked_len(R, S, Len * 16 + 12, D + 1);
+chunked_len(<< $D, R/bits >>, S, Len, D) when D < 16 -> chunked_len(R, S, Len * 16 + 13, D + 1);
+chunked_len(<< $E, R/bits >>, S, Len, D) when D < 16 -> chunked_len(R, S, Len * 16 + 14, D + 1);
+chunked_len(<< $F, R/bits >>, S, Len, D) when D < 16 -> chunked_len(R, S, Len * 16 + 15, D + 1);
+chunked_len(<< $a, R/bits >>, S, Len, D) when D < 16 -> chunked_len(R, S, Len * 16 + 10, D + 1);
+chunked_len(<< $b, R/bits >>, S, Len, D) when D < 16 -> chunked_len(R, S, Len * 16 + 11, D + 1);
+chunked_len(<< $c, R/bits >>, S, Len, D) when D < 16 -> chunked_len(R, S, Len * 16 + 12, D + 1);
+chunked_len(<< $d, R/bits >>, S, Len, D) when D < 16 -> chunked_len(R, S, Len * 16 + 13, D + 1);
+chunked_len(<< $e, R/bits >>, S, Len, D) when D < 16 -> chunked_len(R, S, Len * 16 + 14, D + 1);
+chunked_len(<< $f, R/bits >>, S, Len, D) when D < 16 -> chunked_len(R, S, Len * 16 + 15, D + 1);
 %% Chunk extensions.
 %%
 %% Note that we currently skip the first character we encounter here,
 %% and not in the skip_chunk_ext function. If we latter implement
 %% chunk extensions (unlikely) we will need to change this clause too.
-chunked_len(<< C, R/bits >>, S, A, Len, _) when ?IS_WS(C); C =:= $; -> skip_chunk_ext(R, S, A, Len, 0);
+chunked_len(<< C, R/bits >>, S, Len, _) when ?IS_WS(C); C =:= $; -> skip_chunk_ext(R, S, Len, 0);
 %% Final chunk.
 %%
 %% When trailers are following we simply return them as the Rest.
 %% Then the user code can decide to call the stream_trailers function
 %% to parse them. The user can therefore ignore trailers as necessary
 %% if they do not wish to handle them.
-chunked_len(<< "\r\n\r\n", R/bits >>, _, <<>>, 0, _) -> {done, no_trailers, R};
-chunked_len(<< "\r\n\r\n", R/bits >>, _, A, 0, _) -> {done, A, no_trailers, R};
-chunked_len(<< "\r\n", R/bits >>, _, <<>>, 0, _) when byte_size(R) > 2 -> {done, trailers, R};
-chunked_len(<< "\r\n", R/bits >>, _, A, 0, _) when byte_size(R) > 2 -> {done, A, trailers, R};
-chunked_len(_, _, _, 0, _) -> more;
+chunked_len(<<>>, _, _, _) -> more;
+chunked_len(<<"\r">>, _, _, _) -> more;
+chunked_len(<<"\r\n">>, _, 0, _) -> more;
+chunked_len(<<"\r\n\r">>, _, 0, _) -> more;
+chunked_len(<< "\r\n\r\n", R/bits >>, _, 0, _) -> {done, no_trailers, R};
+chunked_len(<< "\r\n", R/bits >>, _, 0, _) -> {done, trailers, R};
 %% Normal chunk. Add 2 to Len for the trailing \r\n.
-chunked_len(<< "\r\n", R/bits >>, S, A, Len, _) -> {next, R, {Len + 2, S}, A};
-chunked_len(<<"\r">>, _, <<>>, _, _) -> more;
-chunked_len(<<"\r">>, S, A, _, _) -> {more, {0, S}, A};
-chunked_len(<<>>, _, <<>>, _, _) -> more;
-chunked_len(<<>>, S, A, _, _) -> {more, {0, S}, A}.
+chunked_len(<< "\r\n", R/bits >>, S, Len, _) -> {next, R, {Len + 2, S}}.
 
-skip_chunk_ext(R = << "\r", _/bits >>, S, A, Len, _) -> chunked_len(R, S, A, Len, 0);
-skip_chunk_ext(R = <<>>, S, A, Len, _) -> chunked_len(R, S, A, Len, 0);
+skip_chunk_ext(R = << "\r", _/bits >>, S, Len, _) -> chunked_len(R, S, Len, 0);
+skip_chunk_ext(R = <<>>, S, Len, _) -> chunked_len(R, S, Len, 0);
 %% We skip up to 128 characters of chunk extensions. The value
 %% is hardcoded: chunk extensions are very rarely seen in the
 %% wild and Cowboy doesn't do anything with them anyway.
 %%
 %% Line breaks are not allowed in the middle of chunk extensions.
-skip_chunk_ext(<< C, R/bits >>, S, A, Len, Skipped) when C =/= $\n, Skipped < 128 ->
-	skip_chunk_ext(R, S, A, Len, Skipped + 1).
+skip_chunk_ext(<< C, R/bits >>, S, Len, Skipped) when C =/= $\n, Skipped < 128 ->
+	skip_chunk_ext(R, S, Len, Skipped + 1).
 
 %% @doc Encode a chunk.
 
@@ -292,6 +293,22 @@ stream_chunked_one_pass_test() ->
 			"x-foo-bar: bar foo\r\n"
 			"\r\n">>, {0, 0}),
 	{[{<<"x-foo-bar">>, <<"bar foo">>}], <<>>} = cow_http:parse_headers(Rest),
+	ok.
+
+stream_chunked_last_chunk_test() ->
+	more = stream_chunked(<<"0">>, {0, 0}),
+	more = stream_chunked(<<"0\r">>, {0, 0}),
+	more = stream_chunked(<<"0\r\n">>, {0, 0}),
+	more = stream_chunked(<<"0\r\n\r">>, {0, 0}),
+	{done, no_trailers, <<>>} = stream_chunked(<<"0\r\n\r\n">>, {0, 0}),
+	{done, trailers, <<"A">>} = stream_chunked(<<"0\r\nA">>, {0, 0}),
+	{done, trailers, <<"AB">>} = stream_chunked(<<"0\r\nAB">>, {0, 0}),
+	{done, trailers, <<"\rX">>} = stream_chunked(<<"0\r\n\rX">>, {0, 0}),
+	%% A finished chunk must be returned while the last-chunk line is incomplete.
+	{more, <<"Wiki">>, <<"0\r\n">>, {0, 4}}
+		= stream_chunked(<<"4\r\nWiki\r\n0\r\n">>, {0, 0}),
+	{done, no_trailers, <<>>}
+		= stream_chunked(<<"0\r\n\r\n">>, {0, 4}),
 	ok.
 
 stream_chunked_n_passes_test() ->

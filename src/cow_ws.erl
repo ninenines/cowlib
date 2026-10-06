@@ -428,14 +428,15 @@ frag_state(_, 1, _, FragState) -> FragState.
 	| {more, close_code(), binary(), utf8_state()}
 	| {error, badframe | badencoding | badsize}.
 %% Empty last frame of compressed message.
-parse_payload(Data, _, Utf8State, _, _, 0, {fin, _, << 1:1, 0:2 >>},
-		#{inflate := Inflate, inflate_takeover := TakeOver}, _) ->
-	_ = zlib:inflate(Inflate, << 0, 0, 255, 255 >>),
-	case TakeOver of
-		no_takeover -> zlib:inflateReset(Inflate);
-		takeover -> ok
-	end,
-	{ok, <<>>, Utf8State, Data};
+parse_payload(Data, _, Utf8State, _, _, 0, FragState = {fin, _, << 1:1, 0:2 >>},
+		Exts = #{inflate := Inflate, inflate_takeover := TakeOver}, _) ->
+	MaxInflateSize = maps:get(max_inflate_size, Exts, infinity),
+	case inflate_frame(<<>>, Inflate, TakeOver, MaxInflateSize, FragState, true) of
+		{ok, Payload} ->
+			validate_payload(Payload, Data, Utf8State, 0, fragment, FragState, true);
+		Error ->
+			Error
+	end;
 %% Compressed fragmented frame.
 parse_payload(Data, MaskKey, Utf8State, ParsedLen, Type, Len, FragState = {_, _, << 1:1, 0:2 >>},
 		Exts = #{inflate := Inflate, inflate_takeover := TakeOver}, _)
@@ -849,6 +850,40 @@ parse_deflate_fragment_ping_test() ->
 		= parse_header(Fin, Exts, FragState),
 	{ok, <<"ello">>, 0, <<>>}
 		= parse_payload(Rest3, undefined, 0, 0, fragment, SuffixLen, FinState, Exts, <<0:3>>),
+	ok.
+
+parse_deflate_empty_fin_test() ->
+	{ok, _, Exts} = negotiate_permessage_deflate([], #{}, #{}),
+	#{deflate := Deflate} = Exts,
+	Deflated = iolist_to_binary(zlib:deflate(Deflate, <<"Hello">>, sync)),
+	BodyLen = byte_size(Deflated) - 4,
+	<<Body:BodyLen/binary, 0, 0, 255, 255>> = Deflated,
+	%% One compressed byte emits nothing. The trailer flushes <<"H">>.
+	<<Prefix:1/binary, _/binary>> = Body,
+	Hello = <<0:1, 1:1, 0:2, 1:4, 0:1, 1:7, Prefix/binary>>,
+	{fragment, FragState, <<1:1, 0:2>>, 1, undefined, Rest}
+		= parse_header(Hello, Exts, undefined),
+	{ok, <<>>, 0, <<>>}
+		= parse_payload(Rest, undefined, 0, 0, fragment, 1, FragState, Exts, <<1:1, 0:2>>),
+	Fin = <<1:1, 0:3, 0:4, 0:1, 0:7>>,
+	{fragment, FinState, <<0:3>>, 0, undefined, <<>>}
+		= parse_header(Fin, Exts, FragState),
+	{ok, <<"H">>, 0, <<"next">>}
+		= parse_payload(<<"next">>, undefined, 0, 0, fragment, 0, FinState, Exts, <<0:3>>),
+	ok.
+
+parse_deflate_empty_fin_data_error_test() ->
+	{ok, _, Exts} = negotiate_permessage_deflate([], #{}, #{}),
+	Data = <<0:1, 1:1, 0:2, 1:4, 0:1, 3:7, 0, 5, 0>>,
+	{fragment, FragState, <<1:1, 0:2>>, 3, undefined, <<0, 5, 0>>}
+		= parse_header(Data, Exts, undefined),
+	{ok, <<>>, 0, <<>>}
+		= parse_payload(<<0, 5, 0>>, undefined, 0, 0, fragment, 3, FragState, Exts, <<1:1, 0:2>>),
+	Fin = <<1:1, 0:3, 0:4, 0:1, 0:7>>,
+	{fragment, FinState, <<0:3>>, 0, undefined, <<>>}
+		= parse_header(Fin, Exts, FragState),
+	{error, badframe}
+		= parse_payload(<<>>, undefined, 0, 0, fragment, 0, FinState, Exts, <<0:3>>),
 	ok.
 
 -endif.

@@ -366,9 +366,14 @@ parse_header(<< _:4, 6:4, _/bits >>, _, {_, _, _}) -> error;
 parse_header(<< _:4, 7:4, _/bits >>, _, {_, _, _}) -> error;
 %% Close control frame length MUST be 0 or >= 2.
 parse_header(<< _:4, 8:4, _:1, 1:7, _/bits >>, _, _) -> error;
-%% Close control frame with incomplete close code. Need more data.
-parse_header(Data = << _:4, 8:4, 0:1, Len:7, _/bits >>, _, _) when Len > 1, byte_size(Data) < 4 -> more;
-parse_header(Data = << _:4, 8:4, 1:1, Len:7, _/bits >>, _, _) when Len > 1, byte_size(Data) < 8 -> more;
+%% The close reason is one UTF-8 text. The payload is at most 125
+%% bytes, so wait for all of it before parsing the frame.
+parse_header(Data = << _:4, 8:4, 0:1, Len:7, _/bits >>, _, _)
+		when Len > 1, Len < 126, byte_size(Data) < 2 + Len ->
+	more;
+parse_header(Data = << _:4, 8:4, 1:1, Len:7, _/bits >>, _, _)
+		when Len > 1, Len < 126, byte_size(Data) < 6 + Len ->
+	more;
 %% 7 bits payload length.
 parse_header(<< Fin:1, Rsv:3/bits, Opcode:4, 0:1, Len:7, Rest/bits >>, _, FragState) when Len < 126 ->
 	parse_header(Opcode, Fin, FragState, Rsv, Len, undefined, Rest);
@@ -427,7 +432,6 @@ frag_state(_, 1, _, FragState) -> FragState.
 	-> {ok, binary(), utf8_state(), binary()}
 	| {ok, close_code(), binary(), utf8_state(), binary()}
 	| {more, binary(), utf8_state()}
-	| {more, close_code(), binary(), utf8_state()}
 	| {error, badframe | badencoding | badsize}.
 %% Empty last frame of compressed message.
 parse_payload(Data, _, Utf8State, _, _, 0, FragState = {fin, _, << 1:1, 0:2 >>},
@@ -467,19 +471,28 @@ parse_payload(Data, MaskKey, Utf8State, ParsedLen, Type, Len, FragState,
 parse_payload(Data, _, Utf8State, 0, _, 0, _, _, _)
 		when Utf8State =:= 0; Utf8State =:= undefined ->
 	{ok, <<>>, Utf8State, Data};
-%% Start of close frame.
+%% Empty close. No status and no text. Leave the message UTF-8 state alone.
+parse_payload(Data, _, Utf8State, 0, close, 0, _, _, << 0:3 >>) ->
+	{ok, <<>>, Utf8State, Data};
+%% Close frame. The reason is its own UTF-8 text.
 parse_payload(Data, MaskKey, Utf8State, 0, Type = close, Len, FragState, _, << 0:3 >>) ->
 	{<< MaskedCode:2/binary, Data2/bits >>, Rest, Eof} = split_payload(Data, Len),
 	<< CloseCode:16 >> = unmask(MaskedCode, MaskKey, 0),
 	case validate_close_code(CloseCode) of
-		ok ->
+		ok when Eof ->
 			Payload = unmask(Data2, MaskKey, 2),
-			case validate_payload(Payload, Rest, Utf8State, 2, Type, FragState, Eof) of
-				{ok, _, Utf8State2, _} -> {ok, CloseCode, Payload, Utf8State2, Rest};
-				{more, _, Utf8State2} -> {more, CloseCode, Payload, Utf8State2};
-				Error -> Error
+			%% UTF-8 validation is disabled if undefined. Fresh otherwise.
+			ReasonState = case Utf8State of
+				undefined -> undefined;
+				_ -> 0
+			end,
+			case validate_payload(Payload, Rest, ReasonState, 2, Type, FragState, true) of
+				{ok, _, _, _} ->
+					{ok, CloseCode, Payload, Utf8State, Rest};
+				Error ->
+					Error
 			end;
-		error ->
+		_ ->
 			{error, badframe}
 	end;
 %% Normal frame.
@@ -886,6 +899,30 @@ parse_deflate_empty_fin_data_error_test() ->
 		= parse_header(Fin, Exts, FragState),
 	{error, badframe}
 		= parse_payload(<<>>, undefined, 0, 0, fragment, 0, FinState, Exts, <<0:3>>),
+	ok.
+
+%% 16#C3 is a UTF-8 lead byte. "bye" is valid alone and invalid after it.
+parse_close_during_utf8_fragment_test() ->
+	Data = <<0:1, 0:3, 1:4, 0:1, 1:7, 16#C3>>,
+	{fragment, FragState, <<0:3>>, 1, undefined, <<16#C3>>}
+		= parse_header(Data, #{}, undefined),
+	{ok, <<16#C3>>, 2, <<>>}
+		= parse_payload(<<16#C3>>, undefined, 0, 0, fragment, 1, FragState, #{}, <<0:3>>),
+	Close = <<1:1, 0:3, 8:4, 0:1, 5:7, 1000:16, "bye">>,
+	{close, FragState, <<0:3>>, 5, undefined, Reason}
+		= parse_header(Close, #{}, FragState),
+	{ok, 1000, <<"bye">>, 2, <<>>}
+		= parse_payload(Reason, undefined, 2, 0, close, 5, FragState, #{}, <<0:3>>),
+	ok.
+
+parse_header_waits_for_close_payload_test() ->
+	Frame = <<1:1, 0:3, 8:4, 0:1, 5:7, 1000:16, "bye">>,
+	<<Prefix:4/binary, _/bits>> = Frame,
+	more = parse_header(Prefix, #{}, undefined),
+	{close, undefined, <<0:3>>, 5, undefined, Reason}
+		= parse_header(Frame, #{}, undefined),
+	{ok, 1000, <<"bye">>, 0, <<>>}
+		= parse_payload(Reason, undefined, 0, 0, close, 5, undefined, #{}, <<0:3>>),
 	ok.
 
 parse_header_rejects_rsv1_control_test_() ->

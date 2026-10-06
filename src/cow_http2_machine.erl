@@ -895,6 +895,11 @@ push_promise_frame(_, State=#http2_machine{local_settings=#{enable_push := false
 	{error, {connection_error, protocol_error,
 		'PUSH_PROMISE frame received despite SETTINGS_ENABLE_PUSH set to 0. (RFC7540 6.6)'},
 		State};
+push_promise_frame(#push_promise{promised_id=PromisedStreamID}, State)
+		when not ?IS_SERVER_LOCAL(PromisedStreamID) ->
+	{error, {connection_error, protocol_error,
+		'PUSH_PROMISE promised an invalid stream id. (RFC7540 5.1.1, RFC7540 6.6)'},
+		State};
 push_promise_frame(#push_promise{promised_id=PromisedStreamID},
 		State=#http2_machine{remote_streamid=RemoteStreamID})
 		when PromisedStreamID =< RemoteStreamID ->
@@ -976,11 +981,6 @@ linger_push_promise_decode(HeaderData, PromisedStreamID, State0) ->
 				'PUSH_PROMISE received on a stream that was reset. (RFC7540 6.6)'},
 				stream_linger(PromisedStreamID,
 					State#http2_machine{remote_streamid=PromisedStreamID})};
-		%% RFC7540 5.1.1, 6.6. A promised id must be a new server stream.
-		{ok, State} ->
-			{error, {connection_error, protocol_error,
-				'PUSH_PROMISE promised an invalid stream id. (RFC7540 5.1.1, RFC7540 6.6)'},
-				State};
 		Error ->
 			Error
 	end.
@@ -1095,6 +1095,37 @@ push_promise_half_closed_remote_parent_test() ->
 	S1 = S0#http2_machine{streams=Streams0#{1 => Parent0#stream{remote=fin}}},
 	{error, {connection_error, protocol_error, _}, S1}
 		= frame({push_promise, 1, head_fin, 2, <<>>}, S1),
+	ok.
+
+push_promise_odd_promised_id_test() ->
+	{Block0, _} = cow_hpack:encode([
+		{<<":method">>, <<"GET">>},
+		{<<":scheme">>, <<"https">>},
+		{<<":path">>, <<"/">>}
+	]),
+	Block = iolist_to_binary(Block0),
+	{ok, _, S00} = init(client, #{
+		preface_timeout => infinity,
+		settings_timeout => infinity
+	}),
+	{ok, S01} = frame({settings, #{}}, S00),
+	{ok, 1, S0} = init_stream(<<"GET">>, S01),
+	{ok, 3, S1} = init_stream(<<"POST">>, S0),
+	{ok, idle, empty} = get_stream_local_state(3, S1),
+	{error, {connection_error, protocol_error, _}, S1}
+		= frame({push_promise, 1, head_fin, 3, Block}, S1),
+	{ok, idle, empty} = get_stream_local_state(3, S1),
+	%% 1 is open. 5 has not been opened. Both are client ids.
+	{error, {connection_error, protocol_error, _}, S1}
+		= frame({push_promise, 1, head_fin, 1, Block}, S1),
+	{error, {connection_error, protocol_error, _}, S1}
+		= frame({push_promise, 1, head_nofin, 5, <<>>}, S1),
+	#http2_machine{streams=Streams1} = S1,
+	Parent1 = maps:get(1, Streams1),
+	S2 = S1#http2_machine{streams=Streams1#{1 => Parent1#stream{remote=nofin}}},
+	{error, {connection_error, protocol_error, _}, S2}
+		= frame({push_promise, 1, head_fin, 3, Block}, S2),
+	{ok, idle, empty} = get_stream_local_state(3, S2),
 	ok.
 
 push_promise_lingering_parent_test() ->

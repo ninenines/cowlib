@@ -438,7 +438,8 @@ parse_payload(Data, _, Utf8State, _, _, 0, {fin, _, << 1:1, 0:2 >>},
 	{ok, <<>>, Utf8State, Data};
 %% Compressed fragmented frame.
 parse_payload(Data, MaskKey, Utf8State, ParsedLen, Type, Len, FragState = {_, _, << 1:1, 0:2 >>},
-		Exts = #{inflate := Inflate, inflate_takeover := TakeOver}, _) ->
+		Exts = #{inflate := Inflate, inflate_takeover := TakeOver}, _)
+		when Type =:= fragment ->
 	{Data2, Rest, Eof} = split_payload(Data, Len),
 	MaxInflateSize = maps:get(max_inflate_size, Exts, infinity),
 	case inflate_frame(unmask(Data2, MaskKey, ParsedLen), Inflate, TakeOver, MaxInflateSize, FragState, Eof) of
@@ -822,6 +823,32 @@ parse_payload_rejects_streamed_invalid_utf8_fragment_test() ->
 	{error, badencoding}
 		= parse_payload(<<"A">>, undefined, 2, 0, fragment, 1,
 			{fin, text, <<0:3>>}, #{}, <<0:3>>),
+	ok.
+
+parse_deflate_fragment_ping_test() ->
+	{ok, _, Exts} = negotiate_permessage_deflate([], #{}, #{}),
+	#{deflate := Deflate} = Exts,
+	Deflated = iolist_to_binary(zlib:deflate(Deflate, <<"Hello">>, sync)),
+	BodyLen = byte_size(Deflated) - 4,
+	<<Body:BodyLen/binary, 0, 0, 255, 255>> = Deflated,
+	%% Two compressed bytes emit <<"H">>. The rest emits <<"ello">>.
+	<<Prefix:2/binary, Suffix/binary>> = Body,
+	Hello = <<0:1, 1:1, 0:2, 1:4, 0:1, 2:7, Prefix/binary>>,
+	{fragment, FragState, <<1:1, 0:2>>, 2, undefined, Rest}
+		= parse_header(Hello, Exts, undefined),
+	{ok, <<"H">>, 0, <<>>}
+		= parse_payload(Rest, undefined, 0, 0, fragment, 2, FragState, Exts, <<1:1, 0:2>>),
+	Ping = <<1:1, 0:3, 9:4, 0:1, 5:7, "ping!">>,
+	{ping, FragState, <<0:3>>, 5, undefined, Rest2}
+		= parse_header(Ping, Exts, FragState),
+	{ok, <<"ping!">>, 0, <<>>}
+		= parse_payload(Rest2, undefined, 0, 0, ping, 5, FragState, Exts, <<0:3>>),
+	SuffixLen = byte_size(Suffix),
+	Fin = <<1:1, 0:3, 0:4, 0:1, SuffixLen:7, Suffix/binary>>,
+	{fragment, FinState, <<0:3>>, SuffixLen, undefined, Rest3}
+		= parse_header(Fin, Exts, FragState),
+	{ok, <<"ello">>, 0, <<>>}
+		= parse_payload(Rest3, undefined, 0, 0, fragment, SuffixLen, FinState, Exts, <<0:3>>),
 	ok.
 
 -endif.

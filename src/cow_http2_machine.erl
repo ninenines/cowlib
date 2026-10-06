@@ -906,10 +906,16 @@ push_promise_frame(#push_promise{id=StreamID}, State)
 	{error, {connection_error, protocol_error,
 		'PUSH_PROMISE frame received on a server-initiated stream. (RFC7540 6.6)'},
 		State};
+push_promise_frame(#push_promise{id=StreamID},
+		State=#http2_machine{local_streamid=LocalStreamID})
+		when StreamID >= LocalStreamID ->
+	{error, {connection_error, protocol_error,
+		'PUSH_PROMISE frame received on a stream in idle state. (RFC7540 5.1)'},
+		State};
 push_promise_frame(Frame=#push_promise{id=StreamID, head=IsHeadFin,
 		promised_id=PromisedStreamID, data=HeaderData}, State) ->
 	case stream_get(StreamID, State) of
-		Stream=#stream{remote=idle} ->
+		Stream=#stream{remote=Remote} when Remote =/= fin ->
 			case IsHeadFin of
 				head_fin ->
 					headers_decode(#headers{id=PromisedStreamID,
@@ -918,15 +924,12 @@ push_promise_frame(Frame=#push_promise{id=StreamID, head=IsHeadFin,
 				head_nofin ->
 					{ok, State#http2_machine{state={continuation, push_promise, Frame}}}
 			end;
+		undefined ->
+			linger_push_promise(Frame, State);
+		%% Half-closed (remote): the response has already ended.
 		_ ->
-%% @todo Check if the stream is lingering. If it is, decode the frame
-%% and do what? That's the big question and why it's not implemented yet.
-%   However, an endpoint that
-%   has sent RST_STREAM on the associated stream MUST handle PUSH_PROMISE
-%   frames that might have been created before the RST_STREAM frame is
-%   received and processed. (RFC7540 6.6)
-			{error, {connection_error, stream_closed,
-				'PUSH_PROMISE frame received on a stream in closed or half-closed state. (RFC7540 5.1, RFC7540 6.6)'},
+			{error, {connection_error, protocol_error,
+				'PUSH_PROMISE frame received on a half-closed (remote) stream. (RFC7540 6.6)'},
 				State}
 	end.
 
@@ -945,6 +948,168 @@ push_promise_frame(#headers{id=PromisedStreamID},
 	State = stream_store(PromisedStream,
 		State0#http2_machine{remote_streamid=PromisedStreamID}),
 	{ok, {push_promise, StreamID, PromisedStreamID, Headers, PseudoHeaders}, State}.
+
+linger_push_promise(Frame=#push_promise{id=StreamID},
+		State=#http2_machine{local_lingering_streams=Lingering}) ->
+	case lists:member(StreamID, Lingering) of
+		true ->
+			linger_push_promise1(Frame, State);
+		false ->
+			{error, {connection_error, protocol_error,
+				'PUSH_PROMISE frame received on a stream in closed state. (RFC7540 5.1, RFC7540 6.6)'},
+				State}
+	end.
+
+%% RFC7540 6.6. A PUSH_PROMISE that was in flight when we
+%% reset the parent must not tear the connection down.
+linger_push_promise1(#push_promise{head=head_nofin}=Frame, State) ->
+	{ok, State#http2_machine{state={continuation, linger, Frame}}};
+linger_push_promise1(#push_promise{head=head_fin, promised_id=PromisedStreamID,
+		data=HeaderData}, State) ->
+	linger_push_promise_decode(HeaderData, PromisedStreamID, State).
+
+linger_push_promise_decode(HeaderData, PromisedStreamID, State0) ->
+	case headers_decode(#headers{id=PromisedStreamID, fin=fin, head=head_fin,
+			data=HeaderData}, State0, linger, undefined) of
+		{ok, State} when ?IS_SERVER_LOCAL(PromisedStreamID) ->
+			{error, {stream_error, PromisedStreamID, cancel,
+				'PUSH_PROMISE received on a stream that was reset. (RFC7540 6.6)'},
+				stream_linger(PromisedStreamID,
+					State#http2_machine{remote_streamid=PromisedStreamID})};
+		%% RFC7540 5.1.1, 6.6. A promised id must be a new server stream.
+		{ok, State} ->
+			{error, {connection_error, protocol_error,
+				'PUSH_PROMISE promised an invalid stream id. (RFC7540 5.1.1, RFC7540 6.6)'},
+				State};
+		Error ->
+			Error
+	end.
+
+-ifdef(TEST).
+
+push_promise_idle_parent_test() ->
+	{ok, _, S00} = init(client, #{
+		preface_timeout => infinity,
+		settings_timeout => infinity
+	}),
+	{ok, S0} = frame({settings, #{}}, S00),
+	{error, {connection_error, protocol_error, _}, S0}
+		= frame({push_promise, 1, head_fin, 2, <<>>}, S0),
+	{ok, _, S10} = init(client, #{
+		preface_timeout => infinity,
+		settings_timeout => infinity
+	}),
+	{ok, S11} = frame({settings, #{}}, S10),
+	{ok, 1, S1} = init_stream(<<"GET">>, S11),
+	%% 3 is the next id. 5 is further above it. Both are idle.
+	{error, {connection_error, protocol_error, _}, S1}
+		= frame({push_promise, 3, head_fin, 2, <<>>}, S1),
+	{error, {connection_error, protocol_error, _}, S1}
+		= frame({push_promise, 5, head_fin, 2, <<>>}, S1),
+	ok.
+
+push_promise_idle_parent_invalid_id_test() ->
+	{ok, _, S00} = init(client, #{
+		preface_timeout => infinity,
+		settings_timeout => infinity
+	}),
+	{ok, S01} = frame({settings, #{}}, S00),
+	{ok, 1, S1} = init_stream(<<"GET">>, S01),
+	{error, {connection_error, protocol_error, _}, S1}
+		= frame({push_promise, 5, head_fin, 0, <<>>}, S1),
+	{error, {connection_error, protocol_error, _}, S1}
+		= frame({push_promise, 4, head_fin, 2, <<>>}, S1),
+	ok.
+
+push_promise_closed_parent_test() ->
+	State = #http2_machine{mode=client, state=normal, local_streamid=3},
+	{error, {connection_error, protocol_error, _}, State}
+		= frame({push_promise, 1, head_fin, 2, <<>>}, State),
+	ok.
+
+push_promise_open_parent_test() ->
+	{Block0, _} = cow_hpack:encode([
+		{<<":method">>, <<"GET">>},
+		{<<":scheme">>, <<"https">>},
+		{<<":path">>, <<"/">>}
+	]),
+	Block = iolist_to_binary(Block0),
+	{ok, _, S00} = init(client, #{
+		preface_timeout => infinity,
+		settings_timeout => infinity
+	}),
+	{ok, S01} = frame({settings, #{}}, S00),
+	{ok, 1, S0} = init_stream(<<"GET">>, S01),
+	#http2_machine{streams=Streams0} = S0,
+	Parent0 = maps:get(1, Streams0),
+	Open = S0#http2_machine{streams=Streams0#{1 => Parent0#stream{remote=nofin}}},
+	{ok, {push_promise, 1, 2, _, #{method := <<"GET">>}}, _}
+		= frame({push_promise, 1, head_fin, 2, Block}, Open),
+	{ok, #http2_machine{state={continuation, push_promise, _}}}
+		= frame({push_promise, 1, head_nofin, 2, <<>>}, Open),
+	HalfLocal = S0#http2_machine{streams=Streams0#{1 =>
+		Parent0#stream{local=fin, remote=nofin}}},
+	{ok, {push_promise, 1, 2, _, #{method := <<"GET">>}}, _}
+		= frame({push_promise, 1, head_fin, 2, Block}, HalfLocal),
+	ok.
+
+push_promise_continuation_parent_test() ->
+	{Block0, _} = cow_hpack:encode([
+		{<<":method">>, <<"GET">>},
+		{<<":scheme">>, <<"https">>},
+		{<<":path">>, <<"/">>}
+	]),
+	Block = iolist_to_binary(Block0),
+	<<First:1/binary, Rest/binary>> = Block,
+	{ok, _, S00} = init(client, #{
+		preface_timeout => infinity,
+		settings_timeout => infinity
+	}),
+	{ok, S01} = frame({settings, #{}}, S00),
+	{ok, 1, S0} = init_stream(<<"GET">>, S01),
+	{ok, S1} = frame({push_promise, 1, head_nofin, 2, First}, S0),
+	{ok, {push_promise, 1, 2, _, #{method := <<"GET">>}}, _}
+		= frame({continuation, 1, head_fin, Rest}, S1),
+	#http2_machine{streams=Streams0} = S0,
+	Parent0 = maps:get(1, Streams0),
+	Open = S0#http2_machine{streams=Streams0#{1 => Parent0#stream{remote=nofin}}},
+	{ok, S2} = frame({push_promise, 1, head_nofin, 2, First}, Open),
+	{ok, {push_promise, 1, 2, _, #{method := <<"GET">>}}, _}
+		= frame({continuation, 1, head_fin, Rest}, S2),
+	HalfLocal = S0#http2_machine{streams=Streams0#{1 =>
+		Parent0#stream{local=fin, remote=nofin}}},
+	{ok, S3} = frame({push_promise, 1, head_nofin, 2, First}, HalfLocal),
+	{ok, {push_promise, 1, 2, _, #{method := <<"GET">>}}, _}
+		= frame({continuation, 1, head_fin, Rest}, S3),
+	ok.
+
+push_promise_half_closed_remote_parent_test() ->
+	{ok, _, S00} = init(client, #{
+		preface_timeout => infinity,
+		settings_timeout => infinity
+	}),
+	{ok, S01} = frame({settings, #{}}, S00),
+	{ok, 1, S0} = init_stream(<<"GET">>, S01),
+	#http2_machine{streams=Streams0} = S0,
+	Parent0 = maps:get(1, Streams0),
+	S1 = S0#http2_machine{streams=Streams0#{1 => Parent0#stream{remote=fin}}},
+	{error, {connection_error, protocol_error, _}, S1}
+		= frame({push_promise, 1, head_fin, 2, <<>>}, S1),
+	ok.
+
+push_promise_lingering_parent_test() ->
+	{ok, _, S00} = init(client, #{
+		preface_timeout => infinity,
+		settings_timeout => infinity
+	}),
+	{ok, S01} = frame({settings, #{}}, S00),
+	{ok, 1, S0} = init_stream(<<"GET">>, S01),
+	{ok, S1} = reset_stream(1, S0),
+	{error, {stream_error, 2, cancel, _}, _}
+		= frame({push_promise, 1, head_fin, 2, <<>>}, S1),
+	ok.
+
+-endif.
 
 %% PING frame.
 
@@ -1013,6 +1178,16 @@ unexpected_continuation_frame(#continuation{}, State) ->
 		State}.
 
 continuation_frame(#continuation{id=StreamID, head=head_fin, data=HeaderFragment1},
+		State=#http2_machine{state={continuation, linger, #push_promise{
+			id=StreamID, promised_id=PromisedStreamID, data=HeaderFragment0}}}) ->
+	case continuation_frame_append(HeaderFragment0, HeaderFragment1, State) of
+		{ok, HeaderData} ->
+			linger_push_promise_decode(HeaderData, PromisedStreamID,
+				State#http2_machine{state=normal});
+		Error ->
+			Error
+	end;
+continuation_frame(#continuation{id=StreamID, head=head_fin, data=HeaderFragment1},
 		State=#http2_machine{state={continuation, linger,
 			Frame=#headers{id=StreamID, data=HeaderFragment0}}}) ->
 	case continuation_frame_append(HeaderFragment0, HeaderFragment1, State) of
@@ -1037,9 +1212,11 @@ continuation_frame(#continuation{id=StreamID, head=head_fin, data=HeaderFragment
 			id=StreamID, promised_id=PromisedStreamID, data=HeaderFragment0}}}) ->
 	case continuation_frame_append(HeaderFragment0, HeaderFragment1, State) of
 		{ok, HeaderData} ->
+			%% StreamID is the parent. The headers id is the promised stream.
 			headers_decode(#headers{id=PromisedStreamID, fin=fin,
 				head=head_fin, data=HeaderData},
-				State#http2_machine{state=normal}, Type, undefined);
+				State#http2_machine{state=normal}, Type,
+				stream_get(StreamID, State));
 		Error ->
 			Error
 	end;
@@ -1478,10 +1655,19 @@ update_window(StreamID, Size, State)
 reset_stream(StreamID, State=#http2_machine{streams=Streams0}) ->
 	case maps:take(StreamID, Streams0) of
 		{_, Streams} ->
-			{ok, stream_linger(StreamID, State#http2_machine{streams=Streams})};
+			{ok, stream_linger(StreamID, retarget_continuation(
+				State#http2_machine{streams=Streams}, StreamID))};
 		error ->
 			{error, not_found}
 	end.
+
+%% The stream was just removed. If its header block is still
+%% open, mark the continuation as linger.
+retarget_continuation(State=#http2_machine{state={continuation, _, Frame}}, StreamID)
+		when element(2, Frame) =:= StreamID ->
+	State#http2_machine{state={continuation, linger, Frame}};
+retarget_continuation(State, _) ->
+	State.
 
 %% Retrieve the buffer size for all streams.
 

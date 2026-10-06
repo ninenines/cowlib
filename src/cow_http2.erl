@@ -248,9 +248,10 @@ parse(<< Len0:24, 5:8, _:4, 0:1, FlagEndHeaders:1, _:3, StreamID:31, _:1, Promis
 	Len = Len0 - 4,
 	<< HeaderBlockFragment:Len/binary, Rest/bits >> = Rest0,
 	{ok, {push_promise, StreamID, parse_head_fin(FlagEndHeaders), PromisedStreamID, HeaderBlockFragment}, Rest};
-parse(<< Len0:24, 5:8, _:4, 1:1, FlagEndHeaders:1, _:2, StreamID:31, PadLen:8, _:1, PromisedStreamID:31, Rest0/bits >>)
+parse(<< Len0:24, 5:8, _:4, 1:1, FlagEndHeaders:1, _:2, _:1, StreamID:31,
+		PadLen:8, _:1, PromisedStreamID:31, Rest0/bits >>)
 		when byte_size(Rest0) >= Len0 - 5 ->
-	Len = Len0 - 5,
+	Len = Len0 - PadLen - 5,
 	case Rest0 of
 		<< HeaderBlockFragment:Len/binary, 0:PadLen/unit:8, Rest/bits >> ->
 			{ok, {push_promise, StreamID, parse_head_fin(FlagEndHeaders), PromisedStreamID, HeaderBlockFragment}, Rest};
@@ -319,6 +320,20 @@ parse_ping_test() ->
 	_ = [more = parse(binary:part(Ping, 0, I)) || I <- lists:seq(1, byte_size(Ping) - 1)],
 	{ok, {ping, 1234567890}, <<>>} = parse(Ping),
 	{ok, {ping, 1234567890}, << 42 >>} = parse(<< Ping/binary, 42 >>),
+	ok.
+
+parse_push_promise_padded_test() ->
+	Pad0 = << 5:24, 5:8, 16#0c:8, 0:1, 1:31, 0:8, 0:1, 2:31 >>,
+	_ = [more = parse(binary:part(Pad0, 0, I)) || I <- lists:seq(1, byte_size(Pad0) - 1)],
+	{ok, {push_promise, 1, head_fin, 2, <<>>}, <<>>} = parse(Pad0),
+	{ok, {push_promise, 1, head_fin, 2, <<>>}, << 42 >>} = parse(<< Pad0/binary, 42 >>),
+	{ok, {push_promise, 1, head_nofin, 2, <<>>}, <<>>} =
+		parse(<< 5:24, 5:8, 16#08:8, 0:1, 1:31, 0:8, 0:1, 2:31 >>),
+	Pad2 = << 8:24, 5:8, 16#0c:8, 0:1, 1:31, 2:8, 0:1, 2:31, 16#82, 0, 0 >>,
+	{ok, {push_promise, 1, head_fin, 2, << 16#82 >>}, << 42 >>} =
+		parse(<< Pad2/binary, 42 >>),
+	{connection_error, protocol_error, _} =
+		parse(<< 8:24, 5:8, 16#0c:8, 0:1, 1:31, 2:8, 0:1, 2:31, 16#82, 1, 1 >>),
 	ok.
 
 parse_windows_update_test() ->

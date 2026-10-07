@@ -329,6 +329,9 @@ parse_header(<< _:2, 1:1, _/bits >>, #{deflate := _}, _) -> error;
 parse_header(<< _:3, 1:1, _/bits >>, #{deflate := _}, _) -> error;
 %% No extension defines RSV1 for control frames.
 parse_header(<< _:1, 1:1, _:2, Opcode:4, _/bits >>, _, _) when Opcode >= 8 -> error;
+%% permessage-deflate sets RSV1 on the first frame only.
+parse_header(<< _:1, 1:1, _:2, 0:4, _/bits >>, _, _) ->
+	error;
 %% Invalid opcode. Note that these opcodes may be used by extensions.
 parse_header(<< _:4, 3:4, _/bits >>, _, _) -> error;
 parse_header(<< _:4, 4:4, _/bits >>, _, _) -> error;
@@ -936,6 +939,31 @@ parse_header_rejects_rsv1_control_test_() ->
 			end,
 			error = parse_header(Frame, Ext, Frag)
 		end} || {Opcode, Payload, ExtName, Frag} <- Tests].
+
+%% {fin, frame, extensions, fragmentation state}.
+parse_header_rejects_rsv1_continuation_test_() ->
+	{ok, _, Exts} = negotiate_permessage_deflate([], #{}, #{}),
+	Tests = [
+		{1, <<1:1, 1:1, 0:2, 0:4, 0:1, 1:7, "Z">>, Exts,
+			{nofin, text, <<0:3>>}},
+		{1, <<1:1, 1:1, 0:2, 0:4, 0:1, 0:7>>, Exts,
+			{nofin, text, <<0:3>>}},
+		{0, <<0:1, 1:1, 0:2, 0:4, 0:1, 1:7, "Z">>, Exts,
+			{nofin, text, <<0:3>>}},
+		{1, <<1:1, 1:1, 0:2, 0:4, 0:1, 1:7, "Z">>, Exts,
+			{nofin, text, <<1:1, 0:2>>}},
+		{1, <<1:1, 1:1, 0:2, 0:4, 0:1, 0:7>>, Exts,
+			{nofin, text, <<1:1, 0:2>>}},
+		{1, <<1:1, 1:1, 0:2, 0:4>>, Exts,
+			{nofin, text, <<0:3>>}},
+		{1, <<1:1, 1:1, 0:2, 0:4, 0:1, 1:7, "Z">>, #{other => true},
+			{nofin, text, <<0:3>>}},
+		{1, <<1:1, 1:1, 0:2, 0:4, 0:1, 0:7>>, #{}, undefined}
+	],
+	[{iolist_to_binary(io_lib:format("~p ~p ~p ~p", [Fin, Frame, map_size(Ext), Frag])),
+		fun() ->
+			error = parse_header(Frame, Ext, Frag)
+		end} || {Fin, Frame, Ext, Frag} <- Tests].
 
 -endif.
 

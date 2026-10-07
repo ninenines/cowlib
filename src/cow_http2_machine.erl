@@ -191,24 +191,36 @@
 -spec init(client | server, opts()) -> {ok, iodata(), http2_machine()}.
 init(client, Opts) ->
 	NextSettings = settings_init(Opts),
-	client_preface(#http2_machine{
+	client_preface(init_encode_max_size(#http2_machine{
 		mode=client,
 		opts=Opts,
 		preface_timer=start_timer(preface_timeout, Opts),
 		settings_timer=start_timer(settings_timeout, Opts),
 		next_settings=NextSettings,
 		local_streamid=1
-	});
+	}));
 init(server, Opts) ->
 	NextSettings = settings_init(Opts),
-	common_preface(#http2_machine{
+	common_preface(init_encode_max_size(#http2_machine{
 		mode=server,
 		opts=Opts,
 		preface_timer=start_timer(preface_timeout, Opts),
 		settings_timer=start_timer(settings_timeout, Opts),
 		next_settings=NextSettings,
 		local_streamid=2
-	}).
+	})).
+
+%% A max_encode_table_size below the protocol default of 4096 applies
+%% now. The current HPACK size stays 4096 so the first header block
+%% announces the reduction. A larger value waits for the peer.
+init_encode_max_size(State=#http2_machine{opts=Opts, encode_state=EncodeState}) ->
+	case maps:get(max_encode_table_size, Opts, 4096) of
+		Max when Max < 4096 ->
+			State#http2_machine{encode_state=
+				cow_hpack:set_max_size(Max, EncodeState)};
+		_ ->
+			State
+	end.
 
 %% @todo Cowlib 3.0: always include MessageTag in the timer message
 %% (use 'undefined' if the option is missing).
@@ -836,6 +848,31 @@ settings_frame(_F, State) ->
 	{error, {connection_error, protocol_error,
 		'The preface must begin with a SETTINGS frame. (RFC7540 3.5)'},
 		State}.
+
+-ifdef(TEST).
+
+%% {Mode, Opts, Header block}.
+%% :status 200 is static index 8. A lower cap prefixes a size update.
+init_encode_max_size_test_() ->
+	Tests = [
+		{server, #{max_encode_table_size => 0}, <<16#20, 16#88>>},
+		{client, #{max_encode_table_size => 0}, <<16#20, 16#88>>},
+		{server, #{max_encode_table_size => 4095}, <<16#3f, 16#e0, 16#1f, 16#88>>},
+		{client, #{max_encode_table_size => 4095}, <<16#3f, 16#e0, 16#1f, 16#88>>},
+		{server, #{}, <<16#88>>},
+		{server, #{max_encode_table_size => 4096}, <<16#88>>},
+		{server, #{max_encode_table_size => 4097}, <<16#88>>}
+	],
+	[{iolist_to_binary(io_lib:format("~0p ~0p", [Mode, Opts])), fun() ->
+		{ok, _, #http2_machine{encode_state=Enc}} = init(Mode, Opts#{
+			preface_timeout => infinity,
+			settings_timeout => infinity
+		}),
+		{Block, _} = cow_hpack:encode([{<<":status">>, <<"200">>}], Enc),
+		Expected = iolist_to_binary(Block)
+	end} || {Mode, Opts, Expected} <- Tests].
+
+-endif.
 
 %% When SETTINGS_INITIAL_WINDOW_SIZE changes we need to update
 %% the local stream windows for all active streams and perhaps

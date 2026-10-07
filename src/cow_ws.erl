@@ -262,25 +262,13 @@ set_owner(Pid, Inflate, Deflate) ->
 
 %% @doc Negotiate the x-webkit-deflate-frame extension.
 %%
-%% The implementation is very basic and none of the parameters
-%% are currently supported.
+%% Older Cowboy calls this function. It should be removed in 3.0.
 
 -spec negotiate_x_webkit_deflate_frame(
-	[binary() | {binary(), binary()}], Exts, deflate_opts())
-	-> ignore | {ok, binary(), Exts} when Exts::extensions().
-negotiate_x_webkit_deflate_frame(_, #{deflate := _}, _) ->
-	ignore;
-negotiate_x_webkit_deflate_frame(_Params, Extensions, Opts) ->
-	% Since we are negotiating an unconstrained deflate-frame
-	% then we must be willing to accept frames using the
-	% maximum window size which is 2^15.
-	{Inflate, Deflate} = init_permessage_deflate(15, 15, Opts),
-	{ok, <<"x-webkit-deflate-frame">>,
-		Extensions#{
-			deflate => Deflate,
-			deflate_takeover => takeover,
-			inflate => Inflate,
-			inflate_takeover => takeover}}.
+	[binary() | {binary(), binary()}], extensions(), deflate_opts())
+	-> ignore.
+negotiate_x_webkit_deflate_frame(_, _, _) ->
+	ignore.
 
 %% @doc Validate the negotiated permessage-deflate extension.
 
@@ -336,7 +324,7 @@ parse_response_permessage_deflate_params(_, _, _, _, _) ->
 %% RSV bits MUST be 0 unless an extension is negotiated
 %% that defines meanings for non-zero values.
 parse_header(<< _:1, Rsv:3, _/bits >>, Extensions, _) when Extensions =:= #{}, Rsv =/= 0 -> error;
-%% Last 2 RSV bits MUST be 0 if deflate-frame extension is used.
+%% Last 2 RSV bits MUST be 0 if permessage-deflate is used.
 parse_header(<< _:2, 1:1, _/bits >>, #{deflate := _}, _) -> error;
 parse_header(<< _:3, 1:1, _/bits >>, #{deflate := _}, _) -> error;
 %% No extension defines RSV1 for control frames.
@@ -989,7 +977,7 @@ frame({pong, Payload}, _) ->
 	Len = iolist_size(Payload),
 	true = Len =< 125,
 	[<< 1:1, 0:3, 10:4, 0:1, Len:7 >>, Payload];
-%% Data frames, deflate-frame extension.
+%% Data frames, permessage-deflate.
 frame({text, Payload}, #{deflate := Deflate, deflate_takeover := TakeOver})
 		when Deflate =/= false ->
 	Payload2 = deflate_frame(Payload, Deflate, TakeOver),
@@ -1037,7 +1025,7 @@ masked_frame({pong, Payload}, _) ->
 	true = Len =< 125,
 	MaskKeyBin = << MaskKey:32 >> = crypto:strong_rand_bytes(4),
 	[<< 1:1, 0:3, 10:4, 1:1, Len:7 >>, MaskKeyBin, mask(iolist_to_binary(Payload), MaskKey, <<>>)];
-%% Data frames, deflate-frame extension.
+%% Data frames, permessage-deflate.
 masked_frame({text, Payload}, #{deflate := Deflate, deflate_takeover := TakeOver})
 		when Deflate =/= false ->
 	MaskKeyBin = << MaskKey:32 >> = crypto:strong_rand_bytes(4),

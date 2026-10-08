@@ -1744,12 +1744,12 @@ other_content_range_resp(<< C, R/bits >>, Unit, Resp) when ?IS_CHAR(C) -> other_
 content_range() ->
 	?LET(ContentRange,
 		oneof([
-			?SUCHTHAT({bytes, First, Last, Complete},
-				{bytes, non_neg_integer(), non_neg_integer(), non_neg_integer()},
-				First =< Last andalso Last < Complete),
-			?SUCHTHAT({bytes, First, Last, '*'},
-				{bytes, non_neg_integer(), non_neg_integer(), '*'},
-				First =< Last),
+			?LET({First, LastDiff, CompleteDiff},
+				{non_neg_integer(), non_neg_integer(), pos_integer()},
+				{bytes, First, First + LastDiff, First + LastDiff + CompleteDiff}),
+			?LET({First, LastDiff},
+				{non_neg_integer(), non_neg_integer()},
+				{bytes, First, First + LastDiff, '*'}),
 			{bytes, '*', non_neg_integer()},
 			{token(), ?LET(L, list(abnf_char()), list_to_binary(L))}
 		]),

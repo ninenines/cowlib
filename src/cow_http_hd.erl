@@ -2088,8 +2088,7 @@ horse_parse_expires_invalid() ->
 %% differentiate them.
 %%
 %% The following valid hosts are currently rejected: IPv6
-%% addresses with a zone identifier; IPvFuture addresses;
-%% and percent-encoded addresses.
+%% addresses with a zone identifier; and IPvFuture addresses.
 
 -spec parse_host(binary()) -> {binary(), 0..65535 | undefined}.
 parse_host(<< $[, R/bits >>) ->
@@ -2110,16 +2109,34 @@ reg_name(<<>>, Name) ->
 reg_name(<< $:, Port0/bits >>, Name) when byte_size(Port0) =< 5 ->
 	{Port, <<>>} = digits(Port0),
 	{Name, Port};
+%% Percent-encoded octets are allowed in reg-name. (RFC3986 3.2.2)
+%% A percent-encoded ":" (%3A) is part of the name, not a port separator.
+reg_name(<< $%, H, L, R/bits >>, Name) when ?IS_HEX(H), ?IS_HEX(L) ->
+	reg_name(R, << Name/binary, $%, (?LC(H)), (?LC(L)) >>);
 reg_name(<< C, R/bits >>, Name) when ?IS_URI_UNRESERVED(C) or ?IS_URI_SUB_DELIMS(C) ->
 	?LOWER(reg_name, R, Name).
 
 -ifdef(TEST).
 host_chars() -> "!$&'()*+,-.0123456789;=ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz~".
-host() -> vector(1, 255, elements(host_chars())).
+
+%% Percent-encoded octets are one triplet. host/0 stays free of "%"
+%% because origin parsing rejects percent-encoding.
+hex_chars() -> "0123456789ABCDEFabcdef".
+pct_encoded() ->
+	?LET({H, L}, {elements(hex_chars()), elements(hex_chars())},
+		[$%, H, L]).
+reg_name_piece() ->
+	frequency([
+		{5, ?LET(C, elements(host_chars()), [C])},
+		{1, pct_encoded()}
+	]).
+reg_name_host() ->
+	?LET(Pieces, vector(1, 255, reg_name_piece()),
+		lists:append(Pieces)).
 
 host_port() ->
 	?LET({Host, Port},
-		{host(), oneof([undefined, integer(1, 65535)])},
+		{reg_name_host(), oneof([undefined, integer(1, 65535)])},
 		begin
 			HostBin = list_to_binary(Host),
 			{{?LOWER(HostBin), Port},
@@ -2142,7 +2159,14 @@ parse_host_test_() ->
 		{<<"[2001:db8::1]:8080">>, {<<"[2001:db8::1]">>, 8080}},
 		{<<"[2001:db8::1]">>, {<<"[2001:db8::1]">>, undefined}},
 		{<<"[::ffff:192.0.2.1]:8080">>, {<<"[::ffff:192.0.2.1]">>, 8080}},
-		{<<"[::ffff:192.0.2.1]">>, {<<"[::ffff:192.0.2.1]">>, undefined}}
+		{<<"[::ffff:192.0.2.1]">>, {<<"[::ffff:192.0.2.1]">>, undefined}},
+		%% Percent-encoded reg-name (RFC3986 3.2.2). Hex digits are lowercased.
+		{<<"%2ftmp%2ferllambda.sock">>, {<<"%2ftmp%2ferllambda.sock">>, undefined}},
+		{<<"%2Ftmp%2Ferllambda.sock">>, {<<"%2ftmp%2ferllambda.sock">>, undefined}},
+		{<<"%2ftmp%2ferllambda.sock:8080">>, {<<"%2ftmp%2ferllambda.sock">>, 8080}},
+		%% Percent-encoded ":" is not a port separator.
+		{<<"example%3Aorg">>, {<<"example%3aorg">>, undefined}},
+		{<<"example%3Aorg:8080">>, {<<"example%3aorg">>, 8080}}
 	],
 	[{V, fun() -> R = parse_host(V) end} || {V, R} <- Tests].
 
@@ -2155,7 +2179,11 @@ parse_host_error_test_() ->
 		<<"[2001:db8::1]:-8080">>,
 		<<"[2001:db8::1]:-0">>,
 		<<"[2001:db8::1]:+0">>,
-		<<"[2001:db8::1]:+8080">>
+		<<"[2001:db8::1]:+8080">>,
+		<<"%">>,
+		<<"%2">>,
+		<<"%zz">>,
+		<<"example%">>
 	],
 	[{V, fun() -> ?assertError(_, parse_host(V)) end} || V <- Tests].
 
@@ -2460,6 +2488,7 @@ default_port(<< "https" >>) -> 443.
 
 -ifdef(TEST).
 scheme() -> oneof([<<"http">>, <<"https">>]).
+host() -> vector(1, 255, elements(host_chars())).
 
 scheme_host_port() ->
 	?LET({Scheme, Host, Port},

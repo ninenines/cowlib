@@ -432,6 +432,12 @@ maybe_discard_result(FrameResult) ->
 	FrameResult.
 
 %% DATA frame.
+%%
+%% A single on-wire DATA frame may be forwarded as multiple {data, ...}
+%% terms when cow_http2:parse/1,2 and parse_data/2 split the payload.
+%% Intermediate fragments always have IsFin = nofin; only the final
+%% fragment carries the frame's END_STREAM flag. An empty final fragment
+%% is used when END_STREAM is signaled after padding has been drained.
 
 data_frame({data, StreamID, _, _}, State=#http2_machine{mode=Mode,
 		local_streamid=LocalStreamID, remote_streamid=RemoteStreamID})
@@ -504,6 +510,66 @@ is_body_size_valid(#stream{remote=fin, remote_expected_size=Expected,
 %% We finished reading the body and the size read is not the one expected.
 is_body_size_valid(_) ->
 	false.
+
+-ifdef(TEST).
+split_data_frames_test() ->
+	{ok, _, State0} = init(server, #{preface_timeout => infinity,
+		settings_timeout => infinity}),
+	%% Move past the settings/preface state.
+	{ok, State1} = frame(settings_ack, State0#http2_machine{state=normal}),
+	%% Open a remote stream via HEADERS with content-length 11.
+	{HeaderBlock, _} = cow_hpack:encode([
+		{<<":method">>, <<"POST">>},
+		{<<":scheme">>, <<"https">>},
+		{<<":path">>, <<"/">>},
+		{<<":authority">>, <<"localhost">>},
+		{<<"content-length">>, <<"11">>}
+	]),
+	{ok, {headers, 1, nofin, _, _, 11}, State2} = frame(
+		{headers, 1, nofin, head_fin, iolist_to_binary(HeaderBlock)}, State1),
+	%% Incremental DATA fragments mirroring cow_http2:parse_data/2.
+	{ok, {data, 1, nofin, <<"Hello">>}, State3} = frame({data, 1, nofin, <<"Hello">>}, State2),
+	{ok, {data, 1, fin, <<" world">>}, State4} = frame({data, 1, fin, <<" world">>}, State3),
+	#stream{remote=fin, remote_read_size=11} = stream_get(1, State4),
+	ok.
+
+split_data_empty_fin_after_padding_test() ->
+	{ok, _, State0} = init(server, #{preface_timeout => infinity,
+		settings_timeout => infinity}),
+	{ok, State1} = frame(settings_ack, State0#http2_machine{state=normal}),
+	{HeaderBlock, _} = cow_hpack:encode([
+		{<<":method">>, <<"POST">>},
+		{<<":scheme">>, <<"https">>},
+		{<<":path">>, <<"/">>},
+		{<<":authority">>, <<"localhost">>},
+		{<<"content-length">>, <<"4">>}
+	]),
+	{ok, {headers, 1, nofin, _, _, 4}, State2} = frame(
+		{headers, 1, nofin, head_fin, iolist_to_binary(HeaderBlock)}, State1),
+	{ok, {data, 1, nofin, <<"abcd">>}, State3} = frame({data, 1, nofin, <<"abcd">>}, State2),
+	%% Empty fin fragment used when END_STREAM follows padding drain.
+	{ok, {data, 1, fin, <<>>}, State4} = frame({data, 1, fin, <<>>}, State3),
+	#stream{remote=fin, remote_read_size=4} = stream_get(1, State4),
+	ok.
+
+split_data_content_length_mismatch_test() ->
+	{ok, _, State0} = init(server, #{preface_timeout => infinity,
+		settings_timeout => infinity}),
+	{ok, State1} = frame(settings_ack, State0#http2_machine{state=normal}),
+	{HeaderBlock, _} = cow_hpack:encode([
+		{<<":method">>, <<"POST">>},
+		{<<":scheme">>, <<"https">>},
+		{<<":path">>, <<"/">>},
+		{<<":authority">>, <<"localhost">>},
+		{<<"content-length">>, <<"4">>}
+	]),
+	{ok, {headers, 1, nofin, _, _, 4}, State2} = frame(
+		{headers, 1, nofin, head_fin, iolist_to_binary(HeaderBlock)}, State1),
+	{ok, {data, 1, nofin, <<"ab">>}, State3} = frame({data, 1, nofin, <<"ab">>}, State2),
+	{error, {stream_error, 1, protocol_error, _}, _}
+		= frame({data, 1, fin, <<"c">>}, State3),
+	ok.
+-endif.
 
 %% HEADERS frame.
 %%

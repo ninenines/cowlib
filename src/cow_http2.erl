@@ -18,6 +18,7 @@
 -export([parse_sequence/1]).
 -export([parse/1]).
 -export([parse/2]).
+-export([parse_data/2]).
 -export([parse_settings_payload/1]).
 
 %% Building.
@@ -93,6 +94,11 @@
 	| {continuation, streamid(), head_fin(), binary()}.
 -export_type([frame/0]).
 
+%% Continuation state for incrementally parsed DATA frame payloads.
+%% {StreamID, IsFin, DataLenRemaining, PadLenRemaining}.
+-type data_cont() :: {streamid(), cow_http:fin(), non_neg_integer(), non_neg_integer()}.
+-export_type([data_cont/0]).
+
 %% Parsing.
 
 -spec parse_sequence(binary())
@@ -121,16 +127,30 @@ parse(Data, _) ->
 %%
 %% DATA frames.
 %%
+%% DATA payloads are forwarded as soon as they are available so
+%% callers do not need to buffer large frames (see cow_http3:parse/1
+%% and Websocket parse_payload). Padding length must be known before
+%% any data is returned; use parse_data/2 to continue.
 parse(<< _:24, 0:8, _:9, 0:31, _/bits >>) ->
 	{connection_error, protocol_error, 'DATA frames MUST be associated with a stream. (RFC7540 6.1)'};
 parse(<< 0:24, 0:8, _:4, 1:1, _:35, _/bits >>) ->
 	{connection_error, frame_size_error, 'DATA frames with padding flag MUST have a length > 0. (RFC7540 6.1)'};
 parse(<< Len0:24, 0:8, _:4, 1:1, _:35, PadLen:8, _/bits >>) when PadLen >= Len0 ->
 	{connection_error, protocol_error, 'Length of padding MUST be less than length of payload. (RFC7540 6.1)'};
-%% No padding.
+%% No padding, full payload.
 parse(<< Len:24, 0:8, _:4, 0:1, _:2, FlagEndStream:1, _:1, StreamID:31, Data:Len/binary, Rest/bits >>) ->
 	{ok, {data, StreamID, parse_fin(FlagEndStream), Data}, Rest};
-%% Padding.
+%% No padding, partial payload.
+parse(<< Len:24, 0:8, _:4, 0:1, _:2, FlagEndStream:1, _:1, StreamID:31, Data/bits >>)
+		when byte_size(Data) < Len ->
+	case Data of
+		<<>> ->
+			more;
+		_ ->
+			{more, {data, StreamID, nofin, Data},
+				{StreamID, parse_fin(FlagEndStream), Len - byte_size(Data), 0}}
+	end;
+%% Padding, full payload.
 parse(<< Len0:24, 0:8, _:4, 1:1, _:2, FlagEndStream:1, _:1, StreamID:31, PadLen:8, Rest0/bits >>)
 		when byte_size(Rest0) >= Len0 - 1 ->
 	Len = Len0 - PadLen - 1,
@@ -140,6 +160,10 @@ parse(<< Len0:24, 0:8, _:4, 1:1, _:2, FlagEndStream:1, _:1, StreamID:31, PadLen:
 		_ ->
 			{connection_error, protocol_error, 'Padding octets MUST be set to zero. (RFC7540 6.1)'}
 	end;
+%% Padding, partial payload. Pad length is known so data can be forwarded.
+parse(<< Len0:24, 0:8, _:4, 1:1, _:2, FlagEndStream:1, _:1, StreamID:31, PadLen:8, Rest0/bits >>)
+		when PadLen < Len0, byte_size(Rest0) < Len0 - 1 ->
+	data_padded_more(StreamID, parse_fin(FlagEndStream), Len0 - PadLen - 1, PadLen, Rest0);
 %%
 %% HEADERS frames.
 %%
@@ -348,7 +372,155 @@ parse_settings_test() ->
 	{ok, settings_ack, <<>>} = parse(<< 0:24, 4:8, 1:8, 0:32 >>),
 	{connection_error, protocol_error, _} = parse(<< 0:24, 4:8, 1:8, 0:1, 1:31 >>),
 	ok.
+
+parse_data_full_test() ->
+	Frame = iolist_to_binary(data(1, fin, <<"Hello world">>)),
+	{ok, {data, 1, fin, <<"Hello world">>}, <<>>} = parse(Frame),
+	{ok, {data, 1, fin, <<"Hello world">>}, << 42 >>} = parse(<< Frame/binary, 42 >>),
+	ok.
+
+parse_data_incremental_test() ->
+	Payload = <<"Hello world">>,
+	Frame = iolist_to_binary(data(7, fin, Payload)),
+	%% Header only: wait for payload bytes before returning data.
+	more = parse(binary:part(Frame, 0, 9)),
+	%% First few payload bytes are forwarded immediately.
+	{more, {data, 7, nofin, <<"Hello">>}, Cont}
+		= parse(binary:part(Frame, 0, 9 + 5)),
+	{7, fin, 6, 0} = Cont,
+	%% Continuing yields the rest with the frame's END_STREAM flag.
+	{ok, {data, 7, fin, <<" world">>}, <<>>}
+		= parse_data(<<" world">>, Cont),
+	%% Same across many small chunks.
+	Chunks = [binary:part(Payload, I, 1) || I <- lists:seq(0, byte_size(Payload) - 1)],
+	{more, {data, 7, nofin, <<"H">>}, Cont0}
+		= parse(<< (binary:part(Frame, 0, 9))/binary, (hd(Chunks))/binary >>),
+	{DataAcc, ContF} = lists:foldl(fun(C, {Acc, Cont1}) ->
+		case parse_data(C, Cont1) of
+			{more, {data, 7, nofin, D}, Cont2} ->
+				{<< Acc/binary, D/binary >>, Cont2};
+			{ok, {data, 7, fin, D}, <<>>} ->
+				{<< Acc/binary, D/binary >>, done}
+		end
+	end, {<<"H">>, Cont0}, tl(Chunks)),
+	done = ContF,
+	Payload = DataAcc,
+	ok.
+
+parse_data_padded_incremental_test() ->
+	Data = <<"abcd">>,
+	PadLen = 3,
+	Len0 = 1 + byte_size(Data) + PadLen,
+	Frame = << Len0:24, 0:8, 0:4, 1:1, 0:2, 1:1, 0:1, 5:31,
+		PadLen:8, Data/binary, 0:PadLen/unit:8 >>,
+	%% Pad length must be present before any data is returned.
+	more = parse(binary:part(Frame, 0, 9)),
+	more = parse(binary:part(Frame, 0, 10)),
+	%% Partial data after pad length is forwarded.
+	{more, {data, 5, nofin, <<"ab">>}, Cont}
+		= parse(binary:part(Frame, 0, 10 + 2)),
+	{5, fin, 2, 3} = Cont,
+	{more, {data, 5, nofin, <<"cd">>}, Cont2}
+		= parse_data(<<"cd">>, Cont),
+	{5, fin, 0, 3} = Cont2,
+	%% Padding drained with no extra data; END_STREAM on completion.
+	{more, Cont3} = parse_data(<<0, 0>>, Cont2),
+	{5, fin, 0, 1} = Cont3,
+	{ok, {data, 5, fin, <<>>}, <<>>} = parse_data(<<0>>, Cont3),
+	%% Full padded frame still works in one shot.
+	{ok, {data, 5, fin, Data}, <<>>} = parse(Frame),
+	ok.
+
+parse_data_padded_bad_padding_test() ->
+	Data = <<"ab">>,
+	PadLen = 2,
+	Len0 = 1 + byte_size(Data) + PadLen,
+	%% Non-zero padding octet.
+	Frame = << Len0:24, 0:8, 0:4, 1:1, 0:2, 0:1, 0:1, 3:31,
+		PadLen:8, Data/binary, 1, 0 >>,
+	{connection_error, protocol_error, _} = parse(Frame),
+	{more, {data, 3, nofin, <<"ab">>}, Cont}
+		= parse(binary:part(Frame, 0, 10 + 2)),
+	{connection_error, protocol_error, _} = parse_data(<<1, 0>>, Cont),
+	ok.
+
+parse_data_nofin_incremental_test() ->
+	Frame = iolist_to_binary(data(9, nofin, <<"xy">>)),
+	{more, {data, 9, nofin, <<"x">>}, Cont}
+		= parse(binary:part(Frame, 0, 10)),
+	{ok, {data, 9, nofin, <<"y">>}, <<>>} = parse_data(<<"y">>, Cont),
+	ok.
 -endif.
+
+%% Continue parsing a DATA frame after parse/1 returned {more, ..., Cont}.
+-spec parse_data(binary(), data_cont())
+	-> {ok, {data, streamid(), cow_http:fin(), binary()}, binary()}
+	| {more, {data, streamid(), cow_http:fin(), binary()}, data_cont()}
+	| {more, data_cont()}
+	| {connection_error, error(), atom()}.
+parse_data(<<>>, Cont) ->
+	{more, Cont};
+parse_data(Data, {StreamID, IsFin, DataLen, PadLen}) when DataLen > 0 ->
+	Take = min(byte_size(Data), DataLen),
+	<< Chunk:Take/binary, Rest/bits >> = Data,
+	case DataLen - Take of
+		0 ->
+			data_after_payload(Chunk, StreamID, IsFin, Rest, PadLen);
+		DataLen2 ->
+			{more, {data, StreamID, nofin, Chunk},
+				{StreamID, IsFin, DataLen2, PadLen}}
+	end;
+parse_data(Data, {StreamID, IsFin, 0, PadLen}) ->
+	data_padding(StreamID, IsFin, Data, PadLen).
+
+data_padded_more(_StreamID, _IsFin, DataLen, _PadLen, <<>>) when DataLen > 0 ->
+	more;
+data_padded_more(StreamID, IsFin, DataLen, PadLen, Data) when byte_size(Data) =< DataLen ->
+	case Data of
+		<<>> ->
+			more;
+		_ ->
+			{more, {data, StreamID, nofin, Data},
+				{StreamID, IsFin, DataLen - byte_size(Data), PadLen}}
+	end;
+data_padded_more(StreamID, IsFin, DataLen, PadLen, Data0) ->
+	<< Data:DataLen/binary, Pad/bits >> = Data0,
+	data_after_payload(Data, StreamID, IsFin, Pad, PadLen).
+
+data_after_payload(Chunk, StreamID, IsFin, Rest, 0) ->
+	{ok, {data, StreamID, IsFin, Chunk}, Rest};
+data_after_payload(<<>>, StreamID, IsFin, PadAndRest, PadLen) ->
+	data_padding(StreamID, IsFin, PadAndRest, PadLen);
+data_after_payload(Chunk, StreamID, IsFin, PadAndRest, PadLen) ->
+	case data_padding(StreamID, IsFin, PadAndRest, PadLen) of
+		{ok, {data, StreamID, IsFin, <<>>}, Rest} ->
+			{ok, {data, StreamID, IsFin, Chunk}, Rest};
+		{more, Cont} ->
+			{more, {data, StreamID, nofin, Chunk}, Cont};
+		Error = {connection_error, _, _} ->
+			Error
+	end.
+
+data_padding(StreamID, IsFin, Data, PadLen) when byte_size(Data) >= PadLen ->
+	case Data of
+		<< 0:PadLen/unit:8, Rest/bits >> ->
+			{ok, {data, StreamID, IsFin, <<>>}, Rest};
+		<< _:PadLen/binary, _/bits >> ->
+			{connection_error, protocol_error,
+				'Padding octets MUST be set to zero. (RFC7540 6.1)'}
+	end;
+data_padding(StreamID, IsFin, Data, PadLen) ->
+	case is_zero_padding(Data) of
+		true ->
+			{more, {StreamID, IsFin, 0, PadLen - byte_size(Data)}};
+		false ->
+			{connection_error, protocol_error,
+				'Padding octets MUST be set to zero. (RFC7540 6.1)'}
+	end.
+
+is_zero_padding(<<>>) -> true;
+is_zero_padding(<< 0, Rest/bits >>) -> is_zero_padding(Rest);
+is_zero_padding(_) -> false.
 
 parse_fin(0) -> nofin;
 parse_fin(1) -> fin.

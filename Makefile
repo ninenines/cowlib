@@ -20,7 +20,7 @@ TEST_DEPS = $(if $(CI_ERLANG_MK),ci.erlang.mk) base32 horse proper \
 dep_base32 = git https://github.com/dnsimple/base32_erlang v1.0.0
 dep_horse = git https://github.com/ninenines/horse.git master
 dep_decimal = git https://github.com/egobrain/decimal 0.6.2
-dep_structured-header-tests = git https://github.com/httpwg/structured-header-tests faed1f92942abd4fb5d61b1f9f0dc359f499f1d7
+dep_structured-header-tests = git https://github.com/httpwg/structured-header-tests 00462dd7938b43bf596cb2af6a373d9c928a6cbe
 dep_uritemplate-tests = git https://github.com/uri-templates/uritemplate-test master
 
 # CI configuration.

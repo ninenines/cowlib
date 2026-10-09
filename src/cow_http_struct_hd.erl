@@ -511,7 +511,8 @@ bare_item({token, Token}) ->
 	Token;
 bare_item({binary, Binary}) ->
 	[$:, base64:encode(Binary), $:];
-bare_item({decimal, {Base, Exp}}) when Exp >= 0 ->
+bare_item({decimal, {Base, Exp}})
+		when is_integer(Base), is_integer(Exp), Exp >= 0 ->
 	Mul = case Exp of
 		0 -> 1;
 		1 -> 10;
@@ -534,19 +535,20 @@ bare_item({decimal, {Base, Exp}}) when Exp >= 0 ->
 	Bin = integer_to_binary(Base * Mul),
 	true = byte_size(Bin) =< MaxLenWithSign,
 	[Bin, <<".0">>];
-bare_item({decimal, {Base, -1}}) ->
+bare_item({decimal, {Base, -1}}) when is_integer(Base) ->
 	Int = Base div 10,
 	Frac = abs(Base) rem 10,
 	decimal_out(Base, Int, integer_to_binary(Frac));
-bare_item({decimal, {Base, -2}}) ->
+bare_item({decimal, {Base, -2}}) when is_integer(Base) ->
 	Int = Base div 100,
 	Frac = abs(Base) rem 100,
 	decimal_out(Base, Int, decimal_frac(Frac, 2));
-bare_item({decimal, {Base, -3}}) ->
+bare_item({decimal, {Base, -3}}) when is_integer(Base) ->
 	Int = Base div 1000,
 	Frac = abs(Base) rem 1000,
 	decimal_out(Base, Int, decimal_frac(Frac, 3));
-bare_item({decimal, {Base, Exp}}) ->
+%% exp_div/1 only terminates for an integer exponent.
+bare_item({decimal, {Base, Exp}}) when is_integer(Base), is_integer(Exp) ->
 	Div = exp_div(Exp),
 	Int0 = Base div Div,
 	Frac0 = abs(Base) rem Div,
@@ -799,7 +801,12 @@ serialize_limits_test_() ->
 		{{display_string, <<16#c0, 16#80>>}, <<"display string overlong utf-8">>},
 		{{display_string, <<16#ed, 16#a0, 16#80>>}, <<"display string utf-8 surrogate">>},
 		{{decimal, {9999999999999995, -4}}, <<"decimal rounds past 12 integer digits">>},
-		{{decimal, {-9999999999999995, -4}}, <<"negative decimal rounds past 12 integer digits">>}
+		{{decimal, {-9999999999999995, -4}}, <<"negative decimal rounds past 12 integer digits">>},
+		{{decimal, {1, -4.0}}, <<"decimal exponent float">>},
+		{{decimal, {1, -3.0}}, <<"decimal exponent float at scale -3">>},
+		{{decimal, {1, -1.0}}, <<"decimal exponent float at scale -1">>},
+		{{decimal, {1.0, -1}}, <<"decimal base float">>},
+		{{decimal, {1.0, 0}}, <<"decimal base float at scale 0">>}
 	],
 	[{Res, fun() ->
 		Res = iolist_to_binary(item({item, Value, []}))

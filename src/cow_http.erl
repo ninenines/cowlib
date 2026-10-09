@@ -354,6 +354,8 @@ response_expected_size(Headers, ReqMethod, IsFin, PseudoHeaders = #{status := St
 			return_headers(Headers, PseudoHeaders, undefined);
 		[_] when Status >= 100, Status =< 199 ->
 			{error, invalid_content_length_header_1xx};
+		[<<"0">>] when Status =:= 204, ReqMethod =/= <<"CONNECT">> ->
+			return_headers(Headers, PseudoHeaders, 0);
 		[_] when Status =:= 204 ->
 			{error, invalid_content_length_header_204};
 		[_] when Status >= 200, Status =< 299, ReqMethod =:= <<"CONNECT">> ->

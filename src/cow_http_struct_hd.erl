@@ -425,6 +425,8 @@ e2tb(#{<<"__type">> := <<"date">>, <<"value">> := V}) ->
 	{date, V};
 e2tb(#{<<"__type">> := <<"displaystring">>, <<"value">> := V}) ->
 	{display_string, V};
+e2tb(#{<<"__type">> := <<"decimal">>, <<"value">> := {Base, Exp}}) ->
+	{decimal, {Base, Exp}};
 e2tb(V) when is_binary(V) ->
 	{string, V};
 e2tb(V) when is_float(V) ->
@@ -472,9 +474,17 @@ dictionary(Map) when is_map(Map) ->
 	dictionary(maps:to_list(Map));
 dictionary(KVList) when is_list(KVList) ->
 	lists:join(<<", ">>, [
-		case Value of
-			true -> Key;
-			_ -> [Key, $=, item_or_inner_list(Value)]
+		begin
+			ok = validate_key(Key),
+			case Value of
+				%% Boolean true omits =?1; parameters are kept.
+				true ->
+					Key;
+				{item, true, Params} ->
+					[Key, params(Params)];
+				_ ->
+					[Key, $=, item_or_inner_list(Value)]
+			end
 		end
 	|| {Key, Value} <- KVList]).
 
@@ -527,38 +537,53 @@ bare_item({decimal, {Base, Exp}}) when Exp >= 0 ->
 bare_item({decimal, {Base, -1}}) ->
 	Int = Base div 10,
 	Frac = abs(Base) rem 10,
-	[decimal_int(Base, Int), $., integer_to_binary(Frac)];
+	decimal_out(Base, Int, integer_to_binary(Frac));
 bare_item({decimal, {Base, -2}}) ->
 	Int = Base div 100,
 	Frac = abs(Base) rem 100,
-	[decimal_int(Base, Int), $., decimal_frac(Frac, 2)];
+	decimal_out(Base, Int, decimal_frac(Frac, 2));
 bare_item({decimal, {Base, -3}}) ->
 	Int = Base div 1000,
 	Frac = abs(Base) rem 1000,
-	[decimal_int(Base, Int), $., decimal_frac(Frac, 3)];
+	decimal_out(Base, Int, decimal_frac(Frac, 3));
 bare_item({decimal, {Base, Exp}}) ->
 	Div = exp_div(Exp),
 	Int0 = Base div Div,
-	true = abs(Int0) < 1000000000000,
 	Frac0 = abs(Base) rem Div,
 	DivFrac = Div div 1000,
 	Frac1 = Frac0 div DivFrac,
-	{Int, Frac} = if
-		(Frac0 rem DivFrac) > (DivFrac div 2) ->
-			case Frac1 of
-				999 when Int0 < 0 -> {Int0 - 1, 0};
-				999 -> {Int0 + 1, 0};
-				_ -> {Int0, Frac1 + 1}
-			end;
+	Rem = Frac0 rem DivFrac,
+	Half = DivFrac div 2,
+	%% Nearest, ties to even (RFC9651 4.1.5).
+	RoundUp = (Rem > Half) orelse
+		((Rem =:= Half) andalso ((Frac1 rem 2) =:= 1)),
+	{Int, Frac} = case RoundUp of
+		false ->
+			{Int0, Frac1};
+		true when Frac1 =:= 999, Base < 0 ->
+			{Int0 - 1, 0};
+		true when Frac1 =:= 999 ->
+			{Int0 + 1, 0};
 		true ->
-			{Int0, Frac1}
+			{Int0, Frac1 + 1}
 	end,
-	[decimal_int(Base, Int), $., decimal_frac(Frac, 3)];
-bare_item({date, Integer}) when is_integer(Integer) ->
+	%% Sign is chosen after rounding. Rounded zero has no sign (RFC9651).
+	SignedBase = case Int =:= 0 andalso Frac =:= 0 of
+		true -> 0;
+		false -> Base
+	end,
+	decimal_out(SignedBase, Int, significant_frac(Frac));
+bare_item({date, Integer}) when is_integer(Integer),
+		Integer >= -999999999999999, Integer =< 999999999999999 ->
 	[$@, integer_to_binary(Integer)];
 bare_item({display_string, String}) ->
-	[$%, $", encode_display_string(String, <<>>), $"];
-bare_item(Integer) when is_integer(Integer) ->
+	%% Invalid UTF-8 fails serialization.
+	case unicode:characters_to_binary(String, utf8) of
+		Utf8 when is_binary(Utf8) ->
+			[$%, $", encode_display_string(Utf8, <<>>), $"]
+	end;
+bare_item(Integer) when is_integer(Integer),
+		Integer >= -999999999999999, Integer =< 999999999999999 ->
 	integer_to_binary(Integer);
 bare_item(true) ->
 	<<"?1">>;
@@ -575,10 +600,33 @@ validate_token1(<<C,R/bits>>)
 validate_token1(<<>>) ->
 	ok.
 
+validate_key(<<C,R/bits>>) when ?IS_LC_ALPHA(C) or (C =:= $*) ->
+	validate_key1(R).
+
+validate_key1(<<C,R/bits>>)
+		when ?IS_LC_ALPHA(C) or ?IS_DIGIT(C)
+			or (C =:= $_) or (C =:= $-) or (C =:= $.) or (C =:= $*) ->
+	validate_key1(R);
+validate_key1(<<>>) ->
+	ok.
+
 decimal_int(Base, 0) when Base < 0 ->
 	<<"-0">>;
 decimal_int(_, Int) ->
 	integer_to_binary(Int).
+
+decimal_out(Base, Int, Frac) ->
+	true = abs(Int) < 1000000000000,
+	[decimal_int(Base, Int), $., Frac].
+
+%% Trailing zeros are not significant after rounding to three places.
+significant_frac(Frac) ->
+	case iolist_to_binary(decimal_frac(Frac, 3)) of
+		<<$0,$0,$0>> -> <<"0">>;
+		<<A,$0,$0>> -> <<A>>;
+		<<A,B,$0>> -> <<A,B>>;
+		Bin -> Bin
+	end.
 
 decimal_frac(Frac, 2) when Frac < 10 ->
 	[$0, integer_to_binary(Frac)];
@@ -595,7 +643,9 @@ exp_div(N) -> 10 * exp_div(N + 1).
 escape_string(<<>>, Acc) -> Acc;
 escape_string(<<$\\,R/bits>>, Acc) -> escape_string(R, <<Acc/binary,$\\,$\\>>);
 escape_string(<<$",R/bits>>, Acc) -> escape_string(R, <<Acc/binary,$\\,$">>);
-escape_string(<<C,R/bits>>, Acc) -> escape_string(R, <<Acc/binary,C>>).
+escape_string(<<C,R/bits>>, Acc)
+		when C >= 16#20, C =< 16#7e ->
+	escape_string(R, <<Acc/binary,C>>).
 
 encode_display_string(<<>>, Acc) ->
 	Acc;
@@ -611,8 +661,12 @@ hex_digit(N) -> $a + N - 10.
 
 params(Params) ->
 	[case Param of
-		{Key, true} -> [$;, Key];
-		{Key, Value} -> [$;, Key, $=, bare_item(Value)]
+		{Key, true} ->
+			ok = validate_key(Key),
+			[$;, Key];
+		{Key, Value} ->
+			ok = validate_key(Key),
+			[$;, Key, $=, bare_item(Value)]
 	end || Param <- Params].
 
 -ifdef(TEST).
@@ -632,7 +686,9 @@ item_decimal_signed_zero_test_() ->
 		{{decimal, {-12, -2}}, <<"-0.12">>},
 		{{decimal, {-15, -1}}, <<"-1.5">>},
 		{{decimal, {-123, -2}}, <<"-1.23">>},
-		{{decimal, {-10, -1}}, <<"-1.0">>}
+		{{decimal, {-10, -1}}, <<"-1.0">>},
+		{{decimal, {50, -2}}, <<"0.50">>},
+		{{decimal, {500, -3}}, <<"0.500">>}
 	],
 	[{Res, fun() -> Res = iolist_to_binary(item({item, Dec, []})) end}
 		|| {Dec, Res} <- Tests].
@@ -668,4 +724,106 @@ struct_hd_item_test() ->
 	<<"token">> = iolist_to_binary(item({item, {token, <<"token">>}, []})),
 	?assertError(_, item({item, {token, <<"tok\0en">>}, []})),
 	ok.
+
+%% Serialise the suite's expected value and compare it to canonical,
+%% or to raw when the test does not give a separate canonical form.
+%% An empty canonical array means the field is omitted.
+struct_hd_canonical_test_() ->
+	Files = filelib:wildcard("deps/structured-header-tests/*.json"),
+	lists:flatten([begin
+		{ok, JSON} = file:read_file(File),
+		Tests = json:decode(JSON),
+		[
+			{iolist_to_binary(io_lib:format("~s: ~s", [filename:basename(File), Name])),
+				fun() ->
+					Expected = expected_to_term(Expected0),
+					Canonical = canonical_field(Test),
+					Canonical = iolist_to_binary(serialize_field(HeaderType, Expected))
+				end}
+		|| #{
+				<<"name">> := Name,
+				<<"header_type">> := HeaderType,
+				<<"expected">> := Expected0
+			} = Test <- Tests,
+			maps:get(<<"must_fail">>, Test, false) =:= false]
+	end || File <- Files]).
+
+struct_hd_serialisation_test_() ->
+	Files = filelib:wildcard("deps/structured-header-tests/serialisation-tests/*.json"),
+	lists:flatten([begin
+		{ok, JSON} = file:read_file(File),
+		%% Keep the JSON digits. A precision-3 conversion would round
+		%% 0.0015 before half-even rounding runs.
+		{Tests, _, _} = json:decode(JSON, ok, #{float => fun json_float_digits/1}),
+		[
+			{iolist_to_binary(io_lib:format("~s: ~s", [filename:basename(File), Name])),
+				fun() ->
+					Expected = expected_to_term(Expected0),
+					case maps:get(<<"must_fail">>, Test, false) of
+						true ->
+							?assertError(_, serialize_field(HeaderType, Expected));
+						false ->
+							Canonical = canonical_field(Test),
+							Canonical = iolist_to_binary(serialize_field(HeaderType, Expected))
+					end
+				end}
+		|| #{
+				<<"name">> := Name,
+				<<"header_type">> := HeaderType,
+				<<"expected">> := Expected0
+			} = Test <- Tests]
+	end || File <- Files]).
+
+serialize_limits_test_() ->
+	Ok = [
+		{{date, 999999999999999}, <<"@999999999999999">>},
+		{{date, -999999999999999}, <<"@-999999999999999">>},
+		{{display_string, <<>>}, <<"%\"\"">>},
+		{{display_string, <<"a">>}, <<"%\"a\"">>},
+		{{display_string, <<$f, 16#c3, 16#bc>>}, <<"%\"f%c3%bc\"">>},
+		{{decimal, {9995, -4}}, <<"1.0">>},
+		{{decimal, {-9995, -4}}, <<"-1.0">>},
+		{{decimal, {1, -4}}, <<"0.0">>},
+		{{decimal, {-1, -4}}, <<"0.0">>},
+		{{decimal, {5, -4}}, <<"0.0">>},
+		{{decimal, {-5, -4}}, <<"0.0">>},
+		{{decimal, {-6, -4}}, <<"-0.001">>},
+		{{decimal, {9999999999994999, -4}}, <<"999999999999.5">>},
+		{{decimal, {9999999999999994, -4}}, <<"999999999999.999">>}
+	],
+	Bad = [
+		{{date, 1000000000000000}, <<"date above integer range">>},
+		{{date, -1000000000000000}, <<"date below integer range">>},
+		{{display_string, <<16#ff>>}, <<"display string illegal byte">>},
+		{{display_string, <<16#c3>>}, <<"display string incomplete utf-8">>},
+		{{display_string, <<16#c0, 16#80>>}, <<"display string overlong utf-8">>},
+		{{display_string, <<16#ed, 16#a0, 16#80>>}, <<"display string utf-8 surrogate">>},
+		{{decimal, {9999999999999995, -4}}, <<"decimal rounds past 12 integer digits">>},
+		{{decimal, {-9999999999999995, -4}}, <<"negative decimal rounds past 12 integer digits">>}
+	],
+	[{Res, fun() ->
+		Res = iolist_to_binary(item({item, Value, []}))
+	end} || {Value, Res} <- Ok]
+	++
+	[{Name, fun() ->
+		?assertError(_, item({item, Value, []}))
+	end} || {Value, Name} <- Bad].
+
+canonical_field(#{<<"canonical">> := []}) ->
+	<<>>;
+canonical_field(#{<<"canonical">> := [Bin]}) ->
+	Bin;
+canonical_field(#{<<"raw">> := [Bin]}) ->
+	Bin.
+
+serialize_field(<<"dictionary">>, Expected) ->
+	dictionary(Expected);
+serialize_field(<<"item">>, Expected) ->
+	item(Expected);
+serialize_field(<<"list">>, Expected) ->
+	list(Expected).
+
+json_float_digits(Bin) ->
+	{Base, Exp} = decimal_conv:from_binary(Bin),
+	#{<<"__type">> => <<"decimal">>, <<"value">> => {Base, Exp}}.
 -endif.

@@ -547,34 +547,8 @@ bare_item({decimal, {Base, -3}}) when is_integer(Base) ->
 	Int = Base div 1000,
 	Frac = abs(Base) rem 1000,
 	decimal_out(Base, Int, decimal_frac(Frac, 3));
-%% exp_div/1 only terminates for an integer exponent.
 bare_item({decimal, {Base, Exp}}) when is_integer(Base), is_integer(Exp) ->
-	Div = exp_div(Exp),
-	Int0 = Base div Div,
-	Frac0 = abs(Base) rem Div,
-	DivFrac = Div div 1000,
-	Frac1 = Frac0 div DivFrac,
-	Rem = Frac0 rem DivFrac,
-	Half = DivFrac div 2,
-	%% Nearest, ties to even (RFC9651 4.1.5).
-	RoundUp = (Rem > Half) orelse
-		((Rem =:= Half) andalso ((Frac1 rem 2) =:= 1)),
-	{Int, Frac} = case RoundUp of
-		false ->
-			{Int0, Frac1};
-		true when Frac1 =:= 999, Base < 0 ->
-			{Int0 - 1, 0};
-		true when Frac1 =:= 999 ->
-			{Int0 + 1, 0};
-		true ->
-			{Int0, Frac1 + 1}
-	end,
-	%% Sign is chosen after rounding. Rounded zero has no sign (RFC9651).
-	SignedBase = case Int =:= 0 andalso Frac =:= 0 of
-		true -> 0;
-		false -> Base
-	end,
-	decimal_out(SignedBase, Int, significant_frac(Frac));
+	decimal_long_frac(Base, -Exp);
 bare_item({date, Integer}) when is_integer(Integer),
 		Integer >= -999999999999999, Integer =< 999999999999999 ->
 	[$@, integer_to_binary(Integer)];
@@ -621,15 +595,6 @@ decimal_out(Base, Int, Frac) ->
 	true = abs(Int) < 1000000000000,
 	[decimal_int(Base, Int), $., Frac].
 
-%% Trailing zeros are not significant after rounding to three places.
-significant_frac(Frac) ->
-	case iolist_to_binary(decimal_frac(Frac, 3)) of
-		<<$0,$0,$0>> -> <<"0">>;
-		<<A,$0,$0>> -> <<A>>;
-		<<A,B,$0>> -> <<A,B>>;
-		Bin -> Bin
-	end.
-
 decimal_frac(Frac, 2) when Frac < 10 ->
 	[$0, integer_to_binary(Frac)];
 decimal_frac(Frac, 3) when Frac < 10 ->
@@ -639,8 +604,76 @@ decimal_frac(Frac, 3) when Frac < 100 ->
 decimal_frac(Frac, _) ->
 	integer_to_binary(Frac).
 
-exp_div(0) -> 1;
-exp_div(N) -> 10 * exp_div(N + 1).
+%% Value = Base * 10^(-N), N >= 4. Half-even to three fractional
+%% digits needs those digits and the remainder, not 10^N.
+decimal_long_frac(Base, N) ->
+	Bin = integer_to_binary(abs(Base)),
+	Digits = byte_size(Bin),
+	Pad = N - Digits,
+	if
+		%% |value| < 0.0001, which is below the 0.0005 tie.
+		Pad > 3 ->
+			<<"0.0">>;
+		Pad > 0 ->
+			%% One, two, or three leading fractional zeros.
+			Zeros = binary:copy(<<$0>>, Pad),
+			decimal_from_frac(Base, <<>>, <<Zeros/binary, Bin/binary>>);
+		true ->
+			IntDigits = Digits - N,
+			<<IntBin:IntDigits/binary, FracBin/binary>> = Bin,
+			decimal_from_frac(Base, IntBin, FracBin)
+	end.
+
+decimal_from_frac(Base, IntBin, <<F3:3/binary, Rest/binary>>) ->
+	Frac1 = binary_to_integer(F3),
+	decimal_apply(Base, IntBin, Frac1, round_tail(Frac1, Rest)).
+
+round_tail(_, <<C, _/binary>>) when C > $5 ->
+	true;
+round_tail(_, <<C, _/binary>>) when C < $5 ->
+	false;
+round_tail(Frac1, <<$5, Rest/binary>>) ->
+	nonzero_digit(Rest) orelse ((Frac1 rem 2) =:= 1).
+
+nonzero_digit(<<>>) ->
+	false;
+nonzero_digit(<<$0, Rest/binary>>) ->
+	nonzero_digit(Rest);
+nonzero_digit(<<_, _/binary>>) ->
+	true.
+
+%% Sign is chosen after rounding. Rounded zero has no sign.
+decimal_apply(Base, IntBin, Frac1, RoundUp) ->
+	Int0 = case IntBin of
+		<<>> ->
+			0;
+		_ ->
+			binary_to_integer(IntBin)
+	end,
+	{IntAbs, Frac} = case RoundUp of
+		false ->
+			{Int0, Frac1};
+		true when Frac1 =:= 999 ->
+			{Int0 + 1, 0};
+		true ->
+			{Int0, Frac1 + 1}
+	end,
+	SignedBase = case IntAbs =:= 0 andalso Frac =:= 0 of
+		true -> 0;
+		false -> Base
+	end,
+	Int = case Base < 0 andalso IntAbs =/= 0 of
+		true -> -IntAbs;
+		false -> IntAbs
+	end,
+	%% 000 stays one zero so the decimal still has a fractional digit.
+	FracBin = case iolist_to_binary(decimal_frac(Frac, 3)) of
+		<<$0,$0,$0>> -> <<"0">>;
+		<<A,$0,$0>> -> <<A>>;
+		<<A,B,$0>> -> <<A,B>>;
+		Bin -> Bin
+	end,
+	decimal_out(SignedBase, Int, FracBin).
 
 escape_string(<<>>, Acc) -> Acc;
 escape_string(<<$\\,R/bits>>, Acc) -> escape_string(R, <<Acc/binary,$\\,$\\>>);
@@ -815,6 +848,54 @@ serialize_limits_test_() ->
 	[{Name, fun() ->
 		?assertError(_, item({item, Value, []}))
 	end} || {Value, Name} <- Bad].
+
+%% Exponents below -3 round from the decimal digits of the base.
+%% 10^100 * 10^-100 is 1.0. 5 * 10^96 * 10^-100 is the 0.0005 tie.
+decimal_long_exponent_test_() ->
+	Pow10 = fun(Zeros) ->
+		binary_to_integer(<<$1, (binary:copy(<<$0>>, Zeros))/binary>>)
+	end,
+	Ok = [
+		{1, -100000, <<"0.0">>},
+		{-1, -100000, <<"0.0">>},
+		{6, -4, <<"0.001">>},
+		{-6, -4, <<"-0.001">>},
+		{15, -4, <<"0.002">>},
+		{25, -4, <<"0.002">>},
+		{15, -5, <<"0.0">>},
+		{51, -5, <<"0.001">>},
+		{50, -5, <<"0.0">>},
+		{150, -5, <<"0.002">>},
+		{250, -5, <<"0.002">>},
+		{9995, -5, <<"0.1">>},
+		{-9995, -5, <<"-0.1">>},
+		{9995, -6, <<"0.01">>},
+		{5000, -7, <<"0.0">>},
+		{5001, -7, <<"0.001">>},
+		{4999, -7, <<"0.0">>},
+		{5000000, -10, <<"0.0">>},
+		{5000001, -10, <<"0.001">>},
+		{6000000, -10, <<"0.001">>},
+		{4000000, -10, <<"0.0">>},
+		{Pow10(100), -100, <<"1.0">>},
+		{Pow10(100), -104, <<"0.0">>},
+		{5 * Pow10(96), -100, <<"0.0">>},
+		{5 * Pow10(96) + 1, -100, <<"0.001">>}
+	],
+	Bad = [
+		{9999999999999995000, -7}
+	],
+	[{Res, fun() ->
+		Res = iolist_to_binary(item({item, {decimal, {Base, Exp}}, []}))
+	end} || {Base, Exp, Res} <- Ok]
+	++
+	[{integer_to_binary(Base), fun() ->
+		?assertError(_, item({item, {decimal, {Base, Exp}}, []}))
+	end} || {Base, Exp} <- Bad].
+
+horse_decimal_long_exponent() ->
+	horse:repeat(4,
+		item({item, {decimal, {1, -100000}}, []})).
 
 canonical_field(#{<<"canonical">> := []}) ->
 	<<>>;

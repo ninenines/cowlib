@@ -27,7 +27,7 @@
 %% Token: {token, binary()}
 %% Byte sequence: {binary, binary()}
 %% Boolean: boolean()
-%% Date: {date, integer()}
+%% Date: {date, {{Y, M, D}, {H, Min, S}}} UTC
 %% Display string: {display_string, binary()}
 
 -module(cow_http_struct_hd).
@@ -48,7 +48,7 @@
 -type sh_item() :: {item, sh_bare_item(), sh_params()}.
 -type sh_bare_item() :: integer() | sh_decimal() | boolean()
 	| {string | token | binary | display_string, binary()}
-	| {date, integer()}.
+	| {date, calendar:datetime()}.
 -type sh_decimal() :: {decimal, {integer(), integer()}}.
 
 -define(IS_LC_ALPHA(C),
@@ -198,7 +198,7 @@ parse_bare_item(<<"?1",R/bits>>) -> {true, R};
 parse_bare_item(<<$@,R0/bits>>) ->
 	case parse_bare_item(R0) of
 		{Int, R} when is_integer(Int) ->
-			{{date, Int}, R}
+			{{date, seconds_to_date(Int)}, R}
 	end;
 %% Display string.
 parse_bare_item(<<$%,$",R/bits>>) ->
@@ -328,8 +328,18 @@ parse_display_string(<<C,R/bits>>, Acc)
 	parse_display_string(R, <<Acc/binary, C>>).
 
 -ifdef(TEST).
+%% date.json builds and parses dates. That conversion requires OTP 29.
+-if(?OTP_RELEASE >= 29).
+sh_suite_files(Wildcard) ->
+	filelib:wildcard(Wildcard).
+-else.
+sh_suite_files(Wildcard) ->
+	[File || File <- filelib:wildcard(Wildcard),
+		filename:basename(File) =/= "date.json"].
+-endif.
+
 parse_struct_hd_test_() ->
-	Files = filelib:wildcard("deps/structured-header-tests/*.json"),
+	Files = sh_suite_files("deps/structured-header-tests/*.json"),
 	lists:flatten([begin
 		{ok, JSON} = file:read_file(File),
 		Tests = json:decode(JSON),
@@ -422,7 +432,7 @@ e2tb(#{<<"__type">> := <<"token">>, <<"value">> := V}) ->
 e2tb(#{<<"__type">> := <<"binary">>, <<"value">> := V}) ->
 	{binary, base32:decode(V)};
 e2tb(#{<<"__type">> := <<"date">>, <<"value">> := V}) ->
-	{date, V};
+	{date, seconds_to_date(V)};
 e2tb(#{<<"__type">> := <<"displaystring">>, <<"value">> := V}) ->
 	{display_string, V};
 e2tb(#{<<"__type">> := <<"decimal">>, <<"value">> := {Base, Exp}}) ->
@@ -549,9 +559,11 @@ bare_item({decimal, {Base, -3}}) when is_integer(Base) ->
 	decimal_out(Base, Int, decimal_frac(Frac, 3));
 bare_item({decimal, {Base, Exp}}) when is_integer(Base), is_integer(Exp) ->
 	decimal_long_frac(Base, -Exp);
-bare_item({date, Integer}) when is_integer(Integer),
-		Integer >= -999999999999999, Integer =< 999999999999999 ->
-	[$@, integer_to_binary(Integer)];
+bare_item({date, DateTime}) ->
+	Secs = date_seconds(DateTime),
+	%% The wire integer has at most 15 digits.
+	true = abs(Secs) =< 999999999999999,
+	[$@, integer_to_binary(Secs)];
 bare_item({display_string, String}) ->
 	%% Invalid UTF-8 fails serialization.
 	case unicode:characters_to_binary(String, utf8) of
@@ -565,6 +577,24 @@ bare_item(true) ->
 	<<"?1">>;
 bare_item(false) ->
 	<<"?0">>.
+
+%% Seconds since 1970-01-01T00:00:00Z. Requires OTP 29:
+%% earlier calendar rejects years before 0.
+%% datetime_to_gregorian_seconds/1 accepts 31 February.
+-if(?OTP_RELEASE >= 29).
+date_seconds({Date, _Time} = DateTime) ->
+	true = calendar:valid_date(Date),
+	calendar:universal_time_to_system_time(DateTime).
+
+seconds_to_date(Secs) when is_integer(Secs) ->
+	calendar:system_time_to_universal_time(Secs, second).
+-else.
+date_seconds(_DateTime) ->
+	error(otp_29_required).
+
+seconds_to_date(_Secs) ->
+	error(otp_29_required).
+-endif.
 
 validate_token(<<C,R/bits>>)
 		when ?IS_ALPHA(C) or (C =:= $*) ->
@@ -729,7 +759,7 @@ item_decimal_signed_zero_test_() ->
 		|| {Dec, Res} <- Tests].
 
 struct_hd_identity_test_() ->
-	Files = filelib:wildcard("deps/structured-header-tests/*.json"),
+	Files = sh_suite_files("deps/structured-header-tests/*.json"),
 	lists:flatten([begin
 		{ok, JSON} = file:read_file(File),
 		Tests = json:decode(JSON),
@@ -764,7 +794,7 @@ struct_hd_item_test() ->
 %% or to raw when the test does not give a separate canonical form.
 %% An empty canonical array means the field is omitted.
 struct_hd_canonical_test_() ->
-	Files = filelib:wildcard("deps/structured-header-tests/*.json"),
+	Files = sh_suite_files("deps/structured-header-tests/*.json"),
 	lists:flatten([begin
 		{ok, JSON} = file:read_file(File),
 		Tests = json:decode(JSON),
@@ -809,10 +839,68 @@ struct_hd_serialisation_test_() ->
 			} = Test <- Tests]
 	end || File <- Files]).
 
+%% Dates are UTC calendar:datetime() values. The wire form is
+%% @ plus the integer seconds since 1970-01-01T00:00:00Z.
+-if(?OTP_RELEASE >= 29).
+date_test_() ->
+	Item = fun(DT) -> {item, {date, DT}, []} end,
+	Ok = [
+		{<<"@0">>, {{1970, 1, 1}, {0, 0, 0}}},
+		{<<"@1659578233">>, {{2022, 8, 4}, {1, 57, 13}}},
+		{<<"@-1659578233">>, {{1917, 5, 30}, {22, 2, 47}}},
+		{<<"@253402214400">>, {{9999, 12, 31}, {0, 0, 0}}},
+		{<<"@253402300799">>, {{9999, 12, 31}, {23, 59, 59}}},
+		{<<"@253402300800">>, {{10000, 1, 1}, {0, 0, 0}}},
+		{<<"@-62135596800">>, {{1, 1, 1}, {0, 0, 0}}},
+		{<<"@-62167219200">>, {{0, 1, 1}, {0, 0, 0}}},
+		{<<"@-62162121600">>, {{0, 2, 29}, {0, 0, 0}}},
+		{<<"@-62167219201">>, {{-1, 12, 31}, {23, 59, 59}}},
+		{<<"@86399">>, {{1970, 1, 1}, {23, 59, 59}}},
+		{<<"@951782400">>, {{2000, 2, 29}, {0, 0, 0}}},
+		{<<"@-2203977600">>, {{1900, 2, 28}, {0, 0, 0}}},
+		{<<"@1556582400">>, {{2019, 4, 30}, {0, 0, 0}}},
+		{<<"@999999999999999">>, {{31690708, 7, 5}, {1, 46, 39}}},
+		{<<"@-999999999999999">>, {{-31686769, 6, 29}, {22, 13, 21}}}
+	],
+	Bad = [
+		{{31690708, 7, 5}, {1, 46, 40}},
+		{{-31686769, 6, 29}, {22, 13, 20}},
+		{{2019, 2, 29}, {0, 0, 0}},
+		{{1900, 2, 29}, {0, 0, 0}},
+		{{-100, 2, 29}, {0, 0, 0}},
+		{{2020, 2, 31}, {0, 0, 0}},
+		{{2019, 4, 31}, {0, 0, 0}},
+		{{2020, 0, 1}, {0, 0, 0}},
+		{{2020, 1, 0}, {0, 0, 0}},
+		{{2020, 1, 1}, {24, 0, 0}},
+		{{2020, 1, 1}, {0, 60, 0}},
+		{{2020, 1, 1}, {0, 0, 60}},
+		{{2020, 1, 1}, {-1, 0, 0}}
+	],
+	[{Bin, fun() ->
+		{item, {date, DT}, []} = parse_item(Bin),
+		Bin = iolist_to_binary(item(Item(DT)))
+	end} || {Bin, DT} <- Ok]
+	++
+	[{<<"parse @-0">>, fun() ->
+		{item, {date, {{1970, 1, 1}, {0, 0, 0}}}, []} = parse_item(<<"@-0">>)
+	end},
+	{<<"build rejects an integer date">>, fun() ->
+		?assertError(_, item(Item(0)))
+	end}]
+	++
+	[{iolist_to_binary(io_lib:format("~p", [DT])), fun() ->
+		?assertError(_, item(Item(DT)))
+	end} || DT <- Bad]
+	++
+	[{<<"parse past 15 digits">>, fun() ->
+		?assertError(_, parse_item(<<"@1000000000000000">>)),
+		?assertError(_, parse_item(<<"@-1000000000000000">>))
+	end}].
+-endif.
+
 serialize_limits_test_() ->
 	Ok = [
-		{{date, 999999999999999}, <<"@999999999999999">>},
-		{{date, -999999999999999}, <<"@-999999999999999">>},
 		{{display_string, <<>>}, <<"%\"\"">>},
 		{{display_string, <<"a">>}, <<"%\"a\"">>},
 		{{display_string, <<$f, 16#c3, 16#bc>>}, <<"%\"f%c3%bc\"">>},
@@ -827,8 +915,6 @@ serialize_limits_test_() ->
 		{{decimal, {9999999999999994, -4}}, <<"999999999999.999">>}
 	],
 	Bad = [
-		{{date, 1000000000000000}, <<"date above integer range">>},
-		{{date, -1000000000000000}, <<"date below integer range">>},
 		{{display_string, <<16#ff>>}, <<"display string illegal byte">>},
 		{{display_string, <<16#c3>>}, <<"display string incomplete utf-8">>},
 		{{display_string, <<16#c0, 16#80>>}, <<"display string overlong utf-8">>},

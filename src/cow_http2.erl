@@ -24,7 +24,6 @@
 -export([data/3]).
 -export([data_header/3]).
 -export([headers/3]).
--export([priority/4]).
 -export([rst_stream/2]).
 -export([settings/1]).
 -export([settings_payload/1]).
@@ -41,12 +40,6 @@
 
 -type head_fin() :: head_fin | head_nofin.
 -export_type([head_fin/0]).
-
-%% @todo PRIORITY is de facto unused. Parse HEADERS with the
-%% priority flag as normal HEADERS (skip the 5-byte payload)
-%% and treat PRIORITY frames like frames without PRIORITY.
--type exclusive() :: exclusive | shared.
--type weight() :: 1..256.
 
 -type settings() :: #{
 	enable_connect_protocol => boolean(),
@@ -78,9 +71,7 @@
 
 -type frame() :: {data, streamid(), cow_http:fin(), binary()}
 	| {headers, streamid(), cow_http:fin(), head_fin(), binary()}
-	| {headers, streamid(), cow_http:fin(), head_fin(),
-		exclusive(), streamid(), weight(), binary()}
-	| {priority, streamid(), exclusive(), streamid(), weight()}
+	| {priority, streamid()}
 	| {rst_stream, streamid(), error()}
 	| {settings, settings()}
 	| settings_ack
@@ -169,42 +160,42 @@ parse(<< Len0:24, 1:8, _:2, 0:1, _:1, 1:1, FlagEndHeaders:1, _:1, FlagEndStream:
 		_ ->
 			{connection_error, protocol_error, 'Padding octets MUST be set to zero. (RFC7540 6.2)'}
 	end;
-%% No padding, priority.
-%% @todo Return the same tuple as HEADERS without PRIORITY.
+%% No padding, priority. Skip the 5-byte priority payload.
 parse(<< _:24, 1:8, _:2, 1:1, _:1, 0:1, _:4, StreamID:31, _:1, StreamID:31, _/bits >>) ->
 	{connection_error, protocol_error,
 		'HEADERS frames cannot define a stream that depends on itself. (RFC7540 5.3.1)'};
 parse(<< Len0:24, 1:8, _:2, 1:1, _:1, 0:1, FlagEndHeaders:1, _:1, FlagEndStream:1, _:1, StreamID:31,
-		E:1, DepStreamID:31, Weight:8, Rest0/bits >>) when byte_size(Rest0) >= Len0 - 5 ->
+		_:40, Rest0/bits >>) when byte_size(Rest0) >= Len0 - 5 ->
 	Len = Len0 - 5,
 	<< HeaderBlockFragment:Len/binary, Rest/bits >> = Rest0,
 	{ok, {headers, StreamID, parse_fin(FlagEndStream), parse_head_fin(FlagEndHeaders),
-		parse_exclusive(E), DepStreamID, Weight + 1, HeaderBlockFragment}, Rest};
-%% Padding, priority.
+		HeaderBlockFragment}, Rest};
+%% Padding, priority. Skip the 5-byte priority payload.
 parse(<< _:24, 1:8, _:2, 1:1, _:1, 1:1, _:4, StreamID:31, _:9, StreamID:31, _/bits >>) ->
 	{connection_error, protocol_error,
 		'HEADERS frames cannot define a stream that depends on itself. (RFC7540 5.3.1)'};
 parse(<< Len0:24, 1:8, _:2, 1:1, _:1, 1:1, FlagEndHeaders:1, _:1, FlagEndStream:1, _:1, StreamID:31,
-		PadLen:8, E:1, DepStreamID:31, Weight:8, Rest0/bits >>) when byte_size(Rest0) >= Len0 - 6 ->
+		PadLen:8, _:40, Rest0/bits >>) when byte_size(Rest0) >= Len0 - 6 ->
 	Len = Len0 - PadLen - 6,
 	case Rest0 of
 		<< HeaderBlockFragment:Len/binary, 0:PadLen/unit:8, Rest/bits >> ->
 			{ok, {headers, StreamID, parse_fin(FlagEndStream), parse_head_fin(FlagEndHeaders),
-				parse_exclusive(E), DepStreamID, Weight + 1, HeaderBlockFragment}, Rest};
+				HeaderBlockFragment}, Rest};
 		_ ->
 			{connection_error, protocol_error, 'Padding octets MUST be set to zero. (RFC7540 6.2)'}
 	end;
 %%
 %% PRIORITY frames.
-%% @todo Treat like a no-op / same as if PRIORITY was absent.
+%%
+%% Dependency and weight are not returned.
 %%
 parse(<< 5:24, 2:8, _:9, 0:31, _/bits >>) ->
 	{connection_error, protocol_error, 'PRIORITY frames MUST be associated with a stream. (RFC7540 6.3)'};
 parse(<< 5:24, 2:8, _:9, StreamID:31, _:1, StreamID:31, _:8, Rest/bits >>) ->
 	{stream_error, StreamID, protocol_error,
 		'PRIORITY frames cannot make a stream depend on itself. (RFC7540 5.3.1)', Rest};
-parse(<< 5:24, 2:8, _:9, StreamID:31, E:1, DepStreamID:31, Weight:8, Rest/bits >>) ->
-	{ok, {priority, StreamID, parse_exclusive(E), DepStreamID, Weight + 1}, Rest};
+parse(<< 5:24, 2:8, _:9, StreamID:31, _:40, Rest/bits >>) ->
+	{ok, {priority, StreamID}, Rest};
 %% @todo Figure out how to best deal with non-fatal frame size errors; if we have everything
 %% then OK if not we might want to inform the caller how much he should expect so that it can
 %% decide if it should just close the connection
@@ -348,6 +339,63 @@ parse_settings_test() ->
 	{ok, settings_ack, <<>>} = parse(<< 0:24, 4:8, 1:8, 0:32 >>),
 	{connection_error, protocol_error, _} = parse(<< 0:24, 4:8, 1:8, 0:1, 1:31 >>),
 	ok.
+
+parse_headers_priority_test() ->
+	%% headers/3 never sets the PRIORITY flag.
+	{ok, {headers, 1, fin, head_fin, <<"hdr">>}, <<>>}
+		= parse(iolist_to_binary(headers(1, fin, <<"hdr">>))),
+	%% PRIORITY flag, no padding. The 5 priority bytes are not part of the block.
+	Pri = << 7:24, 1:8, 0:2, 1:1, 0:1, 0:1, 1:1, 0:1, 1:1, 0:1, 1:31,
+		1, 2, 3, 4, 5, 6, 7 >>,
+	_ = [more = parse(binary:part(Pri, 0, I)) || I <- lists:seq(1, byte_size(Pri) - 1)],
+	{ok, {headers, 1, fin, head_fin, <<6, 7>>}, <<>>} = parse(Pri),
+	{ok, {headers, 1, fin, head_fin, <<6, 7>>}, <<42>>} = parse(<<Pri/binary, 42>>),
+	%% Flags other than PRIORITY are preserved. Empty block is length 5.
+	{ok, {headers, 1, nofin, head_nofin, <<>>}, <<>>} = parse(<< 5:24, 1:8,
+		0:2, 1:1, 0:5, 0:1, 1:31, 0:1, 0:31, 15:8 >>),
+	%% Stream depending on itself, with and without the weight byte.
+	{connection_error, protocol_error, _} = parse(<< 5:24, 1:8,
+		0:2, 1:1, 0:1, 0:1, 1:1, 0:1, 1:1, 0:1, 1:31, 0:1, 1:31, 0:8 >>),
+	{connection_error, protocol_error, _} = parse(<< 5:24, 1:8,
+		0:2, 1:1, 0:1, 0:1, 1:1, 0:1, 1:1, 0:1, 1:31, 1:1, 1:31 >>),
+	%% Shorter than the priority payload.
+	{connection_error, frame_size_error, _} = parse(<< 4:24, 1:8,
+		0:2, 1:1, 0:1, 0:1, 1:1, 0:1, 1:1, 0:1, 1:31, 0:32 >>),
+	%% Padding and priority. Pad length is not part of the block.
+	Pad = << 10:24, 1:8, 0:2, 1:1, 0:1, 1:1, 1:1, 0:1, 1:1, 0:1, 1:31,
+		2:8, 0:1, 3:31, 15:8, "ab", 0, 0 >>,
+	{ok, {headers, 1, fin, head_fin, <<"ab">>}, <<42>>} = parse(<<Pad/binary, 42>>),
+	{ok, {headers, 1, fin, head_fin, <<>>}, <<>>} = parse(<< 6:24, 1:8,
+		0:2, 1:1, 0:1, 1:1, 1:1, 0:1, 1:1, 0:1, 1:31, 0:8, 0:1, 0:31, 15:8 >>),
+	{connection_error, protocol_error, _} = parse(<< 10:24, 1:8,
+		0:2, 1:1, 0:1, 1:1, 1:1, 0:1, 1:1, 0:1, 1:31,
+		2:8, 0:1, 3:31, 15:8, "ab", 0, 1 >>),
+	{connection_error, protocol_error, _} = parse(<< 6:24, 1:8,
+		0:2, 1:1, 0:1, 1:1, 0:2, 1:1, 0:1, 1:31, 1:8, 0:1, 0:31, 0:8 >>),
+	{connection_error, protocol_error, _} = parse(<< 6:24, 1:8,
+		0:2, 1:1, 0:1, 1:1, 0:2, 1:1, 0:1, 1:31, 0:8, 0:1, 1:31, 0:8 >>),
+	{connection_error, frame_size_error, _} = parse(<< 5:24, 1:8,
+		0:2, 1:1, 0:1, 1:1, 1:1, 0:1, 1:1, 0:1, 1:31, 0:40 >>),
+	ok.
+
+parse_priority_test() ->
+	%% Stream 1, shared dependency on 3, weight byte 123.
+	Frame = << 5:24, 2:8, 0:9, 1:31, 0:1, 3:31, 123:8 >>,
+	_ = [more = parse(binary:part(Frame, 0, I)) || I <- lists:seq(1, byte_size(Frame) - 1)],
+	{ok, {priority, 1}, <<>>} = parse(Frame),
+	{ok, {priority, 1}, <<42>>} = parse(<<Frame/binary, 42>>),
+	{ok, {priority, 1}, <<>>} = parse(<< 5:24, 2:8, 0:9, 1:31, 1:1, 0:31, 0:8 >>),
+	{ok, {priority, 1}, <<>>} = parse(<< 5:24, 2:8, 0:9, 1:31, 1:1, 0:31, 255:8 >>),
+	{connection_error, protocol_error, _} = parse(<< 5:24, 2:8, 0:9, 0:31, 0:40 >>),
+	{connection_error, protocol_error, _} = parse(<< 5:24, 2:8, 0:9, 0:31 >>),
+	{stream_error, 1, protocol_error, _, <<>>} = parse(<< 5:24, 2:8, 0:9, 1:31, 0:1, 1:31, 123:8 >>),
+	{stream_error, 1, protocol_error, _, <<42>>}
+		= parse(<< 5:24, 2:8, 0:9, 1:31, 1:1, 1:31, 0:8, 42 >>),
+	{stream_error, 1, frame_size_error, _, <<42>>} = parse(<< 0:24, 2:8, 0:9, 1:31, 42 >>),
+	{stream_error, 1, frame_size_error, _, <<42>>} = parse(<< 4:24, 2:8, 0:9, 1:31, 0:32, 42 >>),
+	{stream_error, 1, frame_size_error, _, <<>>} = parse(<< 6:24, 2:8, 0:9, 1:31, 0:48 >>),
+	more = parse(<< 6:24, 2:8, 0:9, 1:31, 0:32 >>),
+	ok.
 -endif.
 
 parse_fin(0) -> nofin;
@@ -355,9 +403,6 @@ parse_fin(1) -> fin.
 
 parse_head_fin(0) -> head_nofin;
 parse_head_fin(1) -> head_fin.
-
-parse_exclusive(0) -> shared;
-parse_exclusive(1) -> exclusive.
 
 parse_error_code( 0) -> no_error;
 parse_error_code( 1) -> protocol_error;
@@ -437,10 +482,6 @@ headers(StreamID, IsFin, HeaderBlock) ->
 	FlagEndHeaders = 1,
 	[<< Len:24, 1:8, 0:5, FlagEndHeaders:1, 0:1, FlagEndStream:1, 0:1, StreamID:31 >>, HeaderBlock].
 
-priority(StreamID, E, DepStreamID, Weight) ->
-	FlagExclusive = exclusive(E),
-	<< 5:24, 2:8, 0:9, StreamID:31, FlagExclusive:1, DepStreamID:31, Weight:8 >>.
-
 rst_stream(StreamID, Reason) ->
 	ErrorCode = error_code(Reason),
 	<< 4:24, 3:8, 0:9, StreamID:31, ErrorCode:32 >>.
@@ -493,9 +534,6 @@ window_update(StreamID, Increment) when Increment =< 16#7fffffff ->
 
 flag_fin(nofin) -> 0;
 flag_fin(fin) -> 1.
-
-exclusive(shared) -> 0;
-exclusive(exclusive) -> 1.
 
 error_code(no_error) -> 0;
 error_code(protocol_error) -> 1;

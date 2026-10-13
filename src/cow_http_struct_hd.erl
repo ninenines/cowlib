@@ -39,6 +39,7 @@
 -export([item/1]).
 -export([list/1]).
 
+-include("cow_inline.hrl").
 -include("cow_parse.hrl").
 
 -type sh_list() :: [sh_item() | sh_inner_list()].
@@ -718,11 +719,7 @@ encode_display_string(<<C,R/bits>>, Acc)
 		when C >= 16#20, C =< 16#7e, C =/= $%, C =/= $" ->
 	encode_display_string(R, <<Acc/binary, C>>);
 encode_display_string(<<C,R/bits>>, Acc) ->
-	<<H:4, L:4>> = <<C>>,
-	encode_display_string(R, <<Acc/binary, $%, (hex_digit(H)), (hex_digit(L))>>).
-
-hex_digit(N) when N =< 9 -> $0 + N;
-hex_digit(N) -> $a + N - 10.
+	encode_display_string(R, <<Acc/binary, $%, ?LHEX(C)>>).
 
 params(Params) ->
 	[case Param of
@@ -904,6 +901,10 @@ serialize_limits_test_() ->
 		{{display_string, <<>>}, <<"%\"\"">>},
 		{{display_string, <<"a">>}, <<"%\"a\"">>},
 		{{display_string, <<$f, 16#c3, 16#bc>>}, <<"%\"f%c3%bc\"">>},
+		{{display_string, <<$%, $">>}, <<"%\"%25%22\"">>},
+		{{display_string, <<16#00, 16#1f, 16#20, 16#7e, 16#7f>>}, <<"%\"%00%1f ~%7f\"">>},
+		{{display_string, <<16#0a, 16#0d, 16#0e>>}, <<"%\"%0a%0d%0e\"">>},
+		{{display_string, <<16#c3, 16#bf>>}, <<"%\"%c3%bf\"">>},
 		{{decimal, {9995, -4}}, <<"1.0">>},
 		{{decimal, {-9995, -4}}, <<"-1.0">>},
 		{{decimal, {1, -4}}, <<"0.0">>},

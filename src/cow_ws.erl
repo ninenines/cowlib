@@ -29,7 +29,7 @@
 -export([frame/2]).
 -export([masked_frame/2]).
 
--type close_code() :: 1000..1003 | 1006..1011 | 3000..4999.
+-type close_code() :: 1000..1003 | 1006..1014 | 3000..4999.
 -export_type([close_code/0]).
 
 -type extensions() :: map().
@@ -509,7 +509,7 @@ validate_close_code(Code) ->
 		Code =:= 1004 -> error;
 		Code =:= 1005 -> error;
 		Code =:= 1006 -> error;
-		Code > 1011, Code < 3000 -> error;
+		Code > 1014, Code < 3000 -> error;
 		Code > 4999 -> error;
 		true -> ok
 	end.
@@ -905,6 +905,44 @@ parse_close_during_utf8_fragment_test() ->
 	{ok, 1000, <<"bye">>, 2, <<>>}
 		= parse_payload(Reason, undefined, 2, 0, close, 5, FragState, #{}, <<0:3>>),
 	ok.
+
+parse_payload_close_code_test_() ->
+	Tests = [
+		{0, error},
+		{999, error},
+		{1000, ok},
+		{1001, ok},
+		{1002, ok},
+		{1003, ok},
+		{1004, error},
+		{1005, error},
+		{1006, error},
+		{1007, ok},
+		{1008, ok},
+		{1009, ok},
+		{1010, ok},
+		{1011, ok},
+		{1012, ok},
+		{1013, ok},
+		{1014, ok},
+		{1015, error},
+		{1016, error},
+		{2000, error},
+		{2999, error},
+		{3000, ok},
+		{3999, ok},
+		{4000, ok},
+		{4999, ok},
+		{5000, error},
+		{65535, error}
+	],
+	[{integer_to_list(Code), fun() ->
+		case parse_payload(<<Code:16, "bye">>, undefined, 0, 0, close, 5,
+				undefined, #{}, <<0:3>>) of
+			{ok, Code, <<"bye">>, 0, <<>>} when Expect =:= ok -> ok;
+			{error, badframe} when Expect =:= error -> ok
+		end
+	end} || {Code, Expect} <- Tests].
 
 parse_header_waits_for_close_payload_test() ->
 	Frame = <<1:1, 0:3, 8:4, 0:1, 5:7, 1000:16, "bye">>,

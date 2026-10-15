@@ -11,8 +11,20 @@ Websocket.
 It is optimized for completeness rather than speed. No value
 is ignored, they are all returned.
 
+== Online documentation
+
+* https://ninenines.eu/docs/en/cowlib/2.21/manual[Function reference]
+
+== Offline documentation
+
+* While still online, run `make docs`
+* User guide available in `doc/` in PDF and HTML formats
+* Function reference man pages available in `doc/man3/` and `doc/man7/`
+* Run `make install-docs` to install man pages on your system
+* Full documentation in Asciidoc available in `doc/src/`
+
 == Support
 
-* Official IRC Channel: #ninenines on irc.freenode.net
-* https://ninenines.eu/services[Commercial Support]
+* https://discord.gg/x25nNq2fFE[Discord server]
+* https://github.com/ninenines/cowlib/issues[Issues tracker]
 * https://github.com/sponsors/essen[Sponsor me!]

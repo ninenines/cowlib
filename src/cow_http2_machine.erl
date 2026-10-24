@@ -534,16 +534,6 @@ headers_frame(Frame=#headers{}, State=#http2_machine{mode=Mode}) ->
 	case Mode of
 		server -> server_headers_frame(Frame, State);
 		client -> client_headers_frame(Frame, State)
-	end;
-%% The PRIORITY mechanism is seen as flawed and deprecated.
-%% We will not implement it.
-headers_frame({headers, StreamID, IsFin, IsHeadFin,
-		_IsExclusive, _DepStreamID, _Weight, HeaderData},
-		State=#http2_machine{mode=Mode}) ->
-	HeadersFrame = #headers{id=StreamID, fin=IsFin, head=IsHeadFin, data=HeaderData},
-	case Mode of
-		server -> server_headers_frame(HeadersFrame, State);
-		client -> client_headers_frame(HeadersFrame, State)
 	end.
 
 %% Reject HEADERS frames with even-numbered streamid.
@@ -810,6 +800,30 @@ trailers_frame(#headers{id=StreamID}, State0, Stream0, Headers) ->
 
 priority_frame(_Frame, State) ->
 	{ok, State}.
+
+-ifdef(TEST).
+
+priority_before_settings_test() ->
+	Opts = #{preface_timeout => infinity, settings_timeout => infinity},
+	Frame = {priority, 1},
+	{ok, _, Server} = init(server, Opts),
+	{error, {connection_error, protocol_error, _}, _} = frame(Frame, Server),
+	{ok, _, Client} = init(client, Opts),
+	{error, {connection_error, protocol_error, _}, _} = frame(Frame, Client),
+	ok.
+
+priority_after_settings_test() ->
+	Opts = #{preface_timeout => infinity, settings_timeout => infinity},
+	Frame = {priority, 1},
+	{ok, _, Server0} = init(server, Opts),
+	{ok, Server} = frame({settings, #{}}, Server0),
+	{ok, Server} = frame(Frame, Server),
+	{ok, _, Client0} = init(client, Opts),
+	{ok, Client} = frame({settings, #{}}, Client0),
+	{ok, Client} = frame(Frame, Client),
+	ok.
+
+-endif.
 
 %% RST_STREAM frame.
 

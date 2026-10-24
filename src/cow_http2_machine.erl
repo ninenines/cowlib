@@ -107,6 +107,11 @@
 
 -type stream() :: #stream{}.
 
+-type linger_gens() :: {
+	#{cow_http2:streamid() => true},
+	#{cow_http2:streamid() => true}
+}.
+
 -type continued_frame() ::
 	{headers, cow_http2:streamid(), cow_http:fin(), cow_http2:head_fin(), binary()} |
 	{push_promise, cow_http2:streamid(), cow_http2:head_fin(), cow_http2:streamid(), binary()}.
@@ -163,13 +168,13 @@
 
 	%% HTTP/2 streams that have recently been reset locally.
 	%% We are expected to keep receiving additional frames after
-	%% sending an RST_STREAM.
-	local_lingering_streams = [] :: [cow_http2:streamid()],
+	%% sending an RST_STREAM. {Current, Previous}.
+	local_lingering_streams = {#{}, #{}} :: linger_gens(),
 
 	%% HTTP/2 streams that have recently been reset remotely.
 	%% We keep a few of these around in order to reject subsequent
-	%% frames on these streams.
-	remote_lingering_streams = [] :: [cow_http2:streamid()],
+	%% frames on these streams. {Current, Previous}.
+	remote_lingering_streams = {#{}, #{}} :: linger_gens(),
 
 	%% HPACK decoding and encoding state.
 	decode_state = cow_hpack:init() :: cow_hpack:state(),
@@ -187,6 +192,11 @@
 	orelse
 	((Mode =:= client) andalso ?IS_CLIENT_LOCAL(StreamID))
 )).
+
+%% Lingering is best effort. Each side keeps a current generation
+%% and the previous one, at most this many stream ids each.
+-define(LOCAL_LINGER_MAX, 100).
+-define(REMOTE_LINGER_MAX, 10).
 
 -spec init(client | server, opts()) -> {ok, iodata(), http2_machine()}.
 init(client, Opts) ->
@@ -465,7 +475,7 @@ data_frame(Frame={data, StreamID, _, Data}, State0=#http2_machine{
 			%% After we send an RST_STREAM frame and terminate a stream,
 			%% the remote endpoint might still be sending us some more
 			%% frames until it can process this RST_STREAM.
-			case lists:member(StreamID, Lingering) of
+			case linger_member(StreamID, Lingering) of
 				true ->
 					{ok, State};
 				false ->
@@ -615,7 +625,7 @@ client_headers_frame(_, State) ->
 		State}.
 
 linger_headers(Frame, State=#http2_machine{local_lingering_streams=Lingering}) ->
-	case lists:member(Frame#headers.id, Lingering) of
+	case linger_member(Frame#headers.id, Lingering) of
 		true -> linger_headers1(Frame, State);
 		false ->
 			{error, {connection_error, stream_closed,
@@ -813,9 +823,9 @@ rst_stream_frame({rst_stream, StreamID, _}, State=#http2_machine{mode=Mode,
 rst_stream_frame({rst_stream, StreamID, Reason}, State=#http2_machine{
 		streams=Streams0, remote_lingering_streams=Lingering0}) ->
 	Streams = maps:remove(StreamID, Streams0),
-	%% We only keep up to 10 streams in this state.
+	%% Two generations of at most ?REMOTE_LINGER_MAX.
 	%% @todo Make the lingering-stream limit configurable.
-	Lingering = [StreamID|lists:sublist(Lingering0, 10 - 1)],
+	Lingering = linger_add(StreamID, Lingering0, ?REMOTE_LINGER_MAX),
 	{ok, {rst_stream, StreamID, Reason},
 		State#http2_machine{streams=Streams, remote_lingering_streams=Lingering}}.
 
@@ -993,7 +1003,7 @@ push_promise_frame(#headers{id=PromisedStreamID},
 
 linger_push_promise(Frame=#push_promise{id=StreamID},
 		State=#http2_machine{local_lingering_streams=Lingering}) ->
-	case lists:member(StreamID, Lingering) of
+	case linger_member(StreamID, Lingering) of
 		true ->
 			linger_push_promise1(Frame, State);
 		false ->
@@ -1223,7 +1233,7 @@ window_update_frame({window_update, StreamID, Increment},
 		undefined ->
 			%% WINDOW_UPDATE frames may be received for a short period of time
 			%% after a stream is closed. They must be ignored.
-			case lists:member(StreamID, Lingering) of
+			case linger_member(StreamID, Lingering) of
 				false -> {ok, State0};
 				true -> stream_reset(StreamID, State0, stream_closed,
 					'WINDOW_UPDATE frame received after the stream was reset. (RFC7540 5.1)')
@@ -1872,10 +1882,7 @@ count_local_streams(#http2_machine{mode=Mode, streams=Streams}) ->
 -spec is_lingering_stream(cow_http2:streamid(), http2_machine()) -> boolean().
 is_lingering_stream(StreamID, #http2_machine{
 		local_lingering_streams=Local, remote_lingering_streams=Remote}) ->
-	case lists:member(StreamID, Local) of
-		true -> true;
-		false -> lists:member(StreamID, Remote)
-	end.
+	linger_member(StreamID, Local) orelse linger_member(StreamID, Remote).
 
 %% Stream-related functions.
 
@@ -1896,7 +1903,172 @@ stream_reset(StreamID, State, Reason, HumanReadable) ->
 		stream_linger(StreamID, State)}.
 
 stream_linger(StreamID, State=#http2_machine{local_lingering_streams=Lingering0}) ->
-	%% We only keep up to 100 streams in this state.
+	%% Two generations of at most ?LOCAL_LINGER_MAX.
 	%% @todo Make the lingering-stream limit configurable.
-	Lingering = [StreamID|lists:sublist(Lingering0, 100 - 1)],
+	Lingering = linger_add(StreamID, Lingering0, ?LOCAL_LINGER_MAX),
 	State#http2_machine{local_lingering_streams=Lingering}.
+
+%% The current generation holds at most Max ids. The next id
+%% starts a new generation and keeps the full one as previous.
+%% A repeated id is treated like a new one.
+linger_add(StreamID, {Current, Previous}, Max) when map_size(Current) < Max ->
+	{Current#{StreamID => true}, Previous};
+linger_add(StreamID, {Current, _}, _) ->
+	{#{StreamID => true}, Current}.
+
+linger_member(StreamID, {Current, Previous}) ->
+	is_map_key(StreamID, Current) orelse is_map_key(StreamID, Previous).
+
+-ifdef(TEST).
+
+linger_machine(Mode) ->
+	{ok, _, S0} = init(Mode, #{
+		preface_timeout => infinity,
+		settings_timeout => infinity
+	}),
+	{ok, S} = frame({settings, #{}}, S0),
+	%% Keep every id used below out of the idle range.
+	S#http2_machine{local_streamid=100000, remote_streamid=100000}.
+
+linger_locals(Ids, State) ->
+	lists:foldl(fun(Id, Acc) -> stream_linger(Id, Acc) end, State, Ids).
+
+linger_remotes(Ids, State) ->
+	lists:foldl(fun(Id, Acc) ->
+		{ok, {rst_stream, Id, cancel}, Acc1}
+			= frame({rst_stream, Id, cancel}, Acc),
+		Acc1
+	end, State, Ids).
+
+local_linger_generations_test() ->
+	Max = ?LOCAL_LINGER_MAX,
+	S0 = linger_machine(server),
+	%% Filling the current generation does not rotate.
+	S1 = linger_locals(lists:seq(1, Max), S0),
+	{Current1, Previous1} = S1#http2_machine.local_lingering_streams,
+	Max = map_size(Current1),
+	0 = map_size(Previous1),
+	%% One past the bound keeps the full generation as previous.
+	S2 = stream_linger(Max + 1, S1),
+	{Current2, Previous2} = S2#http2_machine.local_lingering_streams,
+	1 = map_size(Current2),
+	Max = map_size(Previous2),
+	true = is_lingering_stream(1, S2),
+	true = is_lingering_stream(Max, S2),
+	true = is_lingering_stream(Max + 1, S2),
+	{ok, _} = frame({data, 1, fin, <<>>}, S2),
+	{ok, _} = frame({data, Max + 1, fin, <<>>}, S2),
+	%% Below the bound, repeating an id from the previous generation
+	%% writes it into the current one as well.
+	S2b = stream_linger(1, S2),
+	{Current2b, Previous2} = S2b#http2_machine.local_lingering_streams,
+	2 = map_size(Current2b),
+	true = is_map_key(1, Current2b),
+	true = is_map_key(1, Previous2),
+	%% The next full generation drops the first.
+	S3 = linger_locals(lists:seq(Max + 2, Max * 2), S2),
+	S4 = stream_linger(Max * 2 + 1, S3),
+	false = is_lingering_stream(1, S4),
+	true = is_lingering_stream(Max + 1, S4),
+	true = is_lingering_stream(Max * 2, S4),
+	true = is_lingering_stream(Max * 2 + 1, S4),
+	{error, {connection_error, stream_closed, _}, _}
+		= frame({data, 1, fin, <<>>}, S4),
+	{ok, _} = frame({data, Max + 1, fin, <<>>}, S4),
+	{ok, _} = frame({data, Max * 2 + 1, fin, <<>>}, S4),
+	%% Repeating an id at the bound rotates. The repeated id stays.
+	%% An id that was only in the previous generation is dropped.
+	S5 = stream_linger(1, S3),
+	false = is_lingering_stream(2, S5),
+	true = is_lingering_stream(1, S5),
+	true = is_lingering_stream(Max + 1, S5),
+	{error, {connection_error, stream_closed, _}, _}
+		= frame({data, 2, fin, <<>>}, S5),
+	{ok, _} = frame({data, 1, fin, <<>>}, S5),
+	%% Repeating an id already in the full current generation rotates too.
+	%% That id stays. The previous generation is dropped.
+	S6 = stream_linger(Max + 1, S3),
+	false = is_lingering_stream(1, S6),
+	true = is_lingering_stream(Max + 1, S6),
+	true = is_lingering_stream(Max * 2, S6),
+	{error, {connection_error, stream_closed, _}, _}
+		= frame({data, 1, fin, <<>>}, S6),
+	{ok, _} = frame({data, Max + 1, fin, <<>>}, S6),
+	%% A header block on a lingered stream is decoded. One on a
+	%% forgotten stream is rejected and does not touch HPACK state.
+	{Block0, _} = cow_hpack:encode(
+		[{<<"user-agent">>, <<"linger-test">>}], cow_hpack:init()),
+	Block = iolist_to_binary(Block0),
+	Decode = S4#http2_machine.decode_state,
+	{error, {connection_error, stream_closed, _}, S7}
+		= frame({headers, 1, fin, head_fin, Block}, S4),
+	Decode = S7#http2_machine.decode_state,
+	{ok, S8} = frame({headers, Max + 1, fin, head_fin, Block}, S4),
+	true = S8#http2_machine.decode_state =/= Decode,
+	{ok, S9} = frame({headers, Max * 2 + 1, fin, head_fin, Block}, S4),
+	true = S9#http2_machine.decode_state =/= Decode,
+	ok.
+
+remote_linger_generations_test() ->
+	Max = ?REMOTE_LINGER_MAX,
+	S0 = linger_machine(server),
+	S1 = linger_remotes(lists:seq(1, Max), S0),
+	{Current1, Previous1} = S1#http2_machine.remote_lingering_streams,
+	Max = map_size(Current1),
+	0 = map_size(Previous1),
+	S2 = linger_remotes([Max + 1], S1),
+	true = is_lingering_stream(1, S2),
+	true = is_lingering_stream(Max + 1, S2),
+	{error, {stream_error, 1, stream_closed, _}, _}
+		= frame({window_update, 1, 1}, S2),
+	%% Below the bound, repeating an id writes it into the current generation.
+	S2b = linger_remotes([1], S2),
+	{Current2b, Previous2b} = S2b#http2_machine.remote_lingering_streams,
+	2 = map_size(Current2b),
+	true = is_map_key(1, Current2b),
+	true = is_map_key(1, Previous2b),
+	S3 = linger_remotes(lists:seq(Max + 2, Max * 2), S2),
+	S4 = linger_remotes([Max * 2 + 1], S3),
+	false = is_lingering_stream(1, S4),
+	Kept = Max + 1,
+	Newest = Max * 2 + 1,
+	true = is_lingering_stream(Kept, S4),
+	true = is_lingering_stream(Newest, S4),
+	{ok, _} = frame({window_update, 1, 1}, S4),
+	{error, {stream_error, Kept, stream_closed, _}, _}
+		= frame({window_update, Kept, 1}, S4),
+	{error, {stream_error, Newest, stream_closed, _}, _}
+		= frame({window_update, Newest, 1}, S4),
+	%% Repeating an id at the bound rotates. That id stays.
+	%% An id that was only in the previous generation is dropped.
+	S5 = linger_remotes([1], S3),
+	false = is_lingering_stream(2, S5),
+	true = is_lingering_stream(1, S5),
+	true = is_lingering_stream(Kept, S5),
+	{ok, _} = frame({window_update, 2, 1}, S5),
+	{error, {stream_error, 1, stream_closed, _}, _}
+		= frame({window_update, 1, 1}, S5),
+	%% Repeating an id already in the full current generation rotates too.
+	S6 = linger_remotes([Kept], S3),
+	false = is_lingering_stream(1, S6),
+	true = is_lingering_stream(Kept, S6),
+	true = is_lingering_stream(Max * 2, S6),
+	{ok, _} = frame({window_update, 1, 1}, S6),
+	{error, {stream_error, Kept, stream_closed, _}, _}
+		= frame({window_update, Kept, 1}, S6),
+	%% A PUSH_PROMISE for a parent this side reset is still accepted
+	%% while that parent lingers, including from the previous generation.
+	C0 = linger_machine(client),
+	First = 1,
+	Prev = 1 + ?LOCAL_LINGER_MAX * 2,
+	Current = 1 + ?LOCAL_LINGER_MAX * 4,
+	C1 = linger_locals(lists:seq(First, Current, 2), C0),
+	{error, {connection_error, protocol_error, _}, _}
+		= frame({push_promise, First, head_fin, 100002, <<>>}, C1),
+	{error, {stream_error, 100002, cancel, _}, _}
+		= frame({push_promise, Prev, head_fin, 100002, <<>>}, C1),
+	{error, {stream_error, 100004, cancel, _}, _}
+		= frame({push_promise, Current, head_fin, 100004, <<>>}, C1),
+	ok.
+
+-endif.

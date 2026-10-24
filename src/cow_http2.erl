@@ -272,13 +272,14 @@ parse(<< Len:24, 6:8, _/bits >>) when Len =/= 8 ->
 %%
 %% GOAWAY frames.
 %%
-parse(<< Len0:24, 7:8, _:9, 0:31, _:1, LastStreamID:31, ErrorCode:32, Rest0/bits >>) when byte_size(Rest0) >= Len0 - 8 ->
+parse(<< Len0:24, 7:8, _:9, 0:31, _:1, LastStreamID:31, ErrorCode:32, Rest0/bits >>)
+		when Len0 >= 8, byte_size(Rest0) >= Len0 - 8 ->
 	Len = Len0 - 8,
 	<< DebugData:Len/binary, Rest/bits >> = Rest0,
 	{ok, {goaway, LastStreamID, parse_error_code(ErrorCode), DebugData}, Rest};
 parse(<< Len:24, 7:8, _:40, _/bits >>) when Len < 8 ->
 	{connection_error, frame_size_error, 'GOAWAY frames MUST have a length >= 8. (RFC7540 4.2, RFC7540 6.8)'};
-parse(<< _:24, 7:8, _:40, _/bits >>) ->
+parse(<< _:24, 7:8, _:9, StreamID:31, _/bits >>) when StreamID =/= 0 ->
 	{connection_error, protocol_error, 'GOAWAY frames MUST NOT be associated with a stream. (RFC7540 6.8)'};
 %%
 %% WINDOW_UPDATE frames.
@@ -315,6 +316,47 @@ parse(_) ->
 	more.
 
 -ifdef(TEST).
+parse_goaway_test() ->
+	%% Empty debug data. Every proper prefix is incomplete.
+	Empty = iolist_to_binary(goaway(1, no_error, <<>>)),
+	_ = [more = parse(binary:part(Empty, 0, I)) || I <- lists:seq(1, byte_size(Empty) - 1)],
+	{ok, {goaway, 1, no_error, <<>>}, <<>>} = parse(Empty),
+	{ok, {goaway, 1, no_error, <<>>}, <<42>>} = parse(<<Empty/binary, 42>>),
+	%% One byte of debug data. The incomplete window extends past the header.
+	Debug = iolist_to_binary(goaway(0, protocol_error, <<"x">>)),
+	_ = [more = parse(binary:part(Debug, 0, I)) || I <- lists:seq(1, byte_size(Debug) - 1)],
+	{ok, {goaway, 0, protocol_error, <<"x">>}, <<>>} = parse(Debug),
+	{ok, {goaway, 0, protocol_error, <<"x">>}, <<42>>} = parse(<<Debug/binary, 42>>),
+	%% A non-zero stream id is an error once the 9-byte header is present.
+	Bad = <<8:24, 7:8, 0:8, 0:1, 1:31, 0:1, 1:31, 1:32>>,
+	_ = [more = parse(binary:part(Bad, 0, I)) || I <- lists:seq(1, 8)],
+	_ = [{connection_error, protocol_error, _} = parse(binary:part(Bad, 0, I))
+		|| I <- lists:seq(9, byte_size(Bad))],
+	%% A length below 8 is a frame size error from the header alone,
+	%% including when the stream id is also non-zero.
+	Short = <<7:24, 7:8, 0:40>>,
+	_ = [more = parse(binary:part(Short, 0, I)) || I <- lists:seq(1, 8)],
+	{connection_error, frame_size_error, _} = parse(Short),
+	ShortBad = <<7:24, 7:8, 0:8, 0:1, 1:31>>,
+	{connection_error, frame_size_error, _} = parse(ShortBad),
+	%% Length 0 and 7 still error when the buffer is long enough
+	%% to fill the 8-byte payload the success pattern consumes.
+	%% Stream id 0 and a non-zero stream id both stay errors.
+	_ = [begin
+		Frame0 = <<Len:24, 7:8, 0:40, 0:64, 42>>,
+		Frame1 = <<Len:24, 7:8, 0:8, 0:1, 1:31, 0:64, 42>>,
+		_ = [more = parse(binary:part(Frame0, 0, I)) || I <- lists:seq(1, 8)],
+		_ = [{connection_error, frame_size_error, _}
+			= parse(binary:part(Frame0, 0, I))
+			|| I <- lists:seq(9, byte_size(Frame0))],
+		_ = [more = parse(binary:part(Frame1, 0, I)) || I <- lists:seq(1, 8)],
+		_ = [{connection_error, frame_size_error, _}
+			= parse(binary:part(Frame1, 0, I))
+			|| I <- lists:seq(9, byte_size(Frame1))],
+		{connection_error, frame_size_error, _} = parse(Frame0, 16384)
+	end || Len <- [0, 7]],
+	ok.
+
 parse_ping_test() ->
 	Ping = ping(1234567890),
 	_ = [more = parse(binary:part(Ping, 0, I)) || I <- lists:seq(1, byte_size(Ping) - 1)],

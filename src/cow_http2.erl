@@ -272,7 +272,8 @@ parse(<< Len:24, 6:8, _/bits >>) when Len =/= 8 ->
 %%
 %% GOAWAY frames.
 %%
-parse(<< Len0:24, 7:8, _:9, 0:31, _:1, LastStreamID:31, ErrorCode:32, Rest0/bits >>) when byte_size(Rest0) >= Len0 - 8 ->
+parse(<< Len0:24, 7:8, _:9, 0:31, _:1, LastStreamID:31, ErrorCode:32, Rest0/bits >>)
+		when Len0 >= 8, byte_size(Rest0) >= Len0 - 8 ->
 	Len = Len0 - 8,
 	<< DebugData:Len/binary, Rest/bits >> = Rest0,
 	{ok, {goaway, LastStreamID, parse_error_code(ErrorCode), DebugData}, Rest};
@@ -338,6 +339,22 @@ parse_goaway_test() ->
 	{connection_error, frame_size_error, _} = parse(Short),
 	ShortBad = <<7:24, 7:8, 0:8, 0:1, 1:31>>,
 	{connection_error, frame_size_error, _} = parse(ShortBad),
+	%% Length 0 and 7 still error when the buffer is long enough
+	%% to fill the 8-byte payload the success pattern consumes.
+	%% Stream id 0 and a non-zero stream id both stay errors.
+	_ = [begin
+		Frame0 = <<Len:24, 7:8, 0:40, 0:64, 42>>,
+		Frame1 = <<Len:24, 7:8, 0:8, 0:1, 1:31, 0:64, 42>>,
+		_ = [more = parse(binary:part(Frame0, 0, I)) || I <- lists:seq(1, 8)],
+		_ = [{connection_error, frame_size_error, _}
+			= parse(binary:part(Frame0, 0, I))
+			|| I <- lists:seq(9, byte_size(Frame0))],
+		_ = [more = parse(binary:part(Frame1, 0, I)) || I <- lists:seq(1, 8)],
+		_ = [{connection_error, frame_size_error, _}
+			= parse(binary:part(Frame1, 0, I))
+			|| I <- lists:seq(9, byte_size(Frame1))],
+		{connection_error, frame_size_error, _} = parse(Frame0, 16384)
+	end || Len <- [0, 7]],
 	ok.
 
 parse_ping_test() ->

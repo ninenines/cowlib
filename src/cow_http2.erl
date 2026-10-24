@@ -278,7 +278,7 @@ parse(<< Len0:24, 7:8, _:9, 0:31, _:1, LastStreamID:31, ErrorCode:32, Rest0/bits
 	{ok, {goaway, LastStreamID, parse_error_code(ErrorCode), DebugData}, Rest};
 parse(<< Len:24, 7:8, _:40, _/bits >>) when Len < 8 ->
 	{connection_error, frame_size_error, 'GOAWAY frames MUST have a length >= 8. (RFC7540 4.2, RFC7540 6.8)'};
-parse(<< _:24, 7:8, _:40, _/bits >>) ->
+parse(<< _:24, 7:8, _:9, StreamID:31, _/bits >>) when StreamID =/= 0 ->
 	{connection_error, protocol_error, 'GOAWAY frames MUST NOT be associated with a stream. (RFC7540 6.8)'};
 %%
 %% WINDOW_UPDATE frames.
@@ -315,6 +315,31 @@ parse(_) ->
 	more.
 
 -ifdef(TEST).
+parse_goaway_test() ->
+	%% Empty debug data. Every proper prefix is incomplete.
+	Empty = iolist_to_binary(goaway(1, no_error, <<>>)),
+	_ = [more = parse(binary:part(Empty, 0, I)) || I <- lists:seq(1, byte_size(Empty) - 1)],
+	{ok, {goaway, 1, no_error, <<>>}, <<>>} = parse(Empty),
+	{ok, {goaway, 1, no_error, <<>>}, <<42>>} = parse(<<Empty/binary, 42>>),
+	%% One byte of debug data. The incomplete window extends past the header.
+	Debug = iolist_to_binary(goaway(0, protocol_error, <<"x">>)),
+	_ = [more = parse(binary:part(Debug, 0, I)) || I <- lists:seq(1, byte_size(Debug) - 1)],
+	{ok, {goaway, 0, protocol_error, <<"x">>}, <<>>} = parse(Debug),
+	{ok, {goaway, 0, protocol_error, <<"x">>}, <<42>>} = parse(<<Debug/binary, 42>>),
+	%% A non-zero stream id is an error once the 9-byte header is present.
+	Bad = <<8:24, 7:8, 0:8, 0:1, 1:31, 0:1, 1:31, 1:32>>,
+	_ = [more = parse(binary:part(Bad, 0, I)) || I <- lists:seq(1, 8)],
+	_ = [{connection_error, protocol_error, _} = parse(binary:part(Bad, 0, I))
+		|| I <- lists:seq(9, byte_size(Bad))],
+	%% A length below 8 is a frame size error from the header alone,
+	%% including when the stream id is also non-zero.
+	Short = <<7:24, 7:8, 0:40>>,
+	_ = [more = parse(binary:part(Short, 0, I)) || I <- lists:seq(1, 8)],
+	{connection_error, frame_size_error, _} = parse(Short),
+	ShortBad = <<7:24, 7:8, 0:8, 0:1, 1:31>>,
+	{connection_error, frame_size_error, _} = parse(ShortBad),
+	ok.
+
 parse_ping_test() ->
 	Ping = ping(1234567890),
 	_ = [more = parse(binary:part(Ping, 0, I)) || I <- lists:seq(1, byte_size(Ping) - 1)],

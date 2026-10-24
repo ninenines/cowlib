@@ -17,7 +17,7 @@
 ERLANG_MK_FILENAME := $(realpath $(lastword $(MAKEFILE_LIST)))
 export ERLANG_MK_FILENAME
 
-ERLANG_MK_VERSION = beafddd
+ERLANG_MK_VERSION = 841abb9
 ERLANG_MK_WITHOUT = 
 
 # Make 3.81 and 3.82 are deprecated.
@@ -136,7 +136,7 @@ help::
 		"  all           Run deps, app and rel targets in that order" \
 		"  app           Compile the project" \
 		"  deps          Fetch dependencies (if needed) and compile them" \
-		"  fetch-deps    Fetch dependencies recursively (if needed) without compiling them" \
+		"  fetch-deps    Fetch dependencies recursively (if needed) without building the project" \
 		"  lock          Enable the dependency lock recorded in lock.mk" \
 		"  unlock        Disable the dependency lock recorded in lock.mk" \
 		"  list-deps     List dependencies recursively on stdout" \
@@ -261,7 +261,7 @@ KERL_DIR = $(ERLANG_MK_TMP)/kerl
 export KERL
 
 KERL_GIT ?= https://github.com/kerl/kerl
-KERL_COMMIT ?= master
+KERL_COMMIT ?= e2e0ac5dc3dd8f49ce65e3db87f06986127b478a # 4.4.0
 
 KERL_MAKEFLAGS ?=
 
@@ -275,12 +275,12 @@ $(KERL_INSTALL_DIR)/$1: $(KERL)
 	fi
 endef
 
-$(KERL): $(KERL_DIR)
-
-$(KERL_DIR): | $(ERLANG_MK_TMP)
-	$(gen_verbose) git clone --depth 1 $(KERL_GIT) $(ERLANG_MK_TMP)/kerl
-	$(verbose) cd $(ERLANG_MK_TMP)/kerl && git checkout $(KERL_COMMIT)
-	$(verbose) chmod +x $(KERL)
+$(KERL): | $(ERLANG_MK_TMP)
+	$(verbose) rm -rf $(KERL_DIR)
+	$(gen_verbose) git clone -q -n -- $(KERL_GIT) $(ERLANG_MK_TMP)/kerl \
+		&& cd $(ERLANG_MK_TMP)/kerl && git checkout -q $(KERL_COMMIT) \
+		&& chmod +x $(KERL) \
+		|| { rm -rf $(KERL_DIR); exit 1; }
 
 distclean:: distclean-kerl
 
@@ -324,7 +324,7 @@ pkg_asciideck_commit = master
 PACKAGES += cowboy
 pkg_cowboy_name = cowboy
 pkg_cowboy_description = Small, fast and modular HTTP server.
-pkg_cowboy_homepage = http://ninenines.eu
+pkg_cowboy_homepage = https://ninenines.eu
 pkg_cowboy_fetch = git
 pkg_cowboy_repo = https://github.com/ninenines/cowboy
 pkg_cowboy_commit = master
@@ -332,7 +332,7 @@ pkg_cowboy_commit = master
 PACKAGES += cowlib
 pkg_cowlib_name = cowlib
 pkg_cowlib_description = Support library for manipulating Web protocols.
-pkg_cowlib_homepage = http://ninenines.eu
+pkg_cowlib_homepage = https://ninenines.eu
 pkg_cowlib_fetch = git
 pkg_cowlib_repo = https://github.com/ninenines/cowlib
 pkg_cowlib_commit = master
@@ -364,7 +364,7 @@ pkg_gpb_commit = master
 PACKAGES += gun
 pkg_gun_name = gun
 pkg_gun_description = HTTP/1.1, HTTP/2, Websocket client (and more) for Erlang/OTP.
-pkg_gun_homepage = http//ninenines.eu
+pkg_gun_homepage = https://ninenines.eu
 pkg_gun_fetch = git
 pkg_gun_repo = https://github.com/ninenines/gun
 pkg_gun_commit = master
@@ -376,7 +376,7 @@ pkg_hex_core_homepage = https://github.com/hexpm/hex_core
 pkg_hex_core_fetch = git
 HEX_CORE_GIT ?= https://github.com/hexpm/hex_core
 pkg_hex_core_repo = $(HEX_CORE_GIT)
-pkg_hex_core_commit = v0.19.0
+pkg_hex_core_commit = v0.21.1
 
 PACKAGES += proper
 pkg_proper_name = proper
@@ -389,7 +389,7 @@ pkg_proper_commit = master
 PACKAGES += ranch
 pkg_ranch_name = ranch
 pkg_ranch_description = Socket acceptor pool for TCP protocols.
-pkg_ranch_homepage = http://ninenines.eu
+pkg_ranch_homepage = https://ninenines.eu
 pkg_ranch_fetch = git
 pkg_ranch_repo = https://github.com/ninenines/ranch
 pkg_ranch_commit = master
@@ -463,7 +463,7 @@ export REBAR_DEPS_DIR
 # When testing Erlang.mk and updating these, make sure
 # to delete test/test_rebar_git before running tests again.
 REBAR3_GIT ?= https://github.com/erlang/rebar3
-REBAR3_COMMIT ?= 619df55d9dab109cbd1b5d9ed1d45c93f5450e24 # 3.27.0
+REBAR3_COMMIT ?= 183065cc3f7ec5a9d9d4936f7e1df6246178df40 # 3.28.0
 
 CACHE_DEPS ?= 0
 
@@ -722,7 +722,7 @@ define dep_autopatch_detect
 endef
 
 define dep_autopatch_for_erlang.mk
-	rm -rf $(DEPS_DIR)/$1/ebin/; \
+	rm -rf $(DEPS_DIR)/$1/ebin; \
 	$(call erlang,$(call dep_autopatch_appsrc.erl,$1)); \
 	$(call dep_autopatch_erlang_mk,$1)
 endef
@@ -789,12 +789,14 @@ define dep_autopatch_fetch_rebar
 endef
 
 define dep_autopatch_fetch_rebar2
-	if [ ! -d $(ERLANG_MK_TMP)/rebar3 ]; then \
-		git clone -q -n -- $(REBAR3_GIT) $(ERLANG_MK_TMP)/rebar3; \
-		cd $(ERLANG_MK_TMP)/rebar3; \
-		git checkout -q $(REBAR3_COMMIT); \
-		./bootstrap; \
-		cd -; \
+	if [ ! -x $(ERLANG_MK_TMP)/rebar3/rebar3 ]; then \
+		rm -rf $(ERLANG_MK_TMP)/rebar3 && \
+		git clone -q -n -- $(REBAR3_GIT) $(ERLANG_MK_TMP)/rebar3 && \
+		cd $(ERLANG_MK_TMP)/rebar3 && \
+		git checkout -q $(REBAR3_COMMIT) && \
+		./bootstrap && \
+		{ test -x rebar3 || cp -f _build/prod/bin/rebar3 rebar3; } && \
+		cd - || { rm -rf $(ERLANG_MK_TMP)/rebar3; exit 1; }; \
 	fi
 endef
 
@@ -1300,8 +1302,9 @@ define dep_cache_fetch_git
 	else \
 		git clone -q -n -- $(call query_repo_git,$1) $(join $(CACHE_DIR)/git/,$(call query_name,$1)); \
 	fi; \
-	git clone -q --single-branch -- $(join $(CACHE_DIR)/git/,$(call query_name,$1)) $2; \
-	cd $2 && git checkout -q $(call query_version_git,$1)
+	git clone -q --single-branch -- $(join $(CACHE_DIR)/git/,$(call query_name,$1)) $2 \
+		&& cd $2 && git checkout -q $(call query_version_git,$1) \
+		|| { rm -rf $2; exit 1; }
 endef
 
 define dep_fetch_git
@@ -1320,20 +1323,23 @@ endef
 else
 
 define dep_fetch_git
-	git clone -q -n -- $(call query_repo_git,$1) $(DEPS_DIR)/$(call query_name,$1); \
-	cd $(DEPS_DIR)/$(call query_name,$1) && git checkout -q $(call query_version_git,$1) && \
-	$(call dep_lock_git,$1)
+	git clone -q -n -- $(call query_repo_git,$1) $(DEPS_DIR)/$(call query_name,$1) \
+		&& cd $(DEPS_DIR)/$(call query_name,$1) && git checkout -q $(call query_version_git,$1) && \
+		$(call dep_lock_git,$1) \
+		|| { rm -rf $(DEPS_DIR)/$(call query_name,$1); exit 1; }
 endef
 
 define dep_fetch_git-subfolder
-	mkdir -p $(ERLANG_MK_TMP)/git-subfolder; \
+	mkdir -p $(ERLANG_MK_TMP)/git-subfolder && \
 	git clone -q -n -- $(call query_repo_git-subfolder,$1) \
-		$(ERLANG_MK_TMP)/git-subfolder/$(call query_name,$1); \
-	cd $(ERLANG_MK_TMP)/git-subfolder/$(call query_name,$1) \
-		&& git checkout -q $(call query_version_git-subfolder,$1) && \
+		$(ERLANG_MK_TMP)/git-subfolder/$(call query_name,$1) && \
+	cd $(ERLANG_MK_TMP)/git-subfolder/$(call query_name,$1) && \
+	git checkout -q $(call query_version_git-subfolder,$1) && \
 	ln -s $(ERLANG_MK_TMP)/git-subfolder/$(call query_name,$1)/$(word 4,$(dep_$1)) \
 		$(DEPS_DIR)/$(call query_name,$1) && \
-	$(call dep_lock_git-subfolder,$1)
+	$(call dep_lock_git-subfolder,$1) \
+	|| { rm -rf $(ERLANG_MK_TMP)/git-subfolder/$(call query_name,$1) \
+		$(DEPS_DIR)/$(call query_name,$1); exit 1; }
 endef
 
 endif
@@ -1364,7 +1370,8 @@ define hex_get_tarball.erl
 		{ok, {Status, _, Errors}} ->
 			io:format("Error ~b: ~0p~n", [Status, Errors]),
 			halt(79);
-		_ ->
+		Error ->
+			io:format(standard_error, "Error: ~0p~n", [Error]),
 			halt(79)
 	end
 endef
@@ -1372,9 +1379,89 @@ endef
 define hex_check_tarball.erl
 	case file:read_file("$4") of
 		{ok, Bin} ->
-			Sum = binary_to_list(binary:encode_hex(crypto:hash(sha256, Bin), lowercase)),
-			case "$5" of
-				"" ->
+			Sum = binary:encode_hex(crypto:hash(sha256, Bin), lowercase),
+			Pkg = case "$3" of
+				"" -> <<"$1">>;
+				_ -> <<"$3">>
+			end,
+			IsPre = fun(V) ->
+				case string:split(V, <<"-">>) of
+					[_, _] -> true;
+					_ -> false
+				end
+			end,
+			Parts = fun(V) ->
+				[Core | _] = string:split(V, <<"-">>),
+				[binary_to_integer(N) || N <- string:split(Core, <<".">>, all)]
+			end,
+			Norm = fun(Ps) ->
+				lists:reverse(lists:dropwhile(fun(N) -> N =:= 0 end, lists:reverse(Ps)))
+			end,
+			WarnNewer = fun(Releases, Using) ->
+				Stable = [maps:get(version, R) || R <- Releases,
+					not maps:is_key(retired, R), not IsPre(maps:get(version, R))],
+				case Stable of
+					[] -> ok;
+					_ ->
+						Latest = lists:foldl(fun(V, Best) ->
+							case Norm(Parts(V)) > Norm(Parts(Best)) of
+								true -> V;
+								false -> Best
+							end
+						end, hd(Stable), tl(Stable)),
+						Newer = Norm(Parts(Latest)) > Norm(Parts(Using))
+							orelse (Norm(Parts(Latest)) =:= Norm(Parts(Using)) andalso IsPre(Using)),
+						case Newer of
+							true ->
+								io:format(standard_error,
+									"Warning: newer version ~s of ~s is available (using ~s).~n",
+									[Latest, Pkg, Using]);
+							false ->
+								ok
+						end
+				end
+			end,
+			case <<"$5">> of
+				<<>> ->
+					{ok, _} = application:ensure_all_started(ssl),
+					{ok, _} = application:ensure_all_started(inets),
+					Config = $(hex_config.erl),
+					LockSum = case hex_repo:get_package(Config, Pkg) of
+						{ok, {200, _, #{releases := Releases}}} ->
+							case [R || R <- Releases, maps:get(version, R) =:= <<"$(strip $2)">>] of
+								[Release] ->
+									case maps:get(outer_checksum, Release, <<>>) of
+										<<>> ->
+											io:format(standard_error,
+												"Warning: no outer checksum for ~s ~s.~n",
+												[Pkg, <<"$(strip $2)">>]),
+											WarnNewer(Releases, <<"$(strip $2)">>),
+											Sum;
+										Outer ->
+											case binary:encode_hex(Outer, lowercase) of
+												Sum ->
+													WarnNewer(Releases, <<"$(strip $2)">>),
+													Sum;
+												_ ->
+													io:format(standard_error,
+														"Error: checksum mismatch for ~s.~n",
+														["$1"]),
+													halt(101)
+											end
+									end;
+								_ ->
+									io:format(standard_error,
+										"Error: no Hex release ~s ~s.~n",
+										[Pkg, <<"$(strip $2)">>]),
+									halt(103)
+							end;
+						{ok, {Status, _, Errors}} ->
+							io:format(standard_error, "Error ~b: ~0p~n", [Status, Errors]),
+							halt(103);
+						Error ->
+							io:format(standard_error, "Error: ~0p~n", [Error]),
+							halt(103)
+					end,
 					DepLine = case "$3" of
 						"" -> io_lib:format("dep_~s := hex ~s", ["$1", "$2"]);
 						_ -> io_lib:format("dep_~s := hex ~s ~s", ["$1", "$2", "$3"])
@@ -1382,12 +1469,23 @@ define hex_check_tarball.erl
 					Block = iolist_to_binary([
 						"ifdef ERLANG_MK_LOCK\n", DepLine, "\n",
 						io_lib:format("dep_~s_commit := ~s\n", ["$1", "$2"]),
-						io_lib:format("dep_~s_checksum := ~s\n", ["$1", Sum]),
+						io_lib:format("dep_~s_checksum := ~s\n", ["$1", LockSum]),
 						"endif\n"
 					]),
 					ok = file:write_file("$6", Block, [append]),
 					halt(0);
 				Sum ->
+					try
+						true = "$7" =/= "cached",
+						{ok, _} = application:ensure_all_started(ssl),
+						{ok, _} = application:ensure_all_started(inets),
+						Config = $(hex_config.erl),
+						{ok, {200, _, #{releases := Releases}}} =
+							hex_repo:get_package(Config, Pkg),
+						WarnNewer(Releases, <<"$(strip $2)">>)
+					catch _:_ ->
+						ok
+					end,
 					halt(0);
 				_ ->
 					io:format(standard_error, "Error: checksum mismatch for ~s.~n", ["$1"]),
@@ -1395,6 +1493,16 @@ define hex_check_tarball.erl
 			end;
 		_ ->
 			halt(102)
+	end
+endef
+
+define hex_unpack_tarball.erl
+	case hex_tarball:unpack({file, "$1"}, "$2") of
+		{ok, _} ->
+			halt(0);
+		{error, Reason} ->
+			io:format(standard_error, "Error: ~s~n", [hex_tarball:format_error(Reason)]),
+			halt(1)
 	end
 endef
 
@@ -1407,9 +1515,10 @@ define dep_fetch_hex
 	$(eval hex_tar_name := $(hex_pkg_name)-$(strip $(call query_version_hex,$1)).tar) \
 	$(if $(wildcard $(CACHE_DIR)/hex/$(hex_tar_name)),,\
 		$(call erlang,$(call hex_get_tarball.erl,$(hex_pkg_name),$(call query_version_hex,$1),$(NATIVE_CACHE_DIR)/hex/$(hex_tar_name))) &&) \
-	$(call erlang,$(call hex_check_tarball.erl,$1,$(call query_version_hex,$1),$(word 3,$(dep_$1)),$(NATIVE_CACHE_DIR)/hex/$(hex_tar_name),$(dep_$1_checksum),$(call core_native_path,$(ERLANG_MK_LOCK_FILE)))) && \
+	$(call erlang,$(call hex_check_tarball.erl,$1,$(call query_version_hex,$1),$(word 3,$(dep_$1)),$(NATIVE_CACHE_DIR)/hex/$(hex_tar_name),$(dep_$1_checksum),$(call core_native_path,$(ERLANG_MK_LOCK_FILE)),$(if $(wildcard $(CACHE_DIR)/hex/$(hex_tar_name)),cached))) && \
 	{ mkdir -p $(DEPS_DIR)/$1 && \
-		tar -xOf $(CACHE_DIR)/hex/$(hex_tar_name) contents.tar.gz | tar -C $(DEPS_DIR)/$1 -xzf - \
+		$(call erlang,$(call hex_unpack_tarball.erl,$(NATIVE_CACHE_DIR)/hex/$(hex_tar_name),$(call core_native_path,$(DEPS_DIR)/$1))) && \
+		find $(DEPS_DIR)/$1 \( -type f -o -type d \) -exec chmod go-w {} + \
 		|| { rm -rf $(DEPS_DIR)/$1; exit 1; }; }
 endef
 
@@ -1422,7 +1531,8 @@ define dep_fetch_hex
 	$(call erlang,$(call hex_get_tarball.erl,$(hex_pkg_name),$(call query_version_hex,$1),$(NATIVE_ERLANG_MK_TMP)/hex/$1.tar)) && \
 	$(call erlang,$(call hex_check_tarball.erl,$1,$(call query_version_hex,$1),$(word 3,$(dep_$1)),$(NATIVE_ERLANG_MK_TMP)/hex/$1.tar,$(dep_$1_checksum),$(call core_native_path,$(ERLANG_MK_LOCK_FILE)))) && \
 	{ mkdir -p $(DEPS_DIR)/$1 && \
-		tar -xOf $(ERLANG_MK_TMP)/hex/$1.tar contents.tar.gz | tar -C $(DEPS_DIR)/$1 -xzf - \
+		$(call erlang,$(call hex_unpack_tarball.erl,$(NATIVE_ERLANG_MK_TMP)/hex/$1.tar,$(call core_native_path,$(DEPS_DIR)/$1))) && \
+		find $(DEPS_DIR)/$1 \( -type f -o -type d \) -exec chmod go-w {} + \
 		|| { rm -rf $(DEPS_DIR)/$1; exit 1; }; }
 endef
 
@@ -2021,7 +2131,7 @@ endif
 clean:: clean-app
 
 clean-app:
-	$(gen_verbose) rm -rf $(PROJECT).d ebin/ priv/mibs/ $(XRL_ERL_FILES) $(YRL_ERL_FILES) \
+	$(gen_verbose) rm -rf $(PROJECT).d ebin priv/mibs $(XRL_ERL_FILES) $(YRL_ERL_FILES) \
 		$(addprefix include/,$(patsubst %.mib,%.hrl,$(notdir $(MIB_FILES)))) \
 		$(addprefix include/,$(patsubst %.asn1,%.hrl,$(notdir $(ASN1_FILES)))) \
 		$(addprefix include/,$(patsubst %.asn1,%.asn1db,$(notdir $(ASN1_FILES)))) \
@@ -2340,7 +2450,12 @@ $(foreach dep,$(TEST_DEPS),$(eval $(call dep_target,$(dep))))
 ifneq ($(SKIP_DEPS),)
 test-deps:
 else
-test-deps: $(ALL_TEST_DEPS_DIRS) | $(ERLANG_MK_TMP)/dep_built
+test-deps: deps | $(ERLANG_MK_TMP)/dep_built
+ifneq ($(ALL_TEST_DEPS_DIRS),)
+	$(verbose) missing=; for dep in $(ALL_TEST_DEPS_DIRS); do \
+		[ -e $$dep ] || missing="$$missing $$dep"; \
+	done; \
+	if [ -n "$$missing" ]; then $(MAKE) --no-print-directory $$missing; fi
 	$(verbose) set -e; for dep in $(ALL_TEST_DEPS_DIRS) ; do \
 		if [ -z "$(strip $(FULL))" ] && [ ! -L $$dep ] && [ -f $(ERLANG_MK_TMP)/dep_built/`basename $$dep` ]; then \
 			:; \
@@ -2349,6 +2464,7 @@ test-deps: $(ALL_TEST_DEPS_DIRS) | $(ERLANG_MK_TMP)/dep_built
 			if [ ! -L $$dep ] && [ -d $$dep/ebin ]; then touch $(ERLANG_MK_TMP)/dep_built/`basename $$dep`; fi; \
 		fi \
 	done
+endif
 endif
 
 ifneq ($(wildcard $(TEST_DIR)),)
@@ -2760,6 +2876,8 @@ endef
 define tpl_vm.args
 -name project_name@127.0.0.1
 -setcookie project_name
+-kernel inet_dist_use_interface {127,0,0,1}
+-env ERL_EPMD_ADDRESS 127.0.0.1
 -heart
 endef
 
@@ -3349,6 +3467,9 @@ ifdef CONCUERROR_TESTS
 CONCUERROR_LOGS_DIR ?= $(CURDIR)/logs
 CONCUERROR_OPTS ?=
 
+CONCUERROR_GIT ?= https://github.com/parapluu/Concuerror
+CONCUERROR_COMMIT ?= 0cbd2fc2acd7e1e01dc92c41c303f7f37b13dcca # master @ 2026-06-24
+
 # Core targets.
 
 check:: concuerror
@@ -3360,8 +3481,15 @@ endif
 # Plugin-specific targets.
 
 $(ERLANG_MK_TMP)/Concuerror/bin/concuerror: | $(ERLANG_MK_TMP)
-	$(verbose) git clone https://github.com/parapluu/Concuerror $(ERLANG_MK_TMP)/Concuerror
-	$(verbose) $(MAKE) -C $(ERLANG_MK_TMP)/Concuerror
+	$(verbose) rm -rf $(ERLANG_MK_TMP)/Concuerror
+	$(verbose) git clone -q -n -- $(CONCUERROR_GIT) $(ERLANG_MK_TMP)/Concuerror \
+		&& cd $(ERLANG_MK_TMP)/Concuerror && git checkout -q $(CONCUERROR_COMMIT) \
+		|| { rm -rf $(ERLANG_MK_TMP)/Concuerror; exit 1; }
+	$(verbose) $(call dep_autopatch_fetch_rebar) \
+		&& test -x $(ERLANG_MK_TMP)/rebar3/rebar3 \
+		|| { rm -rf $(ERLANG_MK_TMP)/Concuerror; exit 1; }
+	$(verbose) $(MAKE) -C $(ERLANG_MK_TMP)/Concuerror REBAR=$(ERLANG_MK_TMP)/rebar3/rebar3 \
+		|| { rm -rf $(ERLANG_MK_TMP)/Concuerror; exit 1; }
 
 $(CONCUERROR_LOGS_DIR):
 	$(verbose) mkdir -p $(CONCUERROR_LOGS_DIR)
@@ -3938,13 +4066,20 @@ define hex_release_publish_summary.erl
 	halt(0)
 endef
 
+define hex_api_key.erl
+	case os:getenv("HEX_SECRET") of
+		false -> <<>>;
+		Secret -> list_to_binary(string:trim(Secret))
+	end
+endef
+
 define hex_release_publish.erl
 	{ok, _} = application:ensure_all_started(ssl),
 	{ok, _} = application:ensure_all_started(inets),
 	Config = $(hex_config.erl),
-	ConfigF = Config#{api_key => <<"$(strip $1)">>},
+	ConfigF = Config#{api_key => $(hex_api_key.erl)},
 	{ok, Tarball} = file:read_file("$(strip $(HEX_TARBALL_OUTPUT_FILE))"),
-	case hex_api_release:publish(ConfigF, Tarball, [{replace, $2}]) of
+	case hex_api_release:publish(ConfigF, Tarball, [{replace, $1}]) of
 		{ok, {200, _, #{}}} ->
 			io:format("Release replaced~n"),
 			halt(0);
@@ -3962,17 +4097,19 @@ hex-release-tarball: $(ERLANG_MK_TMP)/dep_built/hex_core $(HEX_TARBALL_OUTPUT_FI
 
 hex-release-publish: $(ERLANG_MK_TMP)/dep_built/hex_core hex-release-tarball
 	$(if $(HEX_SECRET),,$(eval HEX_SECRET := $(shell stty -echo; read -p "Secret: " secret; stty echo; echo $$secret) $(info )))
-	$(gen_verbose) $(call erlang,$(call hex_release_publish.erl,$(HEX_SECRET),false))
+	$(eval export HEX_SECRET)
+	$(gen_verbose) $(call erlang,$(call hex_release_publish.erl,false))
 
 hex-release-replace: $(ERLANG_MK_TMP)/dep_built/hex_core hex-release-tarball
 	$(if $(HEX_SECRET),,$(eval HEX_SECRET := $(shell stty -echo; read -p "Secret: " secret; stty echo; echo $$secret) $(info )))
-	$(gen_verbose) $(call erlang,$(call hex_release_publish.erl,$(HEX_SECRET),true))
+	$(eval export HEX_SECRET)
+	$(gen_verbose) $(call erlang,$(call hex_release_publish.erl,true))
 
 define hex_release_delete.erl
 	{ok, _} = application:ensure_all_started(ssl),
 	{ok, _} = application:ensure_all_started(inets),
 	Config = $(hex_config.erl),
-	ConfigF = Config#{api_key => <<"$(strip $1)">>},
+	ConfigF = Config#{api_key => $(hex_api_key.erl)},
 	case hex_api_release:delete(ConfigF, <<"$(strip $(PROJECT))">>, <<"$(strip $(PROJECT_VERSION))">>) of
 		{ok, {204, _, _}} ->
 			io:format("Release $(strip $(PROJECT_VERSION)) deleted~n"),
@@ -3985,17 +4122,18 @@ endef
 
 hex-release-delete: $(ERLANG_MK_TMP)/dep_built/hex_core
 	$(if $(HEX_SECRET),,$(eval HEX_SECRET := $(shell stty -echo; read -p "Secret: " secret; stty echo; echo $$secret) $(info )))
-	$(gen_verbose) $(call erlang,$(call hex_release_delete.erl,$(HEX_SECRET)))
+	$(eval export HEX_SECRET)
+	$(gen_verbose) $(call erlang,$(call hex_release_delete.erl))
 
 define hex_release_retire.erl
 	{ok, _} = application:ensure_all_started(ssl),
 	{ok, _} = application:ensure_all_started(inets),
 	Config = $(hex_config.erl),
-	ConfigF = Config#{api_key => <<"$(strip $1)">>},
-	Params = #{<<"reason">> => <<"$(strip $3)">>, <<"message">> => <<"$(strip $4)">>},
-	case hex_api_release:retire(ConfigF, <<"$(strip $(PROJECT))">>, <<"$(strip $2)">>, Params) of
+	ConfigF = Config#{api_key => $(hex_api_key.erl)},
+	Params = #{<<"reason">> => <<"$(strip $2)">>, <<"message">> => <<"$(strip $3)">>},
+	case hex_api_release:retire(ConfigF, <<"$(strip $(PROJECT))">>, <<"$(strip $1)">>, Params) of
 		{ok, {204, _, _}} ->
-			io:format("Release $(strip $2) has been retired~n"),
+			io:format("Release $(strip $1) has been retired~n"),
 			halt(0);
 		{ok, {Status, _, Errors}} ->
 			io:format("Error ~b: ~0p~n", [Status, Errors]),
@@ -4005,7 +4143,8 @@ endef
 
 hex-release-retire: $(ERLANG_MK_TMP)/dep_built/hex_core
 	$(if $(HEX_SECRET),,$(eval HEX_SECRET := $(shell stty -echo; read -p "Secret: " secret; stty echo; echo $$secret) $(info )))
-	$(gen_verbose) $(call erlang,$(call hex_release_retire.erl,$(HEX_SECRET),\
+	$(eval export HEX_SECRET)
+	$(gen_verbose) $(call erlang,$(call hex_release_retire.erl,\
 		$(if $(HEX_VERSION),$(HEX_VERSION),$(PROJECT_VERSION)),\
 		$(if $(HEX_REASON),$(HEX_REASON),invalid),\
 		$(HEX_MESSAGE)))
@@ -4014,10 +4153,10 @@ define hex_release_unretire.erl
 	{ok, _} = application:ensure_all_started(ssl),
 	{ok, _} = application:ensure_all_started(inets),
 	Config = $(hex_config.erl),
-	ConfigF = Config#{api_key => <<"$(strip $1)">>},
-	case hex_api_release:unretire(ConfigF, <<"$(strip $(PROJECT))">>, <<"$(strip $2)">>) of
+	ConfigF = Config#{api_key => $(hex_api_key.erl)},
+	case hex_api_release:unretire(ConfigF, <<"$(strip $(PROJECT))">>, <<"$(strip $1)">>) of
 		{ok, {204, _, _}} ->
-			io:format("Release $(strip $2) is not retired anymore~n"),
+			io:format("Release $(strip $1) is not retired anymore~n"),
 			halt(0);
 		{ok, {Status, _, Errors}} ->
 			io:format("Error ~b: ~0p~n", [Status, Errors]),
@@ -4027,7 +4166,8 @@ endef
 
 hex-release-unretire: $(ERLANG_MK_TMP)/dep_built/hex_core
 	$(if $(HEX_SECRET),,$(eval HEX_SECRET := $(shell stty -echo; read -p "Secret: " secret; stty echo; echo $$secret) $(info )))
-	$(gen_verbose) $(call erlang,$(call hex_release_unretire.erl,$(HEX_SECRET),\
+	$(eval export HEX_SECRET)
+	$(gen_verbose) $(call erlang,$(call hex_release_unretire.erl,\
 		$(if $(HEX_VERSION),$(HEX_VERSION),$(PROJECT_VERSION))))
 
 HEX_DOCS_DOC_DIR ?= doc/
@@ -4044,7 +4184,7 @@ define hex_docs_publish.erl
 	{ok, _} = application:ensure_all_started(ssl),
 	{ok, _} = application:ensure_all_started(inets),
 	Config = $(hex_config.erl),
-	ConfigF = Config#{api_key => <<"$(strip $1)">>},
+	ConfigF = Config#{api_key => $(hex_api_key.erl)},
 	{ok, Tarball} = file:read_file("$(strip $(HEX_DOCS_TARBALL_OUTPUT_FILE))"),
 	case hex_api:post(ConfigF,
 			["packages", "$(strip $(PROJECT))", "releases", "$(strip $(PROJECT_VERSION))", "docs"],
@@ -4060,15 +4200,16 @@ endef
 
 hex-docs-publish: $(ERLANG_MK_TMP)/dep_built/hex_core hex-docs-tarball-create
 	$(if $(HEX_SECRET),,$(eval HEX_SECRET := $(shell stty -echo; read -p "Secret: " secret; stty echo; echo $$secret) $(info )))
-	$(gen_verbose) $(call erlang,$(call hex_docs_publish.erl,$(HEX_SECRET)))
+	$(eval export HEX_SECRET)
+	$(gen_verbose) $(call erlang,$(call hex_docs_publish.erl))
 
 define hex_docs_delete.erl
 	{ok, _} = application:ensure_all_started(ssl),
 	{ok, _} = application:ensure_all_started(inets),
 	Config = $(hex_config.erl),
-	ConfigF = Config#{api_key => <<"$(strip $1)">>},
+	ConfigF = Config#{api_key => $(hex_api_key.erl)},
 	case hex_api:delete(ConfigF,
-			["packages", "$(strip $(PROJECT))", "releases", "$(strip $2)", "docs"]) of
+			["packages", "$(strip $(PROJECT))", "releases", "$(strip $1)", "docs"]) of
 		{ok, {Status, _, _}} when Status >= 200, Status < 300 ->
 			io:format("Docs removed~n"),
 			halt(0);
@@ -4080,7 +4221,8 @@ endef
 
 hex-docs-delete: $(ERLANG_MK_TMP)/dep_built/hex_core
 	$(if $(HEX_SECRET),,$(eval HEX_SECRET := $(shell stty -echo; read -p "Secret: " secret; stty echo; echo $$secret) $(info )))
-	$(gen_verbose) $(call erlang,$(call hex_docs_delete.erl,$(HEX_SECRET),\
+	$(eval export HEX_SECRET)
+	$(gen_verbose) $(call erlang,$(call hex_docs_delete.erl,\
 		$(if $(HEX_VERSION),$(HEX_VERSION),$(PROJECT_VERSION))))
 
 # Copyright (c) Loïc Hoguin <essen@ninenines.eu>

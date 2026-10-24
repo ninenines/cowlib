@@ -9,6 +9,7 @@ doc/markdown
 ebin/*.beam
 ebin/test
 examples/*/ebin
+lock.mk
 logs
 relx
 test/*.beam

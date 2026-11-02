@@ -55,7 +55,7 @@
 	initial_window_size => 0..16#7fffffff,
 	max_concurrent_streams => 0..16#ffffffff,
 	max_frame_size => 16384..16777215,
-	max_header_list_size => 16384..16#ffffffff
+	max_header_list_size => 0..16#ffffffff
 }.
 -export_type([settings/0]).
 

@@ -51,7 +51,7 @@
 -type settings() :: #{
 	enable_connect_protocol => boolean(),
 	enable_push => boolean(),
-	header_table_size => 16384..16#7fffffff,
+	header_table_size => 0..16#ffffffff,
 	initial_window_size => 0..16#7fffffff,
 	max_concurrent_streams => 0..16#ffffffff,
 	max_frame_size => 16384..16777215,

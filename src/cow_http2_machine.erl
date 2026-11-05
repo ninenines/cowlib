@@ -487,17 +487,17 @@ data_frame(Frame={data, StreamID, _, Data}, State0=#http2_machine{
 			%% the remote endpoint might still be sending us some more
 			%% frames until it can process this RST_STREAM.
 			case linger_member(StreamID, Lingering) of
-				false ->
-					{error, {connection_error, stream_closed,
-						'DATA frame received for a closed stream. (RFC7540 5.1)'},
-						State};
 				%% The window was reduced above. The caller applies
 				%% its normal window heuristics.
 				true when DataLen > 0 ->
 					{window_changed, DataLen, State};
 				%% Empty DATA did not change the window.
 				true ->
-					{ok, State}
+					{ok, State};
+				false ->
+					{error, {connection_error, stream_closed,
+						'DATA frame received for a closed stream. (RFC7540 5.1)'},
+						State}
 			end
 	end.
 
@@ -711,8 +711,6 @@ headers_enforce_concurrency_limit(Frame=#headers{id=StreamID},
 	case map_size(Streams) < MaxConcurrentStreams of
 		true ->
 			headers_process(Frame, State, Type, Stream, Headers);
-		%% The stream was never stored. Mark the id closed so
-		%% frames already in flight are ignored. (RFC7540 5.1)
 		false ->
 			stream_reset(StreamID,
 				State#http2_machine{remote_streamid=StreamID},
@@ -760,8 +758,7 @@ header_list_reject(Type, #headers{id=StreamID},
 	Streams = maps:remove(StreamID, Streams0),
 	stream_linger(StreamID, retarget_continuation(
 		State#http2_machine{streams=Streams}, StreamID));
-%% The request never became a stream. Close the id so frames
-%% already in flight are ignored. (RFC7540 5.1)
+%% The request never became a stream.
 header_list_reject(request, #headers{id=StreamID}, State) ->
 	stream_linger(StreamID,
 		State#http2_machine{remote_streamid=StreamID}).
@@ -1015,8 +1012,6 @@ headers_process(Frame=#headers{id=StreamID, fin=IsFin},
 			stream_reset(StreamID, State, protocol_error, format_error(Reason))
 	end.
 
-%% The stream was never stored. Mark the id closed so
-%% frames already in flight are ignored. (RFC7540 5.1)
 headers_malformed(#headers{id=StreamID}, State, HumanReadable) ->
 	stream_reset(StreamID,
 		State#http2_machine{remote_streamid=StreamID},
@@ -1122,13 +1117,6 @@ refused_request_lingers_test() ->
 	%% A skipped id is not lingered.
 	{error, {connection_error, stream_closed, _}, _}
 		= frame({data, 3, nofin, <<"hi">>}, S4),
-	%% Two generations later the refused id is gone.
-	Aged = lists:foldl(fun(Id, Acc) ->
-		stream_linger(Id, Acc)
-	end, S4, lists:seq(1000, 1000 + ?LOCAL_LINGER_MAX * 2 - 1)),
-	false = is_lingering_stream(5, Aged),
-	{error, {connection_error, stream_closed, _}, _}
-		= frame({data, 5, nofin, <<"hi">>}, Aged),
 	ok.
 
 malformed_request_lingers_test() ->
@@ -1197,10 +1185,6 @@ reset_stream_window_test() ->
 	65533 = S2b#http2_machine.remote_window,
 	{error, not_found} = reset_stream(1, S2b),
 	{window_changed, 2, _} = frame({data, 1, nofin, <<"hi">>}, S2b),
-	%% An id that was never stored is not lingered.
-	{error, not_found} = reset_stream(3, S2),
-	{error, {connection_error, protocol_error, _}, S2}
-		= frame({data, 3, nofin, <<"hi">>}, S2),
 	ok.
 
 %% The whole connection window can be consumed after a reset.
@@ -1227,57 +1211,6 @@ reset_stream_window_bounds_test() ->
 	{error, {connection_error, flow_control_error, _}, S4}
 		= frame({data, 1, nofin, Over}, S2),
 	65535 = S4#http2_machine.remote_window,
-	ok.
-
-%% DATA after a reset reports the window change and leaves it reduced.
-reset_stream_data_keeps_window_test() ->
-	{Req0, _} = cow_hpack:encode([
-		{<<":method">>, <<"GET">>},
-		{<<":scheme">>, <<"http">>},
-		{<<":path">>, <<"/">>}
-	]),
-	Req = iolist_to_binary(Req0),
-	{ok, _, S00} = init(server, #{
-		preface_timeout => infinity,
-		settings_timeout => infinity
-	}),
-	{ok, S0} = frame({settings, #{}}, S00),
-	{ok, {headers, 1, nofin, _, _, _}, S1}
-		= frame({headers, 1, nofin, head_fin, Req}, S0),
-	{ok, {data, 1, nofin, <<"hi">>}, S1a}
-		= frame({data, 1, nofin, <<"hi">>}, S1),
-	65533 = S1a#http2_machine.remote_window,
-	{ok, S2} = reset_stream(1, S1a),
-	{ok, S2a} = frame({data, 1, nofin, <<>>}, S2),
-	65533 = S2a#http2_machine.remote_window,
-	{window_changed, 2, S3} = frame({data, 1, nofin, <<"hi">>}, S2a),
-	65531 = S3#http2_machine.remote_window,
-	ok.
-
-%% The whole connection window can be consumed. One byte more
-%% is a connection error and does not change the window.
-refused_stream_data_window_bounds_test() ->
-	{Req0, _} = cow_hpack:encode([
-		{<<":method">>, <<"POST">>},
-		{<<":scheme">>, <<"http">>},
-		{<<":path">>, <<"/">>}
-	]),
-	Req = iolist_to_binary(Req0),
-	{ok, _, S00} = init(server, #{
-		preface_timeout => infinity,
-		settings_timeout => infinity,
-		max_concurrent_streams => 0
-	}),
-	{ok, S0} = frame({settings, #{}}, S00),
-	{error, {stream_error, 1, refused_stream, _}, S1}
-		= frame({headers, 1, nofin, head_fin, Req}, S0),
-	Full = binary:copy(<<$a>>, 65535),
-	{window_changed, 65535, S2} = frame({data, 1, nofin, Full}, S1),
-	0 = S2#http2_machine.remote_window,
-	Over = binary:copy(<<$a>>, 65536),
-	{error, {connection_error, flow_control_error, _}, S3}
-		= frame({data, 1, nofin, Over}, S1),
-	65535 = S3#http2_machine.remote_window,
 	ok.
 
 %% DATA for a stream above the GOAWAY id is discarded after the

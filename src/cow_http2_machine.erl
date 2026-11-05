@@ -113,11 +113,6 @@
 	#{cow_http2:streamid() => true}
 }.
 
--type local_linger_gens() :: {
-	#{cow_http2:streamid() => true},
-	#{cow_http2:streamid() => true}
-}.
-
 -type continued_frame() ::
 	{headers, cow_http2:streamid(), cow_http:fin(), cow_http2:head_fin(), binary()} |
 	{push_promise, cow_http2:streamid(), cow_http2:head_fin(), cow_http2:streamid(), binary()}.
@@ -175,7 +170,7 @@
 	%% HTTP/2 streams that have recently been reset locally.
 	%% We are expected to keep receiving additional frames after
 	%% sending an RST_STREAM. {Current, Previous}.
-	local_lingering_streams = {#{}, #{}} :: local_linger_gens(),
+	local_lingering_streams = {#{}, #{}} :: linger_gens(),
 
 	%% HTTP/2 streams that have recently been reset remotely.
 	%% We keep a few of these around in order to reject subsequent
@@ -491,17 +486,17 @@ data_frame(Frame={data, StreamID, _, Data}, State0=#http2_machine{
 			%% After we send an RST_STREAM frame and terminate a stream,
 			%% the remote endpoint might still be sending us some more
 			%% frames until it can process this RST_STREAM.
-			case linger_value(StreamID, Lingering) of
-				undefined ->
+			case linger_member(StreamID, Lingering) of
+				false ->
 					{error, {connection_error, stream_closed,
 						'DATA frame received for a closed stream. (RFC7540 5.1)'},
 						State};
 				%% The window was reduced above. The caller applies
 				%% its normal window heuristics.
-				_ when DataLen > 0 ->
+				true when DataLen > 0 ->
 					{window_changed, DataLen, State};
 				%% Empty DATA did not change the window.
-				_ ->
+				true ->
 					{ok, State}
 			end
 	end.
@@ -2447,36 +2442,22 @@ stream_reset(StreamID, State, Reason, HumanReadable) ->
 	{error, {stream_error, StreamID, Reason, HumanReadable},
 		stream_linger(StreamID, State)}.
 
-stream_linger(StreamID, State) ->
-	stream_linger(StreamID, true, State).
-
-stream_linger(StreamID, Value, State=#http2_machine{local_lingering_streams=Lingering0}) ->
+stream_linger(StreamID, State=#http2_machine{local_lingering_streams=Lingering0}) ->
 	%% Two generations of at most ?LOCAL_LINGER_MAX.
 	%% @todo Make the lingering-stream limit configurable.
-	Lingering = linger_add(StreamID, Value, Lingering0, ?LOCAL_LINGER_MAX),
+	Lingering = linger_add(StreamID, Lingering0, ?LOCAL_LINGER_MAX),
 	State#http2_machine{local_lingering_streams=Lingering}.
 
 %% The current generation holds at most Max ids. The next id
 %% starts a new generation and keeps the full one as previous.
 %% A repeated id is treated like a new one.
-linger_add(StreamID, Gens, Max) ->
-	linger_add(StreamID, true, Gens, Max).
+linger_add(StreamID, {Current, Previous}, Max) when map_size(Current) < Max ->
+	{Current#{StreamID => true}, Previous};
+linger_add(StreamID, {Current, _}, _) ->
+	{#{StreamID => true}, Current}.
 
-linger_add(StreamID, Value, {Current, Previous}, Max) when map_size(Current) < Max ->
-	{Current#{StreamID => Value}, Previous};
-linger_add(StreamID, Value, {Current, _}, _) ->
-	{#{StreamID => Value}, Current}.
-
-linger_member(StreamID, Gens) ->
-	linger_value(StreamID, Gens) =/= undefined.
-
-linger_value(StreamID, {Current, Previous}) ->
-	case Current of
-		#{StreamID := Value} ->
-			Value;
-		_ ->
-			maps:get(StreamID, Previous, undefined)
-	end.
+linger_member(StreamID, {Current, Previous}) ->
+	is_map_key(StreamID, Current) orelse is_map_key(StreamID, Previous).
 
 -ifdef(TEST).
 

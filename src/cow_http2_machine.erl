@@ -113,6 +113,11 @@
 	#{cow_http2:streamid() => true}
 }.
 
+-type local_linger_gens() :: {
+	#{cow_http2:streamid() => true},
+	#{cow_http2:streamid() => true}
+}.
+
 -type continued_frame() ::
 	{headers, cow_http2:streamid(), cow_http:fin(), cow_http2:head_fin(), binary()} |
 	{push_promise, cow_http2:streamid(), cow_http2:head_fin(), cow_http2:streamid(), binary()}.
@@ -170,7 +175,7 @@
 	%% HTTP/2 streams that have recently been reset locally.
 	%% We are expected to keep receiving additional frames after
 	%% sending an RST_STREAM. {Current, Previous}.
-	local_lingering_streams = {#{}, #{}} :: linger_gens(),
+	local_lingering_streams = {#{}, #{}} :: local_linger_gens(),
 
 	%% HTTP/2 streams that have recently been reset remotely.
 	%% We keep a few of these around in order to reject subsequent
@@ -376,6 +381,7 @@ init_upgrade_stream(Method, State=#http2_machine{mode=server, remote_streamid=0,
 	| {ok, {goaway, cow_http2:streamid(), cow_http2:error(), binary()}, State}
 	| {send, [{cow_http2:streamid(), cow_http:fin(),
 		[{data, iodata()} | #sendfile{} | {trailers, cow_http:headers()}]}], State}
+	| {window_changed, pos_integer(), State}
 	| {error, {stream_error, cow_http2:streamid(), cow_http2:error(), atom()}, State}
 	| {error, {connection_error, cow_http2:error(), atom()}, State}
 	when State::http2_machine().
@@ -438,7 +444,13 @@ maybe_discard_result(FrameResult={ok, Result, State=#http2_machine{mode=Mode,
 		when element(1, Result) =/= goaway ->
 	case element(2, Result) of
 		StreamID when StreamID > MaxID, not ?IS_LOCAL(Mode, StreamID) ->
-			{ok, State};
+			%% DATA already reduced the connection window.
+			case Result of
+				{data, _, _, Data} when byte_size(Data) > 0 ->
+					{window_changed, byte_size(Data), State};
+				_ ->
+					{ok, State}
+			end;
 		_StreamID ->
 			FrameResult
 	end;
@@ -479,13 +491,18 @@ data_frame(Frame={data, StreamID, _, Data}, State0=#http2_machine{
 			%% After we send an RST_STREAM frame and terminate a stream,
 			%% the remote endpoint might still be sending us some more
 			%% frames until it can process this RST_STREAM.
-			case linger_member(StreamID, Lingering) of
-				true ->
-					{ok, State};
-				false ->
+			case linger_value(StreamID, Lingering) of
+				undefined ->
 					{error, {connection_error, stream_closed,
 						'DATA frame received for a closed stream. (RFC7540 5.1)'},
-						State}
+						State};
+				%% The window was reduced above. The caller applies
+				%% its normal window heuristics.
+				_ when DataLen > 0 ->
+					{window_changed, DataLen, State};
+				%% Empty DATA did not change the window.
+				_ ->
+					{ok, State}
 			end
 	end.
 
@@ -699,10 +716,13 @@ headers_enforce_concurrency_limit(Frame=#headers{id=StreamID},
 	case map_size(Streams) < MaxConcurrentStreams of
 		true ->
 			headers_process(Frame, State, Type, Stream, Headers);
+		%% The stream was never stored. Mark the id closed so
+		%% frames already in flight are ignored. (RFC7540 5.1)
 		false ->
-			{error, {stream_error, StreamID, refused_stream,
-				'Maximum number of concurrent streams has been reached. (RFC7540 5.1.2)'},
-				State}
+			stream_reset(StreamID,
+				State#http2_machine{remote_streamid=StreamID},
+				refused_stream,
+				'Maximum number of concurrent streams has been reached. (RFC7540 5.1.2)')
 	end.
 
 header_list_within_limit(Headers, #http2_machine{
@@ -745,10 +765,11 @@ header_list_reject(Type, #headers{id=StreamID},
 	Streams = maps:remove(StreamID, Streams0),
 	stream_linger(StreamID, retarget_continuation(
 		State#http2_machine{streams=Streams}, StreamID));
-%% Requests are rejected before the stream exists. Do not
-%% linger the id or advance remote_streamid.
-header_list_reject(_, _, State) ->
-	State.
+%% The request never became a stream. Close the id so frames
+%% already in flight are ignored. (RFC7540 5.1)
+header_list_reject(request, #headers{id=StreamID}, State) ->
+	stream_linger(StreamID,
+		State#http2_machine{remote_streamid=StreamID}).
 
 -ifdef(TEST).
 
@@ -863,7 +884,7 @@ header_list_size_response_test() ->
 		= frame({headers, 1, fin, head_fin, iolist_to_binary(OverBlock)}, C3),
 	%% The stream is gone. Later frames on that id are ignored.
 	false = is_remote_concurrency_limit_reached(C4),
-	{ok, C4a} = frame({data, 1, fin, <<"x">>}, C4),
+	{window_changed, 1, C4a} = frame({data, 1, fin, <<"x">>}, C4),
 	{ok, C4b} = frame({headers, 1, fin, head_fin, iolist_to_binary(Small)}, C4a),
 	{ok, 3, C5} = init_stream(<<"GET">>, C4b),
 	{ok, {headers, 3, fin, _, _, _}, _}
@@ -896,7 +917,7 @@ header_list_size_push_promise_test() ->
 	Small = iolist_to_binary(Small0),
 	%% The promised response may already be in flight.
 	{ok, C3} = frame({headers, 2, fin, head_fin, Small}, C2),
-	{ok, C4} = frame({data, 2, fin, <<"hi">>}, C3),
+	{window_changed, 2, C4} = frame({data, 2, fin, <<"hi">>}, C3),
 	{ok, {push_promise, 1, 4, _, _}, C5}
 		= frame({push_promise, 1, head_fin, 4, Min}, C4),
 	{ok, {headers, 1, fin, _, _, _}, _}
@@ -950,6 +971,33 @@ header_list_size_linger_test() ->
 	true = S2#http2_machine.decode_state =/= Decode,
 	ok.
 
+%% Nine copies exceed the default limit. The id is closed
+%% even though the request never became a stream.
+header_list_size_request_lingers_test() ->
+	Value = binary:copy(<<$a>>, 4000),
+	Headers = [
+		{<<":method">>, <<"GET">>},
+		{<<":scheme">>, <<"http">>},
+		{<<":path">>, <<"/">>}
+	],
+	{Block0, _} = cow_hpack:encode(
+		Headers ++ lists:duplicate(9, {<<"user-agent">>, Value}),
+		cow_hpack:init(), #{huffman => false}),
+	Block = iolist_to_binary(Block0),
+	{ok, _, S00} = init(server, #{
+		preface_timeout => infinity,
+		settings_timeout => infinity
+	}),
+	{ok, S0} = frame({settings, #{}}, S00),
+	{error, {stream_error, 1, enhance_your_calm, _}, S1}
+		= frame({headers, 1, fin, head_fin, Block}, S0),
+	1 = S1#http2_machine.remote_streamid,
+	false = is_map_key(1, S1#http2_machine.streams),
+	true = is_lingering_stream(1, S1),
+	{window_changed, 2, S2} = frame({data, 1, nofin, <<"hi">>}, S1),
+	65533 = S2#http2_machine.remote_window,
+	ok.
+
 -endif.
 
 headers_process(Frame=#headers{id=StreamID, fin=IsFin},
@@ -972,8 +1020,12 @@ headers_process(Frame=#headers{id=StreamID, fin=IsFin},
 			stream_reset(StreamID, State, protocol_error, format_error(Reason))
 	end.
 
+%% The stream was never stored. Mark the id closed so
+%% frames already in flight are ignored. (RFC7540 5.1)
 headers_malformed(#headers{id=StreamID}, State, HumanReadable) ->
-	{error, {stream_error, StreamID, protocol_error, HumanReadable}, State}.
+	stream_reset(StreamID,
+		State#http2_machine{remote_streamid=StreamID},
+		protocol_error, HumanReadable).
 
 format_error(connect_invalid_pseudo_header) ->
 	'CONNECT requests only use the :method and :authority pseudo-headers. (RFC7540 8.3)';
@@ -1031,6 +1083,235 @@ format_error(invalid_header_value) ->
 	'Header values must only contain valid characters. (RFC7540 8.1.2)';
 format_error(Reason) ->
 	cow_http:format_semantic_error(Reason).
+
+-ifdef(TEST).
+
+refused_request_lingers_test() ->
+	{Req0, _} = cow_hpack:encode([
+		{<<":method">>, <<"GET">>},
+		{<<":scheme">>, <<"http">>},
+		{<<":path">>, <<"/">>}
+	]),
+	Req = iolist_to_binary(Req0),
+	{ok, _, S00} = init(server, #{
+		preface_timeout => infinity,
+		settings_timeout => infinity,
+		max_concurrent_streams => 1
+	}),
+	{ok, S0} = frame({settings, #{}}, S00),
+	%% Stream 1 stays open, so stream 5 is refused.
+	%% Stream 3 was skipped.
+	{ok, {headers, 1, nofin, _, _, _}, S1}
+		= frame({headers, 1, nofin, head_fin, Req}, S0),
+	{error, {stream_error, 5, refused_stream, _}, S2}
+		= frame({headers, 5, nofin, head_fin, Req}, S1),
+	5 = S2#http2_machine.remote_streamid,
+	true = is_map_key(1, S2#http2_machine.streams),
+	false = is_map_key(5, S2#http2_machine.streams),
+	true = is_lingering_stream(5, S2),
+	%% Empty DATA does not ask for a window update.
+	{ok, S2a} = frame({data, 5, nofin, <<>>}, S2),
+	65535 = S2a#http2_machine.remote_window,
+	%% Payload is counted and reported. The window stays reduced.
+	{window_changed, 2, S2b} = frame({data, 5, nofin, <<"hi">>}, S2a),
+	{window_changed, 2, S2c} = frame({data, 5, nofin, <<"hi">>}, S2b),
+	65531 = S2c#http2_machine.remote_window,
+	%% A later header block on that id is decoded and dropped.
+	{Later0, _} = cow_hpack:encode([{<<"user-agent">>, <<"later">>}]),
+	Decode = S2c#http2_machine.decode_state,
+	{ok, S4} = frame({headers, 5, fin, head_fin,
+		iolist_to_binary(Later0)}, S2c),
+	true = S4#http2_machine.decode_state =/= Decode,
+	%% WINDOW_UPDATE is ignored.
+	{ok, S4} = frame({window_update, 5, 1}, S4),
+	%% A skipped id is not lingered.
+	{error, {connection_error, stream_closed, _}, _}
+		= frame({data, 3, nofin, <<"hi">>}, S4),
+	%% Two generations later the refused id is gone.
+	Aged = lists:foldl(fun(Id, Acc) ->
+		stream_linger(Id, Acc)
+	end, S4, lists:seq(1000, 1000 + ?LOCAL_LINGER_MAX * 2 - 1)),
+	false = is_lingering_stream(5, Aged),
+	{error, {connection_error, stream_closed, _}, _}
+		= frame({data, 5, nofin, <<"hi">>}, Aged),
+	ok.
+
+malformed_request_lingers_test() ->
+	{Block0, _} = cow_hpack:encode([{<<":method">>, <<"GET">>}]),
+	Block = iolist_to_binary(Block0),
+	{ok, _, S00} = init(server, #{
+		preface_timeout => infinity,
+		settings_timeout => infinity
+	}),
+	{ok, S0} = frame({settings, #{}}, S00),
+	{error, {stream_error, 1, protocol_error, _}, S1}
+		= frame({headers, 1, fin, head_fin, Block}, S0),
+	1 = S1#http2_machine.remote_streamid,
+	false = is_map_key(1, S1#http2_machine.streams),
+	true = is_lingering_stream(1, S1),
+	{window_changed, 2, S2} = frame({data, 1, nofin, <<"hi">>}, S1),
+	65533 = S2#http2_machine.remote_window,
+	ok.
+
+rejected_request_continuation_lingers_test() ->
+	{Block0, _} = cow_hpack:encode([
+		{<<":method">>, <<"GET">>},
+		{<<"user-agent">>, <<"x">>}
+	]),
+	<<First:1/binary, Rest/binary>> = iolist_to_binary(Block0),
+	{ok, _, S00} = init(server, #{
+		preface_timeout => infinity,
+		settings_timeout => infinity
+	}),
+	{ok, S0} = frame({settings, #{}}, S00),
+	%% The id stays idle while the header block is open.
+	{ok, S1} = frame({headers, 1, fin, head_nofin, First}, S0),
+	0 = S1#http2_machine.remote_streamid,
+	{error, {stream_error, 1, protocol_error, _}, S2}
+		= frame({continuation, 1, head_fin, Rest}, S1),
+	1 = S2#http2_machine.remote_streamid,
+	false = is_map_key(1, S2#http2_machine.streams),
+	true = is_lingering_stream(1, S2),
+	{window_changed, 2, S3} = frame({data, 1, nofin, <<"hi">>}, S2),
+	65533 = S3#http2_machine.remote_window,
+	ok.
+
+%% Resetting a stored stream reports later DATA. Empty DATA does
+%% not. A missing id does not clear a linger that is already there.
+reset_stream_window_test() ->
+	{Req0, _} = cow_hpack:encode([
+		{<<":method">>, <<"POST">>},
+		{<<":scheme">>, <<"http">>},
+		{<<":path">>, <<"/">>}
+	]),
+	Req = iolist_to_binary(Req0),
+	{ok, _, S00} = init(server, #{
+		preface_timeout => infinity,
+		settings_timeout => infinity
+	}),
+	{ok, S0} = frame({settings, #{}}, S00),
+	{ok, {headers, 1, nofin, _, _, _}, S1}
+		= frame({headers, 1, nofin, head_fin, Req}, S0),
+	true = is_map_key(1, S1#http2_machine.streams),
+	{ok, S2} = reset_stream(1, S1),
+	false = is_map_key(1, S2#http2_machine.streams),
+	true = is_lingering_stream(1, S2),
+	{ok, S2a} = frame({data, 1, nofin, <<>>}, S2),
+	65535 = S2a#http2_machine.remote_window,
+	{window_changed, 2, S2b} = frame({data, 1, nofin, <<"hi">>}, S2a),
+	65533 = S2b#http2_machine.remote_window,
+	{error, not_found} = reset_stream(1, S2b),
+	{window_changed, 2, _} = frame({data, 1, nofin, <<"hi">>}, S2b),
+	%% An id that was never stored is not lingered.
+	{error, not_found} = reset_stream(3, S2),
+	{error, {connection_error, protocol_error, _}, S2}
+		= frame({data, 3, nofin, <<"hi">>}, S2),
+	ok.
+
+%% The whole connection window can be consumed after a reset.
+%% One byte more is a connection error.
+reset_stream_window_bounds_test() ->
+	{Req0, _} = cow_hpack:encode([
+		{<<":method">>, <<"POST">>},
+		{<<":scheme">>, <<"http">>},
+		{<<":path">>, <<"/">>}
+	]),
+	Req = iolist_to_binary(Req0),
+	{ok, _, S00} = init(server, #{
+		preface_timeout => infinity,
+		settings_timeout => infinity
+	}),
+	{ok, S0} = frame({settings, #{}}, S00),
+	{ok, {headers, 1, nofin, _, _, _}, S1}
+		= frame({headers, 1, nofin, head_fin, Req}, S0),
+	{ok, S2} = reset_stream(1, S1),
+	Full = binary:copy(<<$a>>, 65535),
+	{window_changed, 65535, S3} = frame({data, 1, nofin, Full}, S2),
+	0 = S3#http2_machine.remote_window,
+	Over = binary:copy(<<$a>>, 65536),
+	{error, {connection_error, flow_control_error, _}, S4}
+		= frame({data, 1, nofin, Over}, S2),
+	65535 = S4#http2_machine.remote_window,
+	ok.
+
+%% DATA after a reset reports the window change and leaves it reduced.
+reset_stream_data_keeps_window_test() ->
+	{Req0, _} = cow_hpack:encode([
+		{<<":method">>, <<"GET">>},
+		{<<":scheme">>, <<"http">>},
+		{<<":path">>, <<"/">>}
+	]),
+	Req = iolist_to_binary(Req0),
+	{ok, _, S00} = init(server, #{
+		preface_timeout => infinity,
+		settings_timeout => infinity
+	}),
+	{ok, S0} = frame({settings, #{}}, S00),
+	{ok, {headers, 1, nofin, _, _, _}, S1}
+		= frame({headers, 1, nofin, head_fin, Req}, S0),
+	{ok, {data, 1, nofin, <<"hi">>}, S1a}
+		= frame({data, 1, nofin, <<"hi">>}, S1),
+	65533 = S1a#http2_machine.remote_window,
+	{ok, S2} = reset_stream(1, S1a),
+	{ok, S2a} = frame({data, 1, nofin, <<>>}, S2),
+	65533 = S2a#http2_machine.remote_window,
+	{window_changed, 2, S3} = frame({data, 1, nofin, <<"hi">>}, S2a),
+	65531 = S3#http2_machine.remote_window,
+	ok.
+
+%% The whole connection window can be consumed. One byte more
+%% is a connection error and does not change the window.
+refused_stream_data_window_bounds_test() ->
+	{Req0, _} = cow_hpack:encode([
+		{<<":method">>, <<"POST">>},
+		{<<":scheme">>, <<"http">>},
+		{<<":path">>, <<"/">>}
+	]),
+	Req = iolist_to_binary(Req0),
+	{ok, _, S00} = init(server, #{
+		preface_timeout => infinity,
+		settings_timeout => infinity,
+		max_concurrent_streams => 0
+	}),
+	{ok, S0} = frame({settings, #{}}, S00),
+	{error, {stream_error, 1, refused_stream, _}, S1}
+		= frame({headers, 1, nofin, head_fin, Req}, S0),
+	Full = binary:copy(<<$a>>, 65535),
+	{window_changed, 65535, S2} = frame({data, 1, nofin, Full}, S1),
+	0 = S2#http2_machine.remote_window,
+	Over = binary:copy(<<$a>>, 65536),
+	{error, {connection_error, flow_control_error, _}, S3}
+		= frame({data, 1, nofin, Over}, S1),
+	65535 = S3#http2_machine.remote_window,
+	ok.
+
+%% DATA for a stream above the GOAWAY id is discarded after the
+%% connection window was reduced. Empty DATA did not change it.
+goaway_discarded_data_window_test() ->
+	{Req0, _} = cow_hpack:encode([
+		{<<":method">>, <<"POST">>},
+		{<<":scheme">>, <<"http">>},
+		{<<":path">>, <<"/">>}
+	]),
+	Req = iolist_to_binary(Req0),
+	{ok, _, S00} = init(server, #{
+		preface_timeout => infinity,
+		settings_timeout => infinity
+	}),
+	{ok, S0} = frame({settings, #{}}, S00),
+	{ok, {headers, 1, fin, _, _, _}, S1}
+		= frame({headers, 1, fin, head_fin, Req}, S0),
+	{1, S2} = set_last_streamid(S1),
+	{ok, S3} = frame({headers, 3, nofin, head_fin, Req}, S2),
+	3 = S3#http2_machine.remote_streamid,
+	true = is_map_key(3, S3#http2_machine.streams),
+	{ok, S3a} = frame({data, 3, nofin, <<>>}, S3),
+	65535 = S3a#http2_machine.remote_window,
+	{window_changed, 2, S4} = frame({data, 3, nofin, <<"hi">>}, S3a),
+	65533 = S4#http2_machine.remote_window,
+	ok.
+
+-endif.
 
 headers_frame(#headers{id=StreamID, fin=IsFin}, State0=#http2_machine{
 		local_settings=#{initial_window_size := RemoteWindow},
@@ -2166,22 +2447,36 @@ stream_reset(StreamID, State, Reason, HumanReadable) ->
 	{error, {stream_error, StreamID, Reason, HumanReadable},
 		stream_linger(StreamID, State)}.
 
-stream_linger(StreamID, State=#http2_machine{local_lingering_streams=Lingering0}) ->
+stream_linger(StreamID, State) ->
+	stream_linger(StreamID, true, State).
+
+stream_linger(StreamID, Value, State=#http2_machine{local_lingering_streams=Lingering0}) ->
 	%% Two generations of at most ?LOCAL_LINGER_MAX.
 	%% @todo Make the lingering-stream limit configurable.
-	Lingering = linger_add(StreamID, Lingering0, ?LOCAL_LINGER_MAX),
+	Lingering = linger_add(StreamID, Value, Lingering0, ?LOCAL_LINGER_MAX),
 	State#http2_machine{local_lingering_streams=Lingering}.
 
 %% The current generation holds at most Max ids. The next id
 %% starts a new generation and keeps the full one as previous.
 %% A repeated id is treated like a new one.
-linger_add(StreamID, {Current, Previous}, Max) when map_size(Current) < Max ->
-	{Current#{StreamID => true}, Previous};
-linger_add(StreamID, {Current, _}, _) ->
-	{#{StreamID => true}, Current}.
+linger_add(StreamID, Gens, Max) ->
+	linger_add(StreamID, true, Gens, Max).
 
-linger_member(StreamID, {Current, Previous}) ->
-	is_map_key(StreamID, Current) orelse is_map_key(StreamID, Previous).
+linger_add(StreamID, Value, {Current, Previous}, Max) when map_size(Current) < Max ->
+	{Current#{StreamID => Value}, Previous};
+linger_add(StreamID, Value, {Current, _}, _) ->
+	{#{StreamID => Value}, Current}.
+
+linger_member(StreamID, Gens) ->
+	linger_value(StreamID, Gens) =/= undefined.
+
+linger_value(StreamID, {Current, Previous}) ->
+	case Current of
+		#{StreamID := Value} ->
+			Value;
+		_ ->
+			maps:get(StreamID, Previous, undefined)
+	end.
 
 -ifdef(TEST).
 

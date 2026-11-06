@@ -15,6 +15,7 @@
 -module(cow_sse).
 
 -export([init/0]).
+-export([init/1]).
 -export([parse/2]).
 -export([events/1]).
 -export([event/1]).
@@ -26,7 +27,9 @@
 	last_event_id_set = false :: boolean(),
 	event_type = <<>> :: binary(),
 	data = [] :: iolist(),
-	retry = undefined :: undefined | non_neg_integer()
+	retry = undefined :: undefined | non_neg_integer(),
+	%% 10 KiB. infinity disables the limit.
+	max_event_size = 10240 :: pos_integer() | infinity
 }).
 -type state() :: #state{}.
 -export_type([state/0]).
@@ -56,10 +59,14 @@
 init() ->
 	#state{}.
 
+-spec init(#{max_event_size => pos_integer() | infinity}) -> state().
+init(Opts) ->
+	#state{max_event_size=maps:get(max_event_size, Opts, 10240)}.
+
 %% @todo Add a function to retrieve the retry value from the state.
 
 -spec parse(binary(), State)
-	-> {event, parsed_event(), State} | {more, State}
+	-> {event, parsed_event(), State} | {more, State} | {error, limit_reached}
 	when State::state().
 parse(Data0, State=#state{state_name=bom, buffer=Buffer}) ->
 	Data1 = case Buffer of
@@ -72,9 +79,9 @@ parse(Data0, State=#state{state_name=bom, buffer=Buffer}) ->
 			parse_event(Data, State#state{state_name=events, buffer= <<>>});
 		%% Not enough data to know wether we have a BOM.
 		<< 16#fe >> ->
-			{more, State#state{buffer=Data1}};
+			more(Data1, State);
 		<<>> ->
-			{more, State};
+			more(<<>>, State);
 		%% No BOM.
 		_ ->
 			parse_event(Data1, State#state{state_name=events, buffer= <<>>})
@@ -100,8 +107,46 @@ parse_event(Data, State0) ->
 					{event, Event, State#state{buffer=Rest}}
 			end;
 		[_] ->
-			{more, State0#state{buffer=Data}}
+			more(Data, State0)
 	end.
+
+%% Soft limit for an unfinished event: buffer when the rough
+%% size is =< max_event_size. A finished event is already in
+%% memory and is delivered even past the limit. Bytes left
+%% after it are checked on the next call.
+%%
+%% Count "id: \n" when this event set the id, "event: \n" when
+%% the type is set, and the tail as-is. Each data line is two
+%% list cells, so length div 2 is the line count. 7 per line
+%% is "data: \n". iolist_size already includes the stored
+%% newline, so add 6 per line. Data, the event type and the
+%% tail are not copied; the caller must not grow one binary
+%% forever.
+more(Buffer, State=#state{max_event_size=Max}) ->
+	case event_size(Buffer, State) =< Max of
+		true ->
+			{more, State#state{buffer=Buffer}};
+		false ->
+			{error, limit_reached}
+	end.
+
+event_size(Buffer, #state{data=Data, event_type=EventType,
+		last_event_id=LastEventID, last_event_id_set=Set}) ->
+	byte_size(Buffer) + id_size(Set, LastEventID)
+		+ event_type_size(EventType) + data_size(Data).
+
+id_size(false, _) ->
+	0;
+id_size(true, ID) ->
+	byte_size(ID) + 5.
+
+event_type_size(<<>>) ->
+	0;
+event_type_size(Type) ->
+	byte_size(Type) + 8.
+
+data_size(Data) ->
+	iolist_size(Data) + 6 * (length(Data) div 2).
 
 %% Dispatch events on empty line.
 parse_line(<<>>, State) ->
@@ -122,8 +167,10 @@ process_field(<<"event">>, Value, State) ->
 	{ok, State#state{event_type=Value}};
 process_field(<<"data">>, Value, State=#state{data=Data}) ->
 	{ok, State#state{data=[<<$\n>>, Value|Data]}};
+%% The id is kept for later events, so do not leave it
+%% as a sub-binary of the input.
 process_field(<<"id">>, Value, State) ->
-	{ok, State#state{last_event_id=Value, last_event_id_set=true}};
+	{ok, State#state{last_event_id=binary:copy(Value), last_event_id_set=true}};
 process_field(<<"retry">>, Value = <<C, _/bits>>, State) when ?IS_DIGIT(C) ->
 	try
 		{ok, State#state{retry=binary_to_integer(Value)}}
@@ -300,6 +347,63 @@ parse_retry_error_test_() ->
 		<<"x">> = iolist_to_binary(Data),
 		undefined = State#state.retry
 	end} || V <- Tests].
+
+%% The limit applies when the event is not yet complete. Equal
+%% to the limit is kept. A finished event is delivered even past
+%% the limit. "data: hi\n" is 9 bytes.
+parse_max_event_size_test() ->
+	Max10 = init(#{max_event_size => 10}),
+	{more, S0} = parse(<<"data: hi\n">>, Max10),
+	{event, #{data := Hi}, S1} = parse(<<"\n">>, S0),
+	<<"hi">> = iolist_to_binary(Hi),
+	{more, _} = parse(<<>>, S1),
+	{more, _} = parse(<<"data: hi\n">>, init(#{max_event_size => 9})),
+	St = init(#{max_event_size => 8}),
+	{error, limit_reached} = parse(<<"data: hi\n">>, St),
+	{more, _} = parse(<<"data: h\n">>, St),
+	{event, #{data := Hi}, _} = parse(<<"data: hi\n\n">>,
+		init(#{max_event_size => 1})),
+	{event, _, _} = parse(<<"data: hi\n\n">>, init()),
+	{event, _, _} = parse(<<"data: hi\n\n">>, init(#{})),
+	{event, _, _} = parse(<<"data: hi\n\n">>,
+		init(#{max_event_size => infinity})),
+	%% init/0 and a missing key use 10 KiB. The tail is counted as-is.
+	{more, _} = parse(binary:copy(<<$a>>, 10240), init()),
+	{error, limit_reached} = parse(binary:copy(<<$a>>, 10241), init()),
+	{more, _} = parse(binary:copy(<<$a>>, 10240), init(#{})),
+	{error, limit_reached} = parse(binary:copy(<<$a>>, 10241), init(#{})),
+	ok.
+
+%% "event: ping\n" is 12, "id: ab\n" is 7, two data lines are 16.
+%% The id kept after dispatch is not counted for the next event.
+%% A finished retry is an integer and is not counted.
+parse_max_event_size_fields_test() ->
+	{more, _} = parse(<<"event: ping\n">>, init(#{max_event_size => 12})),
+	{error, limit_reached} = parse(<<"event: ping\n">>,
+		init(#{max_event_size => 11})),
+	{more, _} = parse(<<"id: ab\n">>, init(#{max_event_size => 7})),
+	{error, limit_reached} = parse(<<"id: ab\n">>,
+		init(#{max_event_size => 6})),
+	{more, _} = parse(<<"data: a\ndata: b\n">>, init(#{max_event_size => 16})),
+	{error, limit_reached} = parse(<<"data: a\ndata: b\n">>,
+		init(#{max_event_size => 15})),
+	{event, _, S} = parse(<<"id: ab\n\n">>, init(#{max_event_size => 9})),
+	{more, _} = parse(<<"data: z\n">>, S),
+	{more, _} = parse(<<"retry: 1000\ndata: z\n">>,
+		init(#{max_event_size => 9})),
+	ok.
+
+%% The id outlives the event. Copy it so the input is not retained.
+parse_max_event_size_id_copy_test() ->
+	Pad = binary:copy(<<$x>>, 1000),
+	Id = binary:copy(<<$i>>, 80),
+	Bin = <<"id: ", Id/binary, "\n: ", Pad/binary, "\n">>,
+	{more, #state{last_event_id=Stored}} =
+		parse(Bin, init(#{max_event_size => 100})),
+	Id = Stored,
+	erlang:garbage_collect(),
+	80 = binary:referenced_byte_size(Stored),
+	ok.
 -endif.
 
 -spec events([event()]) -> iolist().

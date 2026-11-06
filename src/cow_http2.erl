@@ -76,7 +76,7 @@
 	| unknown_error.
 -export_type([error/0]).
 
--type frame() :: {data, streamid(), cow_http:fin(), binary()}
+-type frame() :: {data, streamid(), cow_http:fin(), binary(), non_neg_integer()}
 	| {headers, streamid(), cow_http:fin(), head_fin(), binary()}
 	| {headers, streamid(), cow_http:fin(), head_fin(),
 		exclusive(), streamid(), weight(), binary()}
@@ -129,14 +129,14 @@ parse(<< Len0:24, 0:8, _:4, 1:1, _:35, PadLen:8, _/bits >>) when PadLen >= Len0 
 	{connection_error, protocol_error, 'Length of padding MUST be less than length of payload. (RFC7540 6.1)'};
 %% No padding.
 parse(<< Len:24, 0:8, _:4, 0:1, _:2, FlagEndStream:1, _:1, StreamID:31, Data:Len/binary, Rest/bits >>) ->
-	{ok, {data, StreamID, parse_fin(FlagEndStream), Data}, Rest};
+	{ok, {data, StreamID, parse_fin(FlagEndStream), Data, Len}, Rest};
 %% Padding.
 parse(<< Len0:24, 0:8, _:4, 1:1, _:2, FlagEndStream:1, _:1, StreamID:31, PadLen:8, Rest0/bits >>)
 		when byte_size(Rest0) >= Len0 - 1 ->
 	Len = Len0 - PadLen - 1,
 	case Rest0 of
 		<< Data:Len/binary, 0:PadLen/unit:8, Rest/bits >> ->
-			{ok, {data, StreamID, parse_fin(FlagEndStream), Data}, Rest};
+			{ok, {data, StreamID, parse_fin(FlagEndStream), Data, Len0}, Rest};
 		_ ->
 			{connection_error, protocol_error, 'Padding octets MUST be set to zero. (RFC7540 6.1)'}
 	end;
@@ -316,6 +316,16 @@ parse(_) ->
 	more.
 
 -ifdef(TEST).
+%% The flow-control length includes the Pad Length octet and padding.
+parse_data_flow_length_test() ->
+	{ok, {data, 1, fin, <<"hi">>, 2}, <<42>>}
+		= parse(<<2:24, 0:8, 1:8, 0:1, 1:31, "hi", 42>>),
+	{ok, {data, 1, fin, <<"hi">>, 3}, <<42>>}
+		= parse(<<3:24, 0:8, 16#09:8, 0:1, 1:31, 0:8, "hi", 42>>),
+	{ok, {data, 1, fin, <<>>, 8}, <<42>>}
+		= parse(<<8:24, 0:8, 16#09:8, 0:1, 1:31, 7:8, 0:56, 42>>),
+	ok.
+
 parse_goaway_test() ->
 	%% Empty debug data. Every proper prefix is incomplete.
 	Empty = iolist_to_binary(goaway(1, no_error, <<>>)),

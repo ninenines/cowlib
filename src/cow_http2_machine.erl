@@ -386,7 +386,7 @@ init_upgrade_stream(Method, State=#http2_machine{mode=server, remote_streamid=0,
 -define(LOG_FRAME(Frame, State),
 	begin
 		Frame2 = case Frame of
-			{data,_,_,_} -> setelement(4, Frame, {'BINARY-DATA', byte_size(element(4, Frame))});
+			{data,_,_,_,_} -> setelement(4, Frame, {'BINARY-DATA', byte_size(element(4, Frame))});
 			{continuation,_,_,_} -> setelement(4, Frame, {'BINARY-DATA', byte_size(element(4, Frame))});
 			_ -> Frame
 		end,
@@ -441,41 +441,45 @@ maybe_discard_result(FrameResult={ok, Result, State=#http2_machine{mode=Mode,
 		StreamID when StreamID > MaxID, not ?IS_LOCAL(Mode, StreamID) ->
 			%% DATA already reduced the connection window.
 			case Result of
-				{data, _, _, Data} when byte_size(Data) > 0 ->
-					{window_changed, byte_size(Data), State};
+				{data, _, _, _, Flow} when Flow > 0 ->
+					{window_changed, Flow, State};
 				_ ->
 					{ok, State}
 			end;
 		_StreamID ->
-			FrameResult
+			case Result of
+				{data, StreamID, IsFin, Data, _} ->
+					{ok, {data, StreamID, IsFin, Data}, State};
+				_ ->
+					FrameResult
+			end
 	end;
 maybe_discard_result(FrameResult) ->
 	FrameResult.
 
 %% DATA frame.
 
-data_frame({data, StreamID, _, _}, State=#http2_machine{mode=Mode,
+data_frame({data, StreamID, _, _, _}, State=#http2_machine{mode=Mode,
 		local_streamid=LocalStreamID, remote_streamid=RemoteStreamID})
 		when (?IS_LOCAL(Mode, StreamID) andalso (StreamID >= LocalStreamID))
 		orelse ((not ?IS_LOCAL(Mode, StreamID)) andalso (StreamID > RemoteStreamID)) ->
 	{error, {connection_error, protocol_error,
 		'DATA frame received on a stream in idle state. (RFC7540 5.1)'},
 		State};
-data_frame({data, _, _, Data}, State=#http2_machine{remote_window=ConnWindow})
-		when byte_size(Data) > ConnWindow ->
+data_frame({data, _, _, _, Flow}, State=#http2_machine{remote_window=ConnWindow})
+		when Flow > ConnWindow ->
 	{error, {connection_error, flow_control_error,
 		'DATA frame overflowed the connection flow control window. (RFC7540 6.9, RFC7540 6.9.1)'},
 		State};
-data_frame(Frame={data, StreamID, _, Data}, State0=#http2_machine{
+data_frame(Frame={data, StreamID, _, _, Flow}, State0=#http2_machine{
 		remote_window=ConnWindow, local_lingering_streams=Lingering}) ->
-	DataLen = byte_size(Data),
-	State = State0#http2_machine{remote_window=ConnWindow - DataLen},
+	State = State0#http2_machine{remote_window=ConnWindow - Flow},
 	case stream_get(StreamID, State) of
-		#stream{remote_window=StreamWindow} when StreamWindow < DataLen ->
+		#stream{remote_window=StreamWindow} when StreamWindow < Flow ->
 			stream_reset(StreamID, State, flow_control_error,
 				'DATA frame overflowed the stream flow control window. (RFC7540 6.9, RFC7540 6.9.1)');
 		Stream = #stream{remote=nofin} ->
-			data_frame(Frame, State, Stream, DataLen);
+			data_frame(Frame, State, Stream);
 		#stream{remote=idle} ->
 			stream_reset(StreamID, State, protocol_error,
 				'DATA frame received before a HEADERS frame. (RFC7540 8.1, RFC7540 8.1.2.6)');
@@ -489,8 +493,8 @@ data_frame(Frame={data, StreamID, _, Data}, State0=#http2_machine{
 			case linger_member(StreamID, Lingering) of
 				%% The window was reduced above. The caller applies
 				%% its normal window heuristics.
-				true when DataLen > 0 ->
-					{window_changed, DataLen, State};
+				true when Flow > 0 ->
+					{window_changed, Flow, State};
 				%% Empty DATA did not change the window.
 				true ->
 					{ok, State};
@@ -501,11 +505,12 @@ data_frame(Frame={data, StreamID, _, Data}, State0=#http2_machine{
 			end
 	end.
 
-data_frame(Frame={data, _, IsFin, _}, State0, Stream0=#stream{id=StreamID,
-		remote_window=StreamWindow, remote_read_size=StreamRead}, DataLen) ->
+%% Padding is part of the flow-control length. (RFC9113 6.9.1)
+data_frame(Frame={data, _, IsFin, Data, Flow}, State0, Stream0=#stream{id=StreamID,
+		remote_window=StreamWindow, remote_read_size=StreamRead}) ->
 	Stream = Stream0#stream{remote=IsFin,
-		remote_window=StreamWindow - DataLen,
-		remote_read_size=StreamRead + DataLen},
+		remote_window=StreamWindow - Flow,
+		remote_read_size=StreamRead + byte_size(Data)},
 	State = stream_store(Stream, State0),
 	case is_body_size_valid(Stream) of
 		true ->
@@ -876,7 +881,7 @@ header_list_size_response_test() ->
 		= frame({headers, 1, fin, head_fin, iolist_to_binary(OverBlock)}, C3),
 	%% The stream is gone. Later frames on that id are ignored.
 	false = is_remote_concurrency_limit_reached(C4),
-	{window_changed, 1, C4a} = frame({data, 1, fin, <<"x">>}, C4),
+	{window_changed, 1, C4a} = frame({data, 1, fin, <<"x">>, 1}, C4),
 	{ok, C4b} = frame({headers, 1, fin, head_fin, iolist_to_binary(Small)}, C4a),
 	{ok, 3, C5} = init_stream(<<"GET">>, C4b),
 	{ok, {headers, 3, fin, _, _, _}, _}
@@ -909,7 +914,7 @@ header_list_size_push_promise_test() ->
 	Small = iolist_to_binary(Small0),
 	%% The promised response may already be in flight.
 	{ok, C3} = frame({headers, 2, fin, head_fin, Small}, C2),
-	{window_changed, 2, C4} = frame({data, 2, fin, <<"hi">>}, C3),
+	{window_changed, 2, C4} = frame({data, 2, fin, <<"hi">>, 2}, C3),
 	{ok, {push_promise, 1, 4, _, _}, C5}
 		= frame({push_promise, 1, head_fin, 4, Min}, C4),
 	{ok, {headers, 1, fin, _, _, _}, _}
@@ -986,7 +991,7 @@ header_list_size_request_lingers_test() ->
 	1 = S1#http2_machine.remote_streamid,
 	false = is_map_key(1, S1#http2_machine.streams),
 	true = is_lingering_stream(1, S1),
-	{window_changed, 2, S2} = frame({data, 1, nofin, <<"hi">>}, S1),
+	{window_changed, 2, S2} = frame({data, 1, nofin, <<"hi">>, 2}, S1),
 	65533 = S2#http2_machine.remote_window,
 	ok.
 
@@ -1100,11 +1105,11 @@ refused_request_lingers_test() ->
 	false = is_map_key(5, S2#http2_machine.streams),
 	true = is_lingering_stream(5, S2),
 	%% Empty DATA does not ask for a window update.
-	{ok, S2a} = frame({data, 5, nofin, <<>>}, S2),
+	{ok, S2a} = frame({data, 5, nofin, <<>>, 0}, S2),
 	65535 = S2a#http2_machine.remote_window,
 	%% Payload is counted and reported. The window stays reduced.
-	{window_changed, 2, S2b} = frame({data, 5, nofin, <<"hi">>}, S2a),
-	{window_changed, 2, S2c} = frame({data, 5, nofin, <<"hi">>}, S2b),
+	{window_changed, 2, S2b} = frame({data, 5, nofin, <<"hi">>, 2}, S2a),
+	{window_changed, 2, S2c} = frame({data, 5, nofin, <<"hi">>, 2}, S2b),
 	65531 = S2c#http2_machine.remote_window,
 	%% A later header block on that id is decoded and dropped.
 	{Later0, _} = cow_hpack:encode([{<<"user-agent">>, <<"later">>}]),
@@ -1116,7 +1121,7 @@ refused_request_lingers_test() ->
 	{ok, S4} = frame({window_update, 5, 1}, S4),
 	%% A skipped id is not lingered.
 	{error, {connection_error, stream_closed, _}, _}
-		= frame({data, 3, nofin, <<"hi">>}, S4),
+		= frame({data, 3, nofin, <<"hi">>, 2}, S4),
 	ok.
 
 malformed_request_lingers_test() ->
@@ -1132,7 +1137,7 @@ malformed_request_lingers_test() ->
 	1 = S1#http2_machine.remote_streamid,
 	false = is_map_key(1, S1#http2_machine.streams),
 	true = is_lingering_stream(1, S1),
-	{window_changed, 2, S2} = frame({data, 1, nofin, <<"hi">>}, S1),
+	{window_changed, 2, S2} = frame({data, 1, nofin, <<"hi">>, 2}, S1),
 	65533 = S2#http2_machine.remote_window,
 	ok.
 
@@ -1155,7 +1160,7 @@ rejected_request_continuation_lingers_test() ->
 	1 = S2#http2_machine.remote_streamid,
 	false = is_map_key(1, S2#http2_machine.streams),
 	true = is_lingering_stream(1, S2),
-	{window_changed, 2, S3} = frame({data, 1, nofin, <<"hi">>}, S2),
+	{window_changed, 2, S3} = frame({data, 1, nofin, <<"hi">>, 2}, S2),
 	65533 = S3#http2_machine.remote_window,
 	ok.
 
@@ -1179,12 +1184,12 @@ reset_stream_window_test() ->
 	{ok, S2} = reset_stream(1, S1),
 	false = is_map_key(1, S2#http2_machine.streams),
 	true = is_lingering_stream(1, S2),
-	{ok, S2a} = frame({data, 1, nofin, <<>>}, S2),
+	{ok, S2a} = frame({data, 1, nofin, <<>>, 0}, S2),
 	65535 = S2a#http2_machine.remote_window,
-	{window_changed, 2, S2b} = frame({data, 1, nofin, <<"hi">>}, S2a),
+	{window_changed, 2, S2b} = frame({data, 1, nofin, <<"hi">>, 2}, S2a),
 	65533 = S2b#http2_machine.remote_window,
 	{error, not_found} = reset_stream(1, S2b),
-	{window_changed, 2, _} = frame({data, 1, nofin, <<"hi">>}, S2b),
+	{window_changed, 2, _} = frame({data, 1, nofin, <<"hi">>, 2}, S2b),
 	ok.
 
 %% The whole connection window can be consumed after a reset.
@@ -1205,11 +1210,11 @@ reset_stream_window_bounds_test() ->
 		= frame({headers, 1, nofin, head_fin, Req}, S0),
 	{ok, S2} = reset_stream(1, S1),
 	Full = binary:copy(<<$a>>, 65535),
-	{window_changed, 65535, S3} = frame({data, 1, nofin, Full}, S2),
+	{window_changed, 65535, S3} = frame({data, 1, nofin, Full, byte_size(Full)}, S2),
 	0 = S3#http2_machine.remote_window,
 	Over = binary:copy(<<$a>>, 65536),
 	{error, {connection_error, flow_control_error, _}, S4}
-		= frame({data, 1, nofin, Over}, S2),
+		= frame({data, 1, nofin, Over, byte_size(Over)}, S2),
 	65535 = S4#http2_machine.remote_window,
 	ok.
 
@@ -1233,10 +1238,122 @@ goaway_discarded_data_window_test() ->
 	{ok, S3} = frame({headers, 3, nofin, head_fin, Req}, S2),
 	3 = S3#http2_machine.remote_streamid,
 	true = is_map_key(3, S3#http2_machine.streams),
-	{ok, S3a} = frame({data, 3, nofin, <<>>}, S3),
+	{ok, S3a} = frame({data, 3, nofin, <<>>, 0}, S3),
 	65535 = S3a#http2_machine.remote_window,
-	{window_changed, 2, S4} = frame({data, 3, nofin, <<"hi">>}, S3a),
+	{window_changed, 2, S4} = frame({data, 3, nofin, <<"hi">>, 2}, S3a),
 	65533 = S4#http2_machine.remote_window,
+	ok.
+
+%% Pad Length 0 counts as one octet. A padding-only frame counts
+%% its whole payload. The body is the data without padding.
+data_padding_open_stream_window_test() ->
+	{Req0, _} = cow_hpack:encode([
+		{<<":method">>, <<"POST">>},
+		{<<":scheme">>, <<"http">>},
+		{<<":path">>, <<"/">>}
+	]),
+	Req = iolist_to_binary(Req0),
+	{ok, _, S00} = init(server, #{
+		preface_timeout => infinity,
+		settings_timeout => infinity
+	}),
+	{ok, S0} = frame({settings, #{}}, S00),
+	{ok, {headers, 1, nofin, _, _, _}, S1}
+		= frame({headers, 1, nofin, head_fin, Req}, S0),
+	%% Pad length 0 and <<"hi">>.
+	{ok, {data, 1, nofin, <<"hi">>}, S2}
+		= frame({data, 1, nofin, <<"hi">>, 3}, S1),
+	65532 = S2#http2_machine.remote_window,
+	#stream{remote_window=65532, remote_read_size=2}
+		= maps:get(1, S2#http2_machine.streams),
+	%% Pad length 7 and no data.
+	{ok, {data, 1, nofin, <<>>}, S3}
+		= frame({data, 1, nofin, <<>>, 8}, S2),
+	65524 = S3#http2_machine.remote_window,
+	#stream{remote_window=65524, remote_read_size=2}
+		= maps:get(1, S3#http2_machine.streams),
+	ok.
+
+%% A stream window of 8 accepts a flow of 8. A flow of 9 is a
+%% stream error after the connection window was reduced.
+data_padding_stream_window_bounds_test() ->
+	{Req0, _} = cow_hpack:encode([
+		{<<":method">>, <<"POST">>},
+		{<<":scheme">>, <<"http">>},
+		{<<":path">>, <<"/">>}
+	]),
+	Req = iolist_to_binary(Req0),
+	{ok, _, S00} = init(server, #{
+		preface_timeout => infinity,
+		settings_timeout => infinity,
+		initial_stream_window_size => 8
+	}),
+	{ok, S0} = frame({settings, #{}}, S00),
+	{ok, S0a} = frame(settings_ack, S0),
+	{ok, {headers, 1, nofin, _, _, _}, S1}
+		= frame({headers, 1, nofin, head_fin, Req}, S0a),
+	#stream{remote_window=8} = maps:get(1, S1#http2_machine.streams),
+	%% Pad length octet and 7 data octets.
+	{ok, {data, 1, nofin, <<"1234567">>}, S2}
+		= frame({data, 1, nofin, <<"1234567">>, 8}, S1),
+	65527 = S2#http2_machine.remote_window,
+	#stream{remote_window=0, remote_read_size=7}
+		= maps:get(1, S2#http2_machine.streams),
+	%% Pad length octet and 8 data octets.
+	{error, {stream_error, 1, flow_control_error, _}, S3}
+		= frame({data, 1, nofin, <<"12345678">>, 9}, S1),
+	65526 = S3#http2_machine.remote_window,
+	ok.
+
+%% Padding on a reset stream is reported in full. A flow of 0 is not.
+data_padding_linger_window_test() ->
+	{Req0, _} = cow_hpack:encode([
+		{<<":method">>, <<"POST">>},
+		{<<":scheme">>, <<"http">>},
+		{<<":path">>, <<"/">>}
+	]),
+	Req = iolist_to_binary(Req0),
+	{ok, _, S00} = init(server, #{
+		preface_timeout => infinity,
+		settings_timeout => infinity
+	}),
+	{ok, S0} = frame({settings, #{}}, S00),
+	{ok, {headers, 1, nofin, _, _, _}, S1}
+		= frame({headers, 1, nofin, head_fin, Req}, S0),
+	{ok, S2} = reset_stream(1, S1),
+	{ok, S2a} = frame({data, 1, nofin, <<>>, 0}, S2),
+	65535 = S2a#http2_machine.remote_window,
+	%% Pad length 0 and no data.
+	{window_changed, 1, S2b} = frame({data, 1, nofin, <<>>, 1}, S2a),
+	65534 = S2b#http2_machine.remote_window,
+	%% Pad length 255 and no data.
+	{window_changed, 256, S3} = frame({data, 1, nofin, <<>>, 256}, S2b),
+	65278 = S3#http2_machine.remote_window,
+	ok.
+
+%% DATA discarded after GOAWAY still reports the flow length.
+data_padding_goaway_window_test() ->
+	{Req0, _} = cow_hpack:encode([
+		{<<":method">>, <<"POST">>},
+		{<<":scheme">>, <<"http">>},
+		{<<":path">>, <<"/">>}
+	]),
+	Req = iolist_to_binary(Req0),
+	{ok, _, S00} = init(server, #{
+		preface_timeout => infinity,
+		settings_timeout => infinity
+	}),
+	{ok, S0} = frame({settings, #{}}, S00),
+	{ok, {headers, 1, fin, _, _, _}, S1}
+		= frame({headers, 1, fin, head_fin, Req}, S0),
+	{1, S2} = set_last_streamid(S1),
+	{ok, S3} = frame({headers, 3, nofin, head_fin, Req}, S2),
+	%% Pad length 255 and no data.
+	{window_changed, 256, S4} = frame({data, 3, nofin, <<>>, 256}, S3),
+	65279 = S4#http2_machine.remote_window,
+	%% Pad length 255 and two data octets.
+	{window_changed, 258, S5} = frame({data, 3, nofin, <<"hi">>, 258}, S4),
+	65021 = S5#http2_machine.remote_window,
 	ok.
 
 -endif.
@@ -2429,8 +2546,8 @@ local_linger_generations_test() ->
 	true = is_lingering_stream(1, S2),
 	true = is_lingering_stream(Max, S2),
 	true = is_lingering_stream(Max + 1, S2),
-	{ok, _} = frame({data, 1, fin, <<>>}, S2),
-	{ok, _} = frame({data, Max + 1, fin, <<>>}, S2),
+	{ok, _} = frame({data, 1, fin, <<>>, 0}, S2),
+	{ok, _} = frame({data, Max + 1, fin, <<>>, 0}, S2),
 	%% Below the bound, repeating an id from the previous generation
 	%% writes it into the current one as well.
 	S2b = stream_linger(1, S2),
@@ -2446,9 +2563,9 @@ local_linger_generations_test() ->
 	true = is_lingering_stream(Max * 2, S4),
 	true = is_lingering_stream(Max * 2 + 1, S4),
 	{error, {connection_error, stream_closed, _}, _}
-		= frame({data, 1, fin, <<>>}, S4),
-	{ok, _} = frame({data, Max + 1, fin, <<>>}, S4),
-	{ok, _} = frame({data, Max * 2 + 1, fin, <<>>}, S4),
+		= frame({data, 1, fin, <<>>, 0}, S4),
+	{ok, _} = frame({data, Max + 1, fin, <<>>, 0}, S4),
+	{ok, _} = frame({data, Max * 2 + 1, fin, <<>>, 0}, S4),
 	%% Repeating an id at the bound rotates. The repeated id stays.
 	%% An id that was only in the previous generation is dropped.
 	S5 = stream_linger(1, S3),
@@ -2456,8 +2573,8 @@ local_linger_generations_test() ->
 	true = is_lingering_stream(1, S5),
 	true = is_lingering_stream(Max + 1, S5),
 	{error, {connection_error, stream_closed, _}, _}
-		= frame({data, 2, fin, <<>>}, S5),
-	{ok, _} = frame({data, 1, fin, <<>>}, S5),
+		= frame({data, 2, fin, <<>>, 0}, S5),
+	{ok, _} = frame({data, 1, fin, <<>>, 0}, S5),
 	%% Repeating an id already in the full current generation rotates too.
 	%% That id stays. The previous generation is dropped.
 	S6 = stream_linger(Max + 1, S3),
@@ -2465,8 +2582,8 @@ local_linger_generations_test() ->
 	true = is_lingering_stream(Max + 1, S6),
 	true = is_lingering_stream(Max * 2, S6),
 	{error, {connection_error, stream_closed, _}, _}
-		= frame({data, 1, fin, <<>>}, S6),
-	{ok, _} = frame({data, Max + 1, fin, <<>>}, S6),
+		= frame({data, 1, fin, <<>>, 0}, S6),
+	{ok, _} = frame({data, Max + 1, fin, <<>>, 0}, S6),
 	%% A header block on a lingered stream is decoded. One on a
 	%% forgotten stream is rejected and does not touch HPACK state.
 	{Block0, _} = cow_hpack:encode(

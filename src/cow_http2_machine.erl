@@ -56,6 +56,8 @@
 	max_frame_size_sent => 16384..16777215 | infinity,
 	max_header_list_size => 0..16#ffffffff | infinity,
 	max_headers => non_neg_integer(),
+	max_local_lingering_streams => pos_integer(),
+	max_remote_lingering_streams => pos_integer(),
 	max_stream_window_size => 0..16#7fffffff,
 	message_tag => any(),
 	preface_timeout => timeout(),
@@ -193,11 +195,6 @@
 	orelse
 	((Mode =:= client) andalso ?IS_CLIENT_LOCAL(StreamID))
 )).
-
-%% Lingering is best effort. Each side keeps a current generation
-%% and the previous one, at most this many stream ids each.
--define(LOCAL_LINGER_MAX, 100).
--define(REMOTE_LINGER_MAX, 10).
 
 -spec init(client | server, opts()) -> {ok, iodata(), http2_machine()}.
 init(client, Opts) ->
@@ -1411,11 +1408,11 @@ rst_stream_frame({rst_stream, StreamID, _}, State=#http2_machine{mode=Mode,
 		'RST_STREAM frame received on a stream in idle state. (RFC7540 5.1)'},
 		State};
 rst_stream_frame({rst_stream, StreamID, Reason}, State=#http2_machine{
-		streams=Streams0, remote_lingering_streams=Lingering0}) ->
+		opts=Opts, streams=Streams0, remote_lingering_streams=Lingering0}) ->
 	Streams = maps:remove(StreamID, Streams0),
-	%% Two generations of at most ?REMOTE_LINGER_MAX.
-	%% @todo Make the lingering-stream limit configurable.
-	Lingering = linger_add(StreamID, Lingering0, ?REMOTE_LINGER_MAX),
+	%% Two generations of at most max_remote_lingering_streams.
+	Max = maps:get(max_remote_lingering_streams, Opts, 10),
+	Lingering = linger_add(StreamID, Lingering0, Max),
 	{ok, {rst_stream, StreamID, Reason},
 		State#http2_machine{streams=Streams, remote_lingering_streams=Lingering}}.
 
@@ -2492,10 +2489,11 @@ stream_reset(StreamID, State, Reason, HumanReadable) ->
 	{error, {stream_error, StreamID, Reason, HumanReadable},
 		stream_linger(StreamID, State)}.
 
-stream_linger(StreamID, State=#http2_machine{local_lingering_streams=Lingering0}) ->
-	%% Two generations of at most ?LOCAL_LINGER_MAX.
-	%% @todo Make the lingering-stream limit configurable.
-	Lingering = linger_add(StreamID, Lingering0, ?LOCAL_LINGER_MAX),
+stream_linger(StreamID, State=#http2_machine{opts=Opts,
+		local_lingering_streams=Lingering0}) ->
+	%% Two generations of at most max_local_lingering_streams.
+	Max = maps:get(max_local_lingering_streams, Opts, 100),
+	Lingering = linger_add(StreamID, Lingering0, Max),
 	State#http2_machine{local_lingering_streams=Lingering}.
 
 %% The current generation holds at most Max ids. The next id
@@ -2531,7 +2529,7 @@ linger_remotes(Ids, State) ->
 	end, State, Ids).
 
 local_linger_generations_test() ->
-	Max = ?LOCAL_LINGER_MAX,
+	Max = 100,
 	S0 = linger_machine(server),
 	%% Filling the current generation does not rotate.
 	S1 = linger_locals(lists:seq(1, Max), S0),
@@ -2600,7 +2598,7 @@ local_linger_generations_test() ->
 	ok.
 
 remote_linger_generations_test() ->
-	Max = ?REMOTE_LINGER_MAX,
+	Max = 10,
 	S0 = linger_machine(server),
 	S1 = linger_remotes(lists:seq(1, Max), S0),
 	{Current1, Previous1} = S1#http2_machine.remote_lingering_streams,
@@ -2650,8 +2648,8 @@ remote_linger_generations_test() ->
 	%% while that parent lingers, including from the previous generation.
 	C0 = linger_machine(client),
 	First = 1,
-	Prev = 1 + ?LOCAL_LINGER_MAX * 2,
-	Current = 1 + ?LOCAL_LINGER_MAX * 4,
+	Prev = 1 + 100 * 2,
+	Current = 1 + 100 * 4,
 	C1 = linger_locals(lists:seq(First, Current, 2), C0),
 	{error, {connection_error, protocol_error, _}, _}
 		= frame({push_promise, First, head_fin, 100002, <<>>}, C1),

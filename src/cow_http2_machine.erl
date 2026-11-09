@@ -1070,7 +1070,7 @@ format_error(pseudo_header_after_regular) ->
 format_error(trailer_invalid_pseudo_header) ->
 	'Trailer header blocks must not contain pseudo-headers. (RFC7540 8.1.2.1)';
 format_error(invalid_header_name) ->
-	'Header names must be lowercase. (RFC7540 8.1.2)';
+	'Header names must be lowercase tokens. (RFC7540 8.1.2)';
 format_error(invalid_header_value) ->
 	'Header values must only contain valid characters. (RFC7540 8.1.2)';
 format_error(Reason) ->

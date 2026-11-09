@@ -156,10 +156,13 @@ process_headers(Headers0, Type, ReqMethod, IsFin, LocalSettings)
 	IsExtendedConnectEnabled = maps:get(enable_connect_protocol, LocalSettings, false),
 	case request_pseudo_headers(Headers0, #{}) of
 		%% Extended CONNECT method (HTTP/2: RFC8441, HTTP/3: RFC9220).
-		{ok, PseudoHeaders=#{method := <<"CONNECT">>, scheme := _,
-			authority := _, path := _, protocol := _}, Headers}
+		{ok, PseudoHeaders=#{method := <<"CONNECT">>, scheme := Scheme,
+			authority := _, path := Path, protocol := _}, Headers}
 			when IsExtendedConnectEnabled ->
-			regular_headers(Headers, Type, ReqMethod, IsFin, PseudoHeaders);
+			case validate_request_path(<<"CONNECT">>, Scheme, Path) of
+				ok -> regular_headers(Headers, Type, ReqMethod, IsFin, PseudoHeaders);
+				error -> {error, invalid_pseudo_header}
+			end;
 		{ok, #{method := <<"CONNECT">>, scheme := _,
 			authority := _, path := _}, _}
 			when IsExtendedConnectEnabled ->
@@ -175,8 +178,11 @@ process_headers(Headers0, Type, ReqMethod, IsFin, LocalSettings)
 		{ok, #{method := <<"CONNECT">>}, _} ->
 			{error, connect_missing_authority};
 		%% Other requests.
-		{ok, PseudoHeaders = #{method := _, scheme := _, path := _}, Headers} ->
-			regular_headers(Headers, Type, ReqMethod, IsFin, PseudoHeaders);
+		{ok, PseudoHeaders = #{method := Method, scheme := Scheme, path := Path}, Headers} ->
+			case validate_request_path(Method, Scheme, Path) of
+				ok -> regular_headers(Headers, Type, ReqMethod, IsFin, PseudoHeaders);
+				error -> {error, invalid_pseudo_header}
+			end;
 		{ok, _, _} ->
 			{error, missing_pseudo_header};
 		Error = {error, _} ->
@@ -218,7 +224,7 @@ request_pseudo_headers([{<<":scheme">>, Scheme}|Tail], PseudoHeaders) ->
 request_pseudo_headers([{<<":authority">>, _}|_], #{authority := _}) ->
 	{error, multiple_authority_pseudo_headers};
 request_pseudo_headers([{<<":authority">>, Authority}|Tail], PseudoHeaders) ->
-	case validate_header(Authority) of
+	case validate_authority(Authority) of
 		ok -> request_pseudo_headers(Tail, PseudoHeaders#{authority => Authority});
 		error -> {error, invalid_pseudo_header}
 	end;
@@ -241,6 +247,43 @@ request_pseudo_headers([{<<":", _/bits>>, _}|_], _) ->
 	{error, invalid_pseudo_header};
 request_pseudo_headers(Headers, PseudoHeaders) ->
 	{ok, PseudoHeaders, Headers}.
+
+%% http(s) :path must start with / once '?' is split off, or be
+%% exactly "*". Asterisk-form is only method OPTIONS. The scheme
+%% match is case insensitive, and :path may arrive before :scheme.
+validate_request_path(Method, Scheme, Path) ->
+	case string:lowercase(Scheme) of
+		Http when Http =:= <<"http">>; Http =:= <<"https">> ->
+			validate_http_path(Method, Path);
+		_ ->
+			ok
+	end.
+
+validate_http_path(<<"OPTIONS">>, <<"*">>) ->
+	ok;
+validate_http_path(_, Path) ->
+	case parse_fullpath(Path) of
+		{<<$/, _/bits>>, _} -> ok;
+		_ -> error
+	end.
+
+%% An empty host that carries a port is not an empty authority.
+%% A missing port stays undefined. A present port is 1..65535.
+validate_authority(Authority) ->
+	try cow_http_hd:parse_host(Authority) of
+		{<<>>, undefined} ->
+			ok;
+		{<<>>, _} ->
+			error;
+		{_, undefined} ->
+			ok;
+		{_, Port} when Port > 0, Port =< 65535 ->
+			ok;
+		_ ->
+			error
+	catch _:_ ->
+		error
+	end.
 
 response_pseudo_headers([{<<":status">>, _}|_], #{status := _}) ->
 	{error, multiple_status_pseudo_headers};
@@ -298,37 +341,385 @@ regular_headers([{<<"te">>, Value}|_], request) when Value =/= <<"trailers">> ->
 	{error, invalid_te_value};
 regular_headers([{<<"te">>, _}|_], Type) when Type =/= request ->
 	{error, invalid_te_header};
+regular_headers([{<<"host">>, Value}|Tail], Type)
+		when Type =:= request; Type =:= push_promise ->
+	case validate_authority(Value) of
+		ok -> regular_headers(Tail, Type);
+		error -> {error, invalid_header_value}
+	end;
 regular_headers([{Name, Value}|Tail], Type) ->
-	Pattern = [
-		<<$A>>, <<$B>>, <<$C>>, <<$D>>, <<$E>>, <<$F>>, <<$G>>, <<$H>>, <<$I>>,
-		<<$J>>, <<$K>>, <<$L>>, <<$M>>, <<$N>>, <<$O>>, <<$P>>, <<$Q>>, <<$R>>,
-		<<$S>>, <<$T>>, <<$U>>, <<$V>>, <<$W>>, <<$X>>, <<$Y>>, <<$Z>>,
-		<<$\r>>, <<$\n>>, <<$\0>>
-	],
-	case binary:match(Name, Pattern) of
-		nomatch ->
+	case validate_header_name(Name) of
+		ok ->
 			case validate_header(Value) of
 				ok -> regular_headers(Tail, Type);
 				error -> {error, invalid_header_value}
 			end;
-		_ -> {error, invalid_header_name}
+		error ->
+			{error, invalid_header_name}
 	end;
 regular_headers([], _) ->
 	ok.
 
-%% Reject CR, LF and NUL early.
+%% Lowercase token. (RFC 9110 5.6.2, RFC 9113 8.2.1)
+validate_header_name(<<C, R/bits>>) when ?IS_TOKEN(C), (C < $A orelse C > $Z) ->
+	validate_header_name(R);
+validate_header_name(<<>>) ->
+	ok;
+validate_header_name(_) ->
+	error.
+
+%% Reject CR, LF and NUL anywhere, and leading or trailing SP/HTAB.
+validate_header(<<>>) ->
+	ok;
+validate_header(<<C, _/bits>>) when ?IS_WS(C) ->
+	error;
 validate_header(Value) ->
-	case binary:match(Value, [<<$\r>>, <<$\n>>, <<$\0>>]) of
-		nomatch -> ok;
-		_ -> error
+	case binary:last(Value) of
+		C when ?IS_WS(C) ->
+			error;
+		_ ->
+			case binary:match(Value, [<<$\r>>, <<$\n>>, <<$\0>>]) of
+				nomatch -> ok;
+				_ -> error
+			end
 	end.
 
-%% Reject CR, LF, NUL and # early.
+%% Reject CR, LF, NUL, SP and # anywhere, and leading or trailing HTAB.
+validate_path(<<>>) ->
+	ok;
+validate_path(<<C, _/bits>>) when ?IS_WS(C) ->
+	error;
 validate_path(Value) ->
-	case binary:match(Value, [<<$\r>>, <<$\n>>, <<$\0>>, <<$\#>>]) of
-		nomatch -> ok;
-		_ -> error
+	case binary:last(Value) of
+		C when ?IS_WS(C) ->
+			error;
+		_ ->
+			case binary:match(Value, [<<$\s>>, <<$\r>>, <<$\n>>, <<$\0>>, <<$\#>>]) of
+				nomatch -> ok;
+				_ -> error
+			end
 	end.
+
+-ifdef(TEST).
+process_headers_test() ->
+	{headers, [{<<"x-foo">>, <<"a b">>}, {<<"x-empty">>, <<>>}],
+			#{method := <<"GET">>, scheme := <<"http">>,
+				authority := <<>>, path := <<"/">>}, 0}
+		= process_headers([
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":authority">>, <<>>},
+			{<<":path">>, <<"/">>},
+			{<<"x-foo">>, <<"a b">>},
+			{<<"x-empty">>, <<>>}
+		], request, undefined, fin, #{}),
+	{headers, [], #{method := <<"OPTIONS">>, scheme := <<"http">>, path := <<"*">>}, 0}
+		= process_headers([
+			{<<":method">>, <<"OPTIONS">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"*">>}
+		], request, undefined, fin, #{}),
+	{headers, [], #{scheme := <<"http">>, path := <<"//evil.com/x">>}, 0}
+		= process_headers([
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"//evil.com/x">>}
+		], request, undefined, fin, #{}),
+	{headers, [], #{scheme := <<"foo">>, path := <<"bar">>}, 0}
+		= process_headers([
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"foo">>},
+			{<<":path">>, <<"bar">>}
+		], request, undefined, fin, #{}),
+	{headers, [], #{path := <<"/foo\tbar">>}, 0}
+		= process_headers([
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/foo\tbar">>}
+		], request, undefined, fin, #{}),
+	{headers, [], #{path := <<"/x?q">>}, 0}
+		= process_headers([
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"https">>},
+			{<<":path">>, <<"/x?q">>}
+		], request, undefined, fin, #{}),
+	%% A non-http scheme may omit the path component.
+	{headers, [], #{scheme := <<"foo">>, path := <<>>}, 0}
+		= process_headers([
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"foo">>},
+			{<<":path">>, <<>>}
+		], request, undefined, fin, #{}),
+	{headers, [], #{authority := <<"%2Ftmp%2Fsock">>}, 0}
+		= process_headers([
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":authority">>, <<"%2Ftmp%2Fsock">>},
+			{<<":path">>, <<"/">>}
+		], request, undefined, fin, #{}),
+	{headers, [], #{authority := <<"[2001:db8::1]">>}, 0}
+		= process_headers([
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"https">>},
+			{<<":authority">>, <<"[2001:db8::1]">>},
+			{<<":path">>, <<"/">>}
+		], request, undefined, fin, #{}),
+	{headers, [], #{authority := <<"localhost:1">>}, 0}
+		= process_headers([
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":authority">>, <<"localhost:1">>},
+			{<<":path">>, <<"/">>}
+		], request, undefined, fin, #{}),
+	{headers, [], #{authority := <<"localhost:65535">>}, 0}
+		= process_headers([
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":authority">>, <<"localhost:65535">>},
+			{<<":path">>, <<"/">>}
+		], request, undefined, fin, #{}),
+	{headers, [{<<"host">>, <<>>}], #{authority := <<>>}, 0}
+		= process_headers([
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":authority">>, <<>>},
+			{<<":path">>, <<"/">>},
+			{<<"host">>, <<>>}
+		], request, undefined, fin, #{}),
+	{headers, [{<<"host">>, <<"localhost:8080">>}], #{}, 0}
+		= process_headers([
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/">>},
+			{<<"host">>, <<"localhost:8080">>}
+		], request, undefined, fin, #{}),
+	{headers, [{<<"!#$%&'*+-.^_`|~">>, <<"z">>}],
+			#{method := <<"GET">>, path := <<"/">>}, 0}
+		= process_headers([
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/">>},
+			{<<"!#$%&'*+-.^_`|~">>, <<"z">>}
+		], request, undefined, fin, #{}),
+	{headers, [], #{method := <<"CONNECT">>, authority := <<"example.com:443">>}, 0}
+		= process_headers([
+			{<<":method">>, <<"CONNECT">>},
+			{<<":authority">>, <<"example.com:443">>}
+		], request, undefined, fin, #{}),
+	{headers, [], #{protocol := <<"websocket">>, path := <<"/">>}, 0}
+		= process_headers([
+			{<<":method">>, <<"CONNECT">>},
+			{<<":scheme">>, <<"https">>},
+			{<<":authority">>, <<"example.com">>},
+			{<<":path">>, <<"/">>},
+			{<<":protocol">>, <<"websocket">>}
+		], request, undefined, fin, #{enable_connect_protocol => true}),
+	{headers, [{<<"x-foo">>, <<"a\tb">>}], #{status := 200}, 0}
+		= process_headers([
+			{<<":status">>, <<"200">>},
+			{<<"x-foo">>, <<"a\tb">>}
+		], response, <<"GET">>, fin, #{}),
+	{trailers, [{<<"x-foo">>, <<"a b">>}]}
+		= process_headers([{<<"x-foo">>, <<"a b">>}], trailers, undefined, fin, #{}),
+	ok.
+
+process_headers_error_test_() ->
+	Tests = [
+		%% Field names are lowercase tokens.
+		{request, #{}, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/">>},
+			{<<"content-length ">>, <<"1">>}
+		], invalid_header_name},
+		{request, #{}, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/">>},
+			{<<"x foo">>, <<"a">>}
+		], invalid_header_name},
+		{request, #{}, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/">>},
+			{<<$x, 1, $y>>, <<"a">>}
+		], invalid_header_name},
+		{request, #{}, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/">>},
+			{<<"x:y">>, <<"a">>}
+		], invalid_header_name},
+		{request, #{}, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/">>},
+			{<<"x/y">>, <<"a">>}
+		], invalid_header_name},
+		{request, #{}, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/">>},
+			{<<"Content-Length">>, <<"1">>}
+		], invalid_header_name},
+		%% No leading or trailing SP/HTAB in values.
+		{request, #{}, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/">>},
+			{<<"x-foo">>, <<" leading">>}
+		], invalid_header_value},
+		{request, #{}, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/">>},
+			{<<"x-foo">>, <<"trailing ">>}
+		], invalid_header_value},
+		{request, #{}, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/">>},
+			{<<"x-foo">>, <<"\tleading">>}
+		], invalid_header_value},
+		{trailers, #{}, [
+			{<<"x-foo">>, <<"trailing\t">>}
+		], invalid_header_value},
+		{request, #{}, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/">>},
+			{<<"x-foo">>, <<"a\r\nb">>}
+		], invalid_header_value},
+		%% http(s) :path must start with /, or be OPTIONS *. :path may precede :scheme.
+		{request, #{}, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<>>}
+		], invalid_pseudo_header},
+		{request, #{}, [
+			{<<":method">>, <<"GET">>},
+			{<<":path">>, <<>>},
+			{<<":scheme">>, <<"HTTPS">>}
+		], invalid_pseudo_header},
+		{request, #{}, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"https">>},
+			{<<":path">>, <<"?">>}
+		], invalid_pseudo_header},
+		{request, #{}, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"?q">>}
+		], invalid_pseudo_header},
+		{request, #{}, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<" /">>}
+		], invalid_pseudo_header},
+		{request, #{}, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/ ">>}
+		], invalid_pseudo_header},
+		{request, #{enable_connect_protocol => true}, [
+			{<<":method">>, <<"CONNECT">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":authority">>, <<"example.com">>},
+			{<<":path">>, <<>>},
+			{<<":protocol">>, <<"websocket">>}
+		], invalid_pseudo_header},
+		{request, #{enable_connect_protocol => true}, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"https">>},
+			{<<":authority">>, <<"example.com">>},
+			{<<":path">>, <<"/">>},
+			{<<":protocol">>, <<"websocket">>}
+		], invalid_protocol_pseudo_header},
+		%% http(s) :path starts with / unless it is OPTIONS *.
+		{request, #{}, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"*">>}
+		], invalid_pseudo_header},
+		{request, #{}, [
+			{<<":method">>, <<"OPTIONS">>},
+			{<<":scheme">>, <<"https">>},
+			{<<":path">>, <<"*?q">>}
+		], invalid_pseudo_header},
+		{request, #{}, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"@evil.com/x">>}
+		], invalid_pseudo_header},
+		{request, #{}, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"https">>},
+			{<<":path">>, <<".evil.com">>}
+		], invalid_pseudo_header},
+		%% SP ends an HTTP/1 request-target, including in the query.
+		{request, #{}, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/foo bar">>}
+		], invalid_pseudo_header},
+		{request, #{}, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/?a b">>}
+		], invalid_pseudo_header},
+		{request, #{}, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"foo">>},
+			{<<":path">>, <<"/a b">>}
+		], invalid_pseudo_header},
+		{response, #{}, [
+			{<<":status">>, <<"200">>},
+			{<<"x foo">>, <<"a">>}
+		], invalid_header_name},
+		%% :authority is a host, not an arbitrary field value.
+		{request, #{}, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":authority">>, <<"a b@c/d">>},
+			{<<":path">>, <<"/">>}
+		], invalid_pseudo_header},
+		{request, #{}, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":authority">>, <<"user@host">>},
+			{<<":path">>, <<"/">>}
+		], invalid_pseudo_header},
+		%% A port is 1..65535. An empty host with a port is not an empty authority.
+		{request, #{}, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":authority">>, <<"localhost:0">>},
+			{<<":path">>, <<"/">>}
+		], invalid_pseudo_header},
+		{request, #{}, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":authority">>, <<"localhost:65536">>},
+			{<<":path">>, <<"/">>}
+		], invalid_pseudo_header},
+		{request, #{}, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":authority">>, <<":80">>},
+			{<<":path">>, <<"/">>}
+		], invalid_pseudo_header},
+		{request, #{}, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/">>},
+			{<<"host">>, <<"localhost:0">>}
+		], invalid_header_value}
+	],
+	[{iolist_to_binary(io_lib:format("~0p", [Headers])),
+		fun() ->
+			{error, Reason} = process_headers(Headers, Type, undefined, fin, Settings)
+		end} || {Type, Settings, Headers, Reason} <- Tests].
+-endif.
 
 request_expected_size(Headers, IsFin, PseudoHeaders) ->
 	case [CL || {<<"content-length">>, CL} <- Headers] of

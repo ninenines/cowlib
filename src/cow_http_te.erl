@@ -207,7 +207,8 @@ chunked_len(<< $f, R/bits >>, S, Len, D) when D < 16 -> chunked_len(R, S, Len * 
 %% Note that we currently skip the first character we encounter here,
 %% and not in the skip_chunk_ext function. If we latter implement
 %% chunk extensions (unlikely) we will need to change this clause too.
-chunked_len(<< C, R/bits >>, S, Len, _) when ?IS_WS(C); C =:= $; -> skip_chunk_ext(R, S, Len, 0);
+chunked_len(<< C, R/bits >>, S, Len, D) when D > 0, ?IS_WS(C); D > 0, C =:= $; ->
+	skip_chunk_ext(R, S, Len, 0);
 %% Final chunk.
 %%
 %% When trailers are following we simply return them as the Rest.
@@ -360,7 +361,13 @@ stream_chunked_error_test_() ->
 	Tests = [
 		{<<>>, undefined},
 		{<<"\n\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">>, {2, 0}},
-		{<<"10000000000000000\r\n">>, {0, 0}}
+		{<<"10000000000000000\r\n">>, {0, 0}},
+		%% A chunk-size must start with a hex digit. SP, HTAB or ";"
+		%% is not the end of a zero-length size.
+		{<<" 5\r\nhello\r\n0\r\n\r\n">>, {0, 0}},
+		{<<"\t5\r\nhello\r\n0\r\n\r\n">>, {0, 0}},
+		{<<";x\r\nhello\r\n0\r\n\r\n">>, {0, 0}},
+		{<<"5\r\nhello\r\n 3\r\nbye\r\n0\r\n\r\n">>, {0, 0}}
 	],
 	[{lists:flatten(io_lib:format("value ~p state ~p", [V, S])),
 		fun() -> ?assertError(_, stream_chunked(V, S)) end}

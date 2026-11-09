@@ -13,7 +13,7 @@ is ignored, they are all returned.
 
 == Online documentation
 
-* https://ninenines.eu/docs/en/cowlib/2.21/manual[Function reference]
+* https://ninenines.eu/docs/en/cowlib/2.22/manual[Function reference]
 
 == Offline documentation
 

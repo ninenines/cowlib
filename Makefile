@@ -2,7 +2,7 @@
 
 PROJECT = cowlib
 PROJECT_DESCRIPTION = Support library for manipulating Web protocols.
-PROJECT_VERSION = 2.21.0
+PROJECT_VERSION = 2.22.0
 
 # Options.
 
@@ -37,7 +37,7 @@ define HEX_TARBALL_EXTRA_METADATA
 #{
 	licenses => [<<"ISC">>],
 	links => #{
-		<<"Function reference">> => <<"https://ninenines.eu/docs/en/cowlib/2.21/manual/">>,
+		<<"Function reference">> => <<"https://ninenines.eu/docs/en/cowlib/2.22/manual/">>,
 		<<"GitHub">> => <<"https://github.com/ninenines/cowlib">>,
 		<<"Sponsor">> => <<"https://github.com/sponsors/essen">>
 	}
@@ -105,6 +105,9 @@ prepare_tag:
 	$(verbose) grep -m1 PROJECT_VERSION Makefile
 	$(verbose) echo -n "APP:                 "
 	$(verbose) grep -m1 vsn ebin/$(PROJECT).app | sed 's/	//g'
+	$(verbose) echo
+	$(verbose) echo "Links in the README:"
+	$(verbose) grep http.*:// README.asciidoc
 	$(verbose) echo
 	$(verbose) echo -n "LICENSE: " ; head -n1 LICENSE
 	$(verbose) echo

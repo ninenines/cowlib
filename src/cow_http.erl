@@ -299,22 +299,24 @@ regular_headers([{<<"te">>, Value}|_], request) when Value =/= <<"trailers">> ->
 regular_headers([{<<"te">>, _}|_], Type) when Type =/= request ->
 	{error, invalid_te_header};
 regular_headers([{Name, Value}|Tail], Type) ->
-	Pattern = [
-		<<$A>>, <<$B>>, <<$C>>, <<$D>>, <<$E>>, <<$F>>, <<$G>>, <<$H>>, <<$I>>,
-		<<$J>>, <<$K>>, <<$L>>, <<$M>>, <<$N>>, <<$O>>, <<$P>>, <<$Q>>, <<$R>>,
-		<<$S>>, <<$T>>, <<$U>>, <<$V>>, <<$W>>, <<$X>>, <<$Y>>, <<$Z>>,
-		<<$\r>>, <<$\n>>, <<$\0>>
-	],
-	case binary:match(Name, Pattern) of
-		nomatch ->
+	case validate_ltoken(Name) of
+		ok ->
 			case validate_header(Value) of
 				ok -> regular_headers(Tail, Type);
 				error -> {error, invalid_header_value}
 			end;
-		_ -> {error, invalid_header_name}
+		error ->
+			{error, invalid_header_name}
 	end;
 regular_headers([], _) ->
 	ok.
+
+validate_ltoken(<<C, R/bits>>) when ?IS_LTOKEN(C) ->
+	validate_ltoken(R);
+validate_ltoken(<<>>) ->
+	ok;
+validate_ltoken(<<_, _/bits>>) ->
+	error.
 
 %% Reject CR, LF and NUL early.
 validate_header(Value) ->
@@ -329,6 +331,37 @@ validate_path(Value) ->
 		nomatch -> ok;
 		_ -> error
 	end.
+
+-ifdef(TEST).
+process_headers_name_test() ->
+	Name = <<"!#$%&'*+-.^_`|~09az">>,
+	{headers, [{Name, <<"v">>}], #{method := <<"GET">>}, 0} = process_headers([
+		{<<":method">>, <<"GET">>},
+		{<<":scheme">>, <<"http">>},
+		{<<":path">>, <<"/">>},
+		{Name, <<"v">>}
+	], request, undefined, fin, #{}),
+	ok.
+
+process_headers_name_error_test_() ->
+	Names = [
+		<<"a b">>,
+		<<"a\tb">>,
+		<<"a:b">>,
+		<<"a(b)">>,
+		<<$a, 16#7f>>,
+		<<$a, 16#80>>,
+		<<"A">>
+	],
+	[{Name, fun() ->
+		{error, invalid_header_name} = process_headers([
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/">>},
+			{Name, <<"v">>}
+		], request, undefined, fin, #{})
+	end} || Name <- Names].
+-endif.
 
 request_expected_size(Headers, IsFin, PseudoHeaders) ->
 	case [CL || {<<"content-length">>, CL} <- Headers] of

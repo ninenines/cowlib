@@ -299,29 +299,43 @@ regular_headers([{<<"te">>, Value}|_], request) when Value =/= <<"trailers">> ->
 regular_headers([{<<"te">>, _}|_], Type) when Type =/= request ->
 	{error, invalid_te_header};
 regular_headers([{Name, Value}|Tail], Type) ->
-	Pattern = [
-		<<$A>>, <<$B>>, <<$C>>, <<$D>>, <<$E>>, <<$F>>, <<$G>>, <<$H>>, <<$I>>,
-		<<$J>>, <<$K>>, <<$L>>, <<$M>>, <<$N>>, <<$O>>, <<$P>>, <<$Q>>, <<$R>>,
-		<<$S>>, <<$T>>, <<$U>>, <<$V>>, <<$W>>, <<$X>>, <<$Y>>, <<$Z>>,
-		<<$\r>>, <<$\n>>, <<$\0>>
-	],
-	case binary:match(Name, Pattern) of
-		nomatch ->
+	case validate_ltoken(Name) of
+		ok ->
 			case validate_header(Value) of
 				ok -> regular_headers(Tail, Type);
 				error -> {error, invalid_header_value}
 			end;
-		_ -> {error, invalid_header_name}
+		error ->
+			{error, invalid_header_name}
 	end;
 regular_headers([], _) ->
 	ok.
 
-%% Reject CR, LF and NUL early.
+validate_ltoken(<<C, R/bits>>) when ?IS_LTOKEN(C) ->
+	validate_ltoken(R);
+validate_ltoken(<<>>) ->
+	ok;
+validate_ltoken(<<_, _/bits>>) ->
+	error.
+
+%% Empty, or ?IS_VCHAR_OBS not starting or ending with SP/HTAB. (RFC9110 5.5)
+validate_header(<<>>) ->
+	ok;
+validate_header(<<C, _/bits>>) when C =:= $\s; C =:= $\t ->
+	error;
 validate_header(Value) ->
-	case binary:match(Value, [<<$\r>>, <<$\n>>, <<$\0>>]) of
-		nomatch -> ok;
-		_ -> error
+	case binary:last(Value) of
+		$\s -> error;
+		$\t -> error;
+		_ -> validate_header_chars(Value)
 	end.
+
+validate_header_chars(<<C, R/bits>>) when ?IS_VCHAR_OBS(C) ->
+	validate_header_chars(R);
+validate_header_chars(<<>>) ->
+	ok;
+validate_header_chars(<<_, _/bits>>) ->
+	error.
 
 %% Reject CR, LF, NUL and # early.
 validate_path(Value) ->
@@ -329,6 +343,146 @@ validate_path(Value) ->
 		nomatch -> ok;
 		_ -> error
 	end.
+
+-ifdef(TEST).
+process_headers_name_test() ->
+	Name = <<"!#$%&'*+-.^_`|~09az">>,
+	{headers, [{Name, <<"v">>}], #{method := <<"GET">>}, 0} = process_headers([
+		{<<":method">>, <<"GET">>},
+		{<<":scheme">>, <<"http">>},
+		{<<":path">>, <<"/">>},
+		{Name, <<"v">>}
+	], request, undefined, fin, #{}),
+	ok.
+
+process_headers_name_error_test_() ->
+	Names = [
+		<<"a b">>,
+		<<"a\tb">>,
+		<<"a:b">>,
+		<<"a(b)">>,
+		<<$a, 16#7f>>,
+		<<$a, 16#80>>,
+		<<"A">>
+	],
+	[{Name, fun() ->
+		{error, invalid_header_name} = process_headers([
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/">>},
+			{Name, <<"v">>}
+		], request, undefined, fin, #{})
+	end} || Name <- Names].
+
+process_headers_value_test_() ->
+	Good = [
+		<<>>,
+		<<"a">>,
+		<<"!">>,
+		<<"~">>,
+		<<"text/html; charset=utf-8">>,
+		<<"a b">>,
+		<<"a  b">>,
+		<<"a\tb">>,
+		<<"a\t\tb">>,
+		<<$a, 16#80>>,
+		<<16#80>>,
+		<<16#ff>>,
+		<<$a, 16#80, $b>>
+	],
+	[{Value, fun() ->
+		{headers, [{<<"accept">>, Value}], #{method := <<"GET">>}, 0}
+			= process_headers([
+				{<<":method">>, <<"GET">>},
+				{<<":scheme">>, <<"http">>},
+				{<<":path">>, <<"/">>},
+				{<<"accept">>, Value}
+			], request, undefined, fin, #{})
+	end} || Value <- Good].
+
+process_headers_value_error_test_() ->
+	Bad = [
+		<<" ">>,
+		<<$\t>>,
+		<<" a">>,
+		<<$\t, $a>>,
+		<<"a ">>,
+		<<$a, $\t>>,
+		<<" a ">>,
+		<<0>>,
+		<<$\n>>,
+		<<$\r>>,
+		<<$a, 0>>,
+		<<$a, $\n>>,
+		<<$a, $\r>>,
+		<<127>>,
+		<<$a, 127>>,
+		<<1>>,
+		<<31>>,
+		<<$a, 8>>,
+		<<$a, 11>>,
+		<<$a, 12>>
+	],
+	[{Value, fun() ->
+		{error, invalid_header_value} = process_headers([
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/">>},
+			{<<"accept">>, Value}
+		], request, undefined, fin, #{})
+	end} || Value <- Bad].
+
+process_headers_authority_test() ->
+	{headers, [], #{authority := <<"example.com">>}, 0} = process_headers([
+		{<<":method">>, <<"GET">>},
+		{<<":scheme">>, <<"https">>},
+		{<<":authority">>, <<"example.com">>},
+		{<<":path">>, <<"/">>}
+	], request, undefined, fin, #{}),
+	{headers, [], #{authority := <<"example.com:443">>}, 0} = process_headers([
+		{<<":method">>, <<"GET">>},
+		{<<":scheme">>, <<"https">>},
+		{<<":authority">>, <<"example.com:443">>},
+		{<<":path">>, <<"/">>}
+	], request, undefined, fin, #{}),
+	ok.
+
+process_headers_authority_error_test_() ->
+	Authorities = [
+		<<" example.com">>,
+		<<"example.com ">>,
+		<<"example.com\t">>
+	],
+	[{Authority, fun() ->
+		{error, invalid_pseudo_header} = process_headers([
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"https">>},
+			{<<":authority">>, Authority},
+			{<<":path">>, <<"/">>}
+		], request, undefined, fin, #{})
+	end} || Authority <- Authorities].
+
+process_headers_response_value_test() ->
+	{headers, [{<<"server">>, <<"Erlang">>}], #{status := 200}, 0}
+		= process_headers([
+			{<<":status">>, <<"200">>},
+			{<<"server">>, <<"Erlang">>}
+		], response, <<"GET">>, fin, #{}),
+	{error, invalid_header_value} = process_headers([
+		{<<":status">>, <<"200">>},
+		{<<"server">>, <<"a", 127>>}
+	], response, <<"GET">>, fin, #{}),
+	ok.
+
+process_headers_trailers_value_test() ->
+	{trailers, [{<<"x">>, <<"a b">>}]} = process_headers([
+		{<<"x">>, <<"a b">>}
+	], trailers, <<"GET">>, fin, #{}),
+	{error, invalid_header_value} = process_headers([
+		{<<"x">>, <<" a">>}
+	], trailers, <<"GET">>, fin, #{}),
+	ok.
+-endif.
 
 request_expected_size(Headers, IsFin, PseudoHeaders) ->
 	case [CL || {<<"content-length">>, CL} <- Headers] of

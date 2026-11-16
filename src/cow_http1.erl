@@ -194,16 +194,29 @@ parse_hd_before_value(<< $\t, Rest/bits >>, Acc, Name) ->
 parse_hd_before_value(Data, Acc, Name) ->
 	parse_hd_value(Data, Acc, Name, <<>>).
 
-parse_hd_value(<< $\r, Rest/bits >>, Acc, Name, SoFar) ->
-	case Rest of
-		<< $\n, C, Rest2/bits >> when C =:= $\s; C =:= $\t ->
-			parse_hd_value(Rest2, Acc, Name, << SoFar/binary, C >>);
-		<< $\n, Rest2/bits >> ->
-			Value = clean_value_ws_end(SoFar, byte_size(SoFar) - 1),
-			parse_header(Rest2, [{Name, Value}|Acc])
-	end;
-parse_hd_value(<< C, Rest/bits >>, Acc, Name, SoFar) ->
+%% RFC 7230 obs-fold is CRLF 1*(SP / HTAB). Replace that with
+%% one SP and keep the octets already buffered, SP and HTAB
+%% included. Chromium does the same. RFC 9112's obs-fold also
+%% includes the OWS before the CRLF and does not keep it.
+%% A fold before any content is leading OWS: do not append
+%% the SP.
+parse_hd_value(<< $\r, $\n, C, Rest/bits >>, Acc, Name, <<>>)
+		when C =:= $\s; C =:= $\t ->
+	parse_hd_value(skip_rws(Rest), Acc, Name, <<>>);
+parse_hd_value(<< $\r, $\n, C, Rest/bits >>, Acc, Name, SoFar)
+		when C =:= $\s; C =:= $\t ->
+	parse_hd_value(skip_rws(Rest), Acc, Name, << SoFar/binary, $\s >>);
+parse_hd_value(<< $\r, $\n, Rest/bits >>, Acc, Name, SoFar) ->
+	parse_header(Rest, [{Name,
+		clean_value_ws_end(SoFar, byte_size(SoFar) - 1)}|Acc]);
+parse_hd_value(<< C, Rest/bits >>, Acc, Name, SoFar)
+		when ?IS_VCHAR_OBS(C) ->
 	parse_hd_value(Rest, Acc, Name, << SoFar/binary, C >>).
+
+skip_rws(<< C, Rest/bits >>) when C =:= $\s; C =:= $\t ->
+	skip_rws(Rest);
+skip_rws(Rest) ->
+	Rest.
 
 %% This function has been copied from cowboy_http.
 clean_value_ws_end(_, -1) ->
@@ -227,6 +240,36 @@ parse_headers_test_() ->
 			{[{<<"server">>, <<"Erlang/R17">>}], <<>>}},
 		{<<"X-Token!: v\r\n\r\n">>,
 			{[{<<"x-token!">>, <<"v">>}], <<>>}},
+		{<<"Name:\r\n\r\n">>,
+			{[{<<"name">>, <<>>}], <<>>}},
+		{<<"Name:  a b \t\r\n\r\n">>,
+			{[{<<"name">>, <<"a b">>}], <<>>}},
+		{<<"Name: a\tb\r\n\r\n">>,
+			{[{<<"name">>, <<"a\tb">>}], <<>>}},
+		{<<"Name: ", 16#80, 16#ff, "\r\n\r\n">>,
+			{[{<<"name">>, <<16#80, 16#ff>>}], <<>>}},
+		{<<"Name: ab\r\n\tcd\r\n\r\n">>,
+			{[{<<"name">>, <<"ab cd">>}], <<>>}},
+		{<<"Name: ab \r\n \t cd\r\n\r\n">>,
+			{[{<<"name">>, <<"ab  cd">>}], <<>>}},
+		{<<"Name:\r\n v\r\n\r\n">>,
+			{[{<<"name">>, <<"v">>}], <<>>}},
+		{<<"Name:\r\n \t v\r\n\r\n">>,
+			{[{<<"name">>, <<"v">>}], <<>>}},
+		{<<"Name: ab\r\n c\r\n d\r\n\r\n">>,
+			{[{<<"name">>, <<"ab c d">>}], <<>>}},
+		{<<"Name: ab\r\n \r\n cd\r\n\r\n">>,
+			{[{<<"name">>, <<"ab  cd">>}], <<>>}},
+		{<<"Name: ab\r\n \r\n \r\n cd\r\n\r\n">>,
+			{[{<<"name">>, <<"ab   cd">>}], <<>>}},
+		{<<"Name: ab\r\n \r\n \t cd\r\n\r\n">>,
+			{[{<<"name">>, <<"ab  cd">>}], <<>>}},
+		{<<"Name: ab\r\n \r\n \r\n\r\n">>,
+			{[{<<"name">>, <<"ab">>}], <<>>}},
+		{<<"Name: ab\r\n cd \t\r\n\r\n">>,
+			{[{<<"name">>, <<"ab cd">>}], <<>>}},
+		{<<"Name: ab\r\n x \r\n y\r\n\r\n">>,
+			{[{<<"name">>, <<"ab x  y">>}], <<>>}},
 		{<<"Server: Erlang/R17\r\n"
 			"Date: Sun, 23 Feb 2014 09:30:39 GMT\r\n"
 			"Multiline-Header: why hello!\r\n"
@@ -260,7 +303,14 @@ parse_headers_error_test_() ->
 		<<"Name : v\r\n\r\n">>,
 		<<"Name\t: v\r\n\r\n">>,
 		<<"Foo(Bar): v\r\n\r\n">>,
-		<<"a\0b: v\r\n\r\n">>
+		<<"a\0b: v\r\n\r\n">>,
+		<<"Name: ab\r\n c", 1, "d\r\n\r\n">>,
+		<<"Name: a\0b\r\n\r\n">>,
+		<<"Name: a\nb\r\n\r\n">>,
+		<<"Name: a\rb\r\n\r\n">>,
+		<<"Name: a", 127, "b\r\n\r\n">>,
+		<<"Name: a", 1, "b\r\n\r\n">>,
+		<<"Name: a", 31, "b\r\n\r\n">>
 	],
 	[{V, fun() -> ?assertError(_, parse_headers(V)) end}
 		|| V <- Tests].

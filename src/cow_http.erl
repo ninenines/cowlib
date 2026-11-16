@@ -42,6 +42,7 @@
 
 %% Validation functions.
 
+-export([ensure_field_value/1]).
 -export([ensure_scheme/1]).
 -export([ensure_token/1]).
 -export([ensure_token_lowercase/1]).
@@ -219,9 +220,10 @@ request_pseudo_headers([{<<":scheme">>, Scheme}|Tail], PseudoHeaders) ->
 request_pseudo_headers([{<<":authority">>, _}|_], #{authority := _}) ->
 	{error, multiple_authority_pseudo_headers};
 request_pseudo_headers([{<<":authority">>, Authority}|Tail], PseudoHeaders) ->
-	case validate_header(Authority) of
-		ok -> request_pseudo_headers(Tail, PseudoHeaders#{authority => Authority});
-		error -> {error, invalid_pseudo_header}
+	try validate_field_value(Authority) of
+		ok -> request_pseudo_headers(Tail, PseudoHeaders#{authority => Authority})
+	catch _:_ ->
+		{error, invalid_pseudo_header}
 	end;
 request_pseudo_headers([{<<":path">>, _}|_], #{path := _}) ->
 	{error, multiple_path_pseudo_headers};
@@ -302,22 +304,16 @@ regular_headers([{<<"te">>, _}|_], Type) when Type =/= request ->
 regular_headers([{Name, Value}|Tail], Type) ->
 	try validate_token_lowercase(Name) of
 		ok ->
-			case validate_header(Value) of
-				ok -> regular_headers(Tail, Type);
-				error -> {error, invalid_header_value}
+			try validate_field_value(Value) of
+				ok -> regular_headers(Tail, Type)
+			catch _:_ ->
+				{error, invalid_header_value}
 			end
 	catch _:_ ->
 		{error, invalid_header_name}
 	end;
 regular_headers([], _) ->
 	ok.
-
-%% Reject CR, LF and NUL early.
-validate_header(Value) ->
-	case binary:match(Value, [<<$\r>>, <<$\n>>, <<$\0>>]) of
-		nomatch -> ok;
-		_ -> error
-	end.
 
 %% Reject CR, LF, NUL and # early.
 validate_path(Value) ->
@@ -355,6 +351,135 @@ process_headers_name_error_test_() ->
 			{Name, <<"v">>}
 		], request, undefined, fin, #{})
 	end} || Name <- Names].
+
+process_headers_value_test_() ->
+	Good = [
+		<<>>,
+		<<"a">>,
+		<<"!">>,
+		<<"~">>,
+		<<"text/html; charset=utf-8">>,
+		<<"a b">>,
+		<<"a  b">>,
+		<<"a\tb">>,
+		<<"a\t\tb">>,
+		<<$a, 16#80>>,
+		<<16#80>>,
+		<<16#ff>>,
+		<<$a, 16#80, $b>>
+	],
+	[{Value, fun() ->
+		{headers, [{<<"accept">>, Value}], #{method := <<"GET">>}, 0}
+			= process_headers([
+				{<<":method">>, <<"GET">>},
+				{<<":scheme">>, <<"http">>},
+				{<<":path">>, <<"/">>},
+				{<<"accept">>, Value}
+			], request, undefined, fin, #{})
+	end} || Value <- Good].
+
+process_headers_value_error_test_() ->
+	Bad = [
+		<<" ">>,
+		<<$\t>>,
+		<<" a">>,
+		<<$\t, $a>>,
+		<<"a ">>,
+		<<$a, $\t>>,
+		<<" a ">>,
+		<<0>>,
+		<<$\n>>,
+		<<$\r>>,
+		<<$a, 0>>,
+		<<$a, $\n>>,
+		<<$a, $\r>>,
+		<<127>>,
+		<<$a, 127>>,
+		<<1>>,
+		<<31>>,
+		<<$a, 8>>,
+		<<$a, 11>>,
+		<<$a, 12>>
+	],
+	[{Value, fun() ->
+		{error, invalid_header_value} = process_headers([
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/">>},
+			{<<"accept">>, Value}
+		], request, undefined, fin, #{})
+	end} || Value <- Bad].
+
+%% Not a binary: binary:last/1 raises badarg.
+process_headers_value_not_binary_test() ->
+	{error, invalid_header_value} = process_headers([
+		{<<":method">>, <<"GET">>},
+		{<<":scheme">>, <<"http">>},
+		{<<":path">>, <<"/">>},
+		{<<"accept">>, <<$a, 1:4>>}
+	], request, undefined, fin, #{}),
+	ok.
+
+process_headers_authority_test() ->
+	{headers, [], #{authority := <<"example.com">>}, 0} = process_headers([
+		{<<":method">>, <<"GET">>},
+		{<<":scheme">>, <<"https">>},
+		{<<":authority">>, <<"example.com">>},
+		{<<":path">>, <<"/">>}
+	], request, undefined, fin, #{}),
+	{headers, [], #{authority := <<"example.com:443">>}, 0} = process_headers([
+		{<<":method">>, <<"GET">>},
+		{<<":scheme">>, <<"https">>},
+		{<<":authority">>, <<"example.com:443">>},
+		{<<":path">>, <<"/">>}
+	], request, undefined, fin, #{}),
+	ok.
+
+process_headers_authority_error_test_() ->
+	Authorities = [
+		<<" example.com">>,
+		<<"example.com ">>,
+		<<"example.com\t">>
+	],
+	[{Authority, fun() ->
+		{error, invalid_pseudo_header} = process_headers([
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"https">>},
+			{<<":authority">>, Authority},
+			{<<":path">>, <<"/">>}
+		], request, undefined, fin, #{})
+	end} || Authority <- Authorities].
+
+%% Not a binary: binary:last/1 raises badarg.
+process_headers_authority_not_binary_test() ->
+	{error, invalid_pseudo_header} = process_headers([
+		{<<":method">>, <<"GET">>},
+		{<<":scheme">>, <<"https">>},
+		{<<":authority">>, <<$a, 1:4>>},
+		{<<":path">>, <<"/">>}
+	], request, undefined, fin, #{}),
+	ok.
+
+process_headers_response_value_test() ->
+	{headers, [{<<"server">>, <<"Erlang">>}], #{status := 200}, 0}
+		= process_headers([
+			{<<":status">>, <<"200">>},
+			{<<"server">>, <<"Erlang">>}
+		], response, <<"GET">>, fin, #{}),
+	{error, invalid_header_value} = process_headers([
+		{<<":status">>, <<"200">>},
+		{<<"server">>, <<"a", 127>>}
+	], response, <<"GET">>, fin, #{}),
+	ok.
+
+process_headers_trailers_value_test() ->
+	{trailers, [{<<"x">>, <<"a b">>}]} = process_headers([
+		{<<"x">>, <<"a b">>}
+	], trailers, <<"GET">>, fin, #{}),
+	{error, invalid_header_value} = process_headers([
+		{<<"x">>, <<" a">>}
+	], trailers, <<"GET">>, fin, #{}),
+	ok.
 -endif.
 
 request_expected_size(Headers, IsFin, PseudoHeaders) ->
@@ -468,6 +593,31 @@ parse_fullpath_test() ->
 
 %% Validation functions.
 
+%% Empty, or field-content. (RFC9110 5.5)
+%% Must not start or end with SP or HTAB.
+-spec ensure_field_value(binary()) -> binary().
+
+ensure_field_value(Value) ->
+	ok = validate_field_value(Value),
+	Value.
+
+validate_field_value(Value) ->
+	ok = validate_field_value_ends(Value),
+	validate_field_chars(Value).
+
+validate_field_value_ends(<<>>) ->
+	ok;
+validate_field_value_ends(<<C, _/bits>> = Value) when C =/= $\s, C =/= $\t ->
+	ok = validate_field_value_last(binary:last(Value)).
+
+validate_field_value_last(C) when C =/= $\s, C =/= $\t ->
+	ok.
+
+validate_field_chars(<<C, R/bits>>) when ?IS_VCHAR_OBS(C) ->
+	validate_field_chars(R);
+validate_field_chars(<<>>) ->
+	ok.
+
 -spec ensure_scheme(binary()) -> binary().
 
 ensure_scheme(Scheme) ->
@@ -555,6 +705,33 @@ validate_token_lowercase1(<<>>) ->
 	ok.
 
 -ifdef(TEST).
+
+ensure_field_value_test_() ->
+	Tests = [
+		{<<>>, <<>>},
+		{<<"a">>, <<"a">>},
+		{<<"a b">>, <<"a b">>},
+		{<<"a\tb">>, <<"a\tb">>},
+		{<<128>>, <<128>>},
+		{<<255>>, <<255>>},
+		{<< <<$a>> || _ <- lists:seq(1, 1024) >>,
+			<< <<$a>> || _ <- lists:seq(1, 1024) >>}
+	],
+	[{iolist_to_binary(io_lib:format("~0p", [V])),
+		fun() -> Expected = ensure_field_value(V) end} || {V, Expected} <- Tests].
+
+ensure_field_value_error_test_() ->
+	Tests = [
+		<<" ">>, <<"\t">>,
+		<<" a">>, <<"a ">>, <<"\ta">>, <<"a\t">>, <<" a ">>,
+		<<"a", 0>>, <<"a\r">>, <<"a\n">>,
+		<<31>>, <<127>>,
+		["a", <<" b">>],
+		undefined, 256
+	],
+	[{iolist_to_binary(io_lib:format("~0p", [V])),
+		fun() -> ?assertError(_, ensure_field_value(V)) end}
+			|| V <- Tests].
 
 ensure_token_test_() ->
 	Tests = [

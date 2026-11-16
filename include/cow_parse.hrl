@@ -15,13 +15,17 @@
 -ifndef(COW_PARSE_HRL).
 -define(COW_PARSE_HRL, 1).
 
--define(IS_ALPHA(C),
+-define(IS_LALPHA(C),
 	(C =:= $a) or (C =:= $b) or (C =:= $c) or (C =:= $d) or (C =:= $e) or
 	(C =:= $f) or (C =:= $g) or (C =:= $h) or (C =:= $i) or (C =:= $j) or
 	(C =:= $k) or (C =:= $l) or (C =:= $m) or (C =:= $n) or (C =:= $o) or
 	(C =:= $p) or (C =:= $q) or (C =:= $r) or (C =:= $s) or (C =:= $t) or
 	(C =:= $u) or (C =:= $v) or (C =:= $w) or (C =:= $x) or (C =:= $y) or
-	(C =:= $z) or
+	(C =:= $z)
+).
+
+-define(IS_ALPHA(C),
+	?IS_LALPHA(C) or
 	(C =:= $A) or (C =:= $B) or (C =:= $C) or (C =:= $D) or (C =:= $E) or
 	(C =:= $F) or (C =:= $G) or (C =:= $H) or (C =:= $I) or (C =:= $J) or
 	(C =:= $K) or (C =:= $L) or (C =:= $M) or (C =:= $N) or (C =:= $O) or
@@ -53,6 +57,12 @@
 
 -define(IS_TOKEN(C),
 	?IS_ALPHA(C) or ?IS_DIGIT(C) or
+	(C =:= $!) or (C =:= $#) or (C =:= $$) or (C =:= $%) or (C =:= $&) or
+	(C =:= $') or (C =:= $*) or (C =:= $+) or (C =:= $-) or (C =:= $.) or
+	(C =:= $^) or (C =:= $_) or (C =:= $`) or (C =:= $|) or (C =:= $~)).
+
+-define(IS_LTOKEN(C),
+	?IS_LALPHA(C) or ?IS_DIGIT(C) or
 	(C =:= $!) or (C =:= $#) or (C =:= $$) or (C =:= $%) or (C =:= $&) or
 	(C =:= $') or (C =:= $*) or (C =:= $+) or (C =:= $-) or (C =:= $.) or
 	(C =:= $^) or (C =:= $_) or (C =:= $`) or (C =:= $|) or (C =:= $~)).

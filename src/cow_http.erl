@@ -44,6 +44,7 @@
 
 -export([ensure_scheme/1]).
 -export([ensure_token/1]).
+-export([ensure_token_lowercase/1]).
 
 %% Types used by all versions of HTTP.
 
@@ -299,19 +300,14 @@ regular_headers([{<<"te">>, Value}|_], request) when Value =/= <<"trailers">> ->
 regular_headers([{<<"te">>, _}|_], Type) when Type =/= request ->
 	{error, invalid_te_header};
 regular_headers([{Name, Value}|Tail], Type) ->
-	Pattern = [
-		<<$A>>, <<$B>>, <<$C>>, <<$D>>, <<$E>>, <<$F>>, <<$G>>, <<$H>>, <<$I>>,
-		<<$J>>, <<$K>>, <<$L>>, <<$M>>, <<$N>>, <<$O>>, <<$P>>, <<$Q>>, <<$R>>,
-		<<$S>>, <<$T>>, <<$U>>, <<$V>>, <<$W>>, <<$X>>, <<$Y>>, <<$Z>>,
-		<<$\r>>, <<$\n>>, <<$\0>>
-	],
-	case binary:match(Name, Pattern) of
-		nomatch ->
+	try validate_token_lowercase(Name) of
+		ok ->
 			case validate_header(Value) of
 				ok -> regular_headers(Tail, Type);
 				error -> {error, invalid_header_value}
-			end;
-		_ -> {error, invalid_header_name}
+			end
+	catch _:_ ->
+		{error, invalid_header_name}
 	end;
 regular_headers([], _) ->
 	ok.
@@ -329,6 +325,37 @@ validate_path(Value) ->
 		nomatch -> ok;
 		_ -> error
 	end.
+
+-ifdef(TEST).
+process_headers_name_test() ->
+	Name = <<"!#$%&'*+-.^_`|~09az">>,
+	{headers, [{Name, <<"v">>}], #{method := <<"GET">>}, 0} = process_headers([
+		{<<":method">>, <<"GET">>},
+		{<<":scheme">>, <<"http">>},
+		{<<":path">>, <<"/">>},
+		{Name, <<"v">>}
+	], request, undefined, fin, #{}),
+	ok.
+
+process_headers_name_error_test_() ->
+	Names = [
+		<<"a b">>,
+		<<"a\tb">>,
+		<<"a:b">>,
+		<<"a(b)">>,
+		<<$a, 16#7f>>,
+		<<$a, 16#80>>,
+		<<"A">>
+	],
+	[{Name, fun() ->
+		{error, invalid_header_name} = process_headers([
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/">>},
+			{Name, <<"v">>}
+		], request, undefined, fin, #{})
+	end} || Name <- Names].
+-endif.
 
 request_expected_size(Headers, IsFin, PseudoHeaders) ->
 	case [CL || {<<"content-length">>, CL} <- Headers] of
@@ -513,6 +540,20 @@ validate_token(Token) when Token =/= <<>> ->
 validate_token1(<<C,R/bits>>) when ?IS_TOKEN(C) -> validate_token1(R);
 validate_token1(<<>>) -> ok.
 
+-spec ensure_token_lowercase(binary()) -> binary().
+
+ensure_token_lowercase(Token) ->
+	ok = validate_token_lowercase(Token),
+	Token.
+
+validate_token_lowercase(Token) when Token =/= <<>> ->
+	validate_token_lowercase1(Token).
+
+validate_token_lowercase1(<<C, R/bits>>) when ?IS_LTOKEN(C) ->
+	validate_token_lowercase1(R);
+validate_token_lowercase1(<<>>) ->
+	ok.
+
 -ifdef(TEST).
 
 ensure_token_test_() ->
@@ -548,5 +589,25 @@ ensure_token_error_test_() ->
 	],
 	[{iolist_to_binary(io_lib:format("~0p", [V])),
 		fun() -> ?assertError(_, ensure_token(V)) end} || V <- Tests].
+
+ensure_token_lowercase_test_() ->
+	Tests = [
+		<<$a>>, <<$0>>, <<"!">>,
+		<<"foo-bar">>,
+		<<"!#$%&'*+-.^_`|~09az">>
+	],
+	[{V, fun() -> V = ensure_token_lowercase(V) end} || V <- Tests].
+
+ensure_token_lowercase_error_test_() ->
+	Tests = [
+		<<>>,
+		<<"A">>, <<"GET">>,
+		<<" ">>, <<":">>, <<$\r>>, <<$\n>>, <<0>>,
+		<<16#7f>>,
+		undefined
+	],
+	[{iolist_to_binary(io_lib:format("~0p", [V])),
+		fun() -> ?assertError(_, ensure_token_lowercase(V)) end}
+			|| V <- Tests].
 
 -endif.

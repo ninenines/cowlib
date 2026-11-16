@@ -30,6 +30,7 @@
 -export_type([version/0]).
 
 -include("cow_inline.hrl").
+-include("cow_parse.hrl").
 
 -ifdef(TEST).
 -include_lib("stdlib/include/assert.hrl").
@@ -181,20 +182,10 @@ parse_header(<< $\r, $\n, Rest/bits >>, Acc) ->
 parse_header(Data, Acc) ->
 	parse_hd_name(Data, Acc, <<>>).
 
-parse_hd_name(<< C, Rest/bits >>, Acc, SoFar) ->
-	case C of
-		$: -> parse_hd_before_value(Rest, Acc, SoFar);
-		$\s -> parse_hd_name_ws(Rest, Acc, SoFar);
-		$\t -> parse_hd_name_ws(Rest, Acc, SoFar);
-		_ -> ?LOWER(parse_hd_name, Rest, Acc, SoFar)
-	end.
-
-parse_hd_name_ws(<< C, Rest/bits >>, Acc, Name) ->
-	case C of
-		$: -> parse_hd_before_value(Rest, Acc, Name);
-		$\s -> parse_hd_name_ws(Rest, Acc, Name);
-		$\t -> parse_hd_name_ws(Rest, Acc, Name)
-	end.
+parse_hd_name(<< $:, Rest/bits >>, Acc, SoFar) when SoFar =/= <<>> ->
+	parse_hd_before_value(Rest, Acc, SoFar);
+parse_hd_name(<< C, Rest/bits >>, Acc, SoFar) when ?IS_TOKEN(C) ->
+	?LOWER(parse_hd_name, Rest, Acc, SoFar).
 
 parse_hd_before_value(<< $\s, Rest/bits >>, Acc, Name) ->
 	parse_hd_before_value(Rest, Acc, Name);
@@ -234,6 +225,8 @@ parse_headers_test_() ->
 			{[], <<"Rest">>}},
 		{<<"Server: Erlang/R17  \r\n\r\n">>,
 			{[{<<"server">>, <<"Erlang/R17">>}], <<>>}},
+		{<<"X-Token!: v\r\n\r\n">>,
+			{[{<<"x-token!">>, <<"v">>}], <<>>}},
 		{<<"Server: Erlang/R17\r\n"
 			"Date: Sun, 23 Feb 2014 09:30:39 GMT\r\n"
 			"Multiline-Header: why hello!\r\n"
@@ -260,7 +253,14 @@ parse_headers_error_test_() ->
 		<<"content-type: text/plain\r\nMalformed\r\n\r\n">>,
 		<<"HTTP/1.1 200 OK\r\n\r\n">>,
 		<<0:80, "\r\n\r\n">>,
-		<<"content-type: text/plain\r\ncontent-length: 12\r\n">>
+		<<"content-type: text/plain\r\ncontent-length: 12\r\n">>,
+		<<": v\r\n\r\n">>,
+		<<" Name: v\r\n\r\n">>,
+		<<"\tName: v\r\n\r\n">>,
+		<<"Name : v\r\n\r\n">>,
+		<<"Name\t: v\r\n\r\n">>,
+		<<"Foo(Bar): v\r\n\r\n">>,
+		<<"a\0b: v\r\n\r\n">>
 	],
 	[{V, fun() -> ?assertError(_, parse_headers(V)) end}
 		|| V <- Tests].

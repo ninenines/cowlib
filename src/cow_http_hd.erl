@@ -2080,8 +2080,9 @@ horse_parse_expires_invalid() ->
 %% Host header.
 %%
 %% We only seek to have legal characters and separate the
-%% host and port values. The number of segments in the host
-%% or the size of each segment is not checked.
+%% host and port values. A port must be in 1..65535 and
+%% requires a non-empty host. The number of segments in the
+%% host or the size of each segment is not checked.
 %%
 %% There is no way to distinguish IPv4 addresses from regular
 %% names until the last segment is reached therefore we do not
@@ -2090,7 +2091,7 @@ horse_parse_expires_invalid() ->
 %% The following valid hosts are currently rejected: IPv6
 %% addresses with a zone identifier; and IPvFuture addresses.
 
--spec parse_host(binary()) -> {binary(), 0..65535 | undefined}.
+-spec parse_host(binary()) -> {binary(), 1..65535 | undefined}.
 parse_host(<< $[, R/bits >>) ->
 	ipv6_address(R, << $[ >>);
 parse_host(Host) ->
@@ -2100,14 +2101,17 @@ ipv6_address(<< $] >>, IP) ->
 	{<< IP/binary, $] >>, undefined};
 ipv6_address(<< $], $:, Port0/bits >>, IP) when byte_size(Port0) =< 5 ->
 	{Port, <<>>} = digits(Port0),
+	true = Port > 0 andalso Port =< 65535,
 	{<< IP/binary, $] >>, Port};
 ipv6_address(<< C, R/bits >>, IP) when ?IS_HEX(C) or (C =:= $:) or (C =:= $.) ->
 	?LOWER(ipv6_address, R, IP).
 
 reg_name(<<>>, Name) ->
 	{Name, undefined};
-reg_name(<< $:, Port0/bits >>, Name) when byte_size(Port0) =< 5 ->
+%% :80 is not the empty authority. A port requires a non-empty host.
+reg_name(<< $:, Port0/bits >>, Name) when byte_size(Port0) =< 5, Name =/= <<>> ->
 	{Port, <<>>} = digits(Port0),
+	true = Port > 0 andalso Port =< 65535,
 	{Name, Port};
 %% Percent-encoded octets are allowed in reg-name. (RFC3986 3.2.2)
 %% A percent-encoded ":" (%3A) is part of the name, not a port separator.
@@ -2154,6 +2158,12 @@ parse_host_test_() ->
 		{<<>>, {<<>>, undefined}},
 		{<<"www.example.org:8080">>, {<<"www.example.org">>, 8080}},
 		{<<"www.example.org">>, {<<"www.example.org">>, undefined}},
+		{<<"example.com:1">>, {<<"example.com">>, 1}},
+		{<<"example.com:65535">>, {<<"example.com">>, 65535}},
+		{<<"example.com:00001">>, {<<"example.com">>, 1}},
+		{<<"[::1]">>, {<<"[::1]">>, undefined}},
+		{<<"[::1]:1">>, {<<"[::1]">>, 1}},
+		{<<"[::1]:65535">>, {<<"[::1]">>, 65535}},
 		{<<"192.0.2.1:8080">>, {<<"192.0.2.1">>, 8080}},
 		{<<"192.0.2.1">>, {<<"192.0.2.1">>, undefined}},
 		{<<"[2001:db8::1]:8080">>, {<<"[2001:db8::1]">>, 8080}},
@@ -2183,7 +2193,15 @@ parse_host_error_test_() ->
 		<<"%">>,
 		<<"%2">>,
 		<<"%zz">>,
-		<<"example%">>
+		<<"example%">>,
+		<<":1">>,
+		<<":80">>,
+		<<":65535">>,
+		<<"example.com:0">>,
+		<<"example.com:00000">>,
+		<<"example.com:65536">>,
+		<<"[::1]:0">>,
+		<<"[::1]:65536">>
 	],
 	[{V, fun() -> ?assertError(_, parse_host(V)) end} || V <- Tests].
 

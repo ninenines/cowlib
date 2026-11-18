@@ -43,6 +43,7 @@
 %% Validation functions.
 
 -export([ensure_field_value/1]).
+-export([ensure_path/1]).
 -export([ensure_scheme/1]).
 -export([ensure_token/1]).
 -export([ensure_token_lowercase/1]).
@@ -157,30 +158,14 @@ process_headers(Headers0, Type, ReqMethod, IsFin, LocalSettings)
 		when Type =:= request; Type =:= push_promise ->
 	IsExtendedConnectEnabled = maps:get(enable_connect_protocol, LocalSettings, false),
 	case request_pseudo_headers(Headers0, #{}) of
-		%% Extended CONNECT method (HTTP/2: RFC8441, HTTP/3: RFC9220).
-		{ok, PseudoHeaders=#{method := <<"CONNECT">>, scheme := _,
-			authority := _, path := _, protocol := _}, Headers}
-			when IsExtendedConnectEnabled ->
-			regular_headers(Headers, Type, ReqMethod, IsFin, PseudoHeaders);
-		{ok, #{method := <<"CONNECT">>, scheme := _,
-			authority := _, path := _}, _}
-			when IsExtendedConnectEnabled ->
-			{error, extended_connect_missing_protocol};
-		{ok, #{protocol := _}, _} ->
-			{error, invalid_protocol_pseudo_header};
-		%% Normal CONNECT (no scheme/path).
-		{ok, PseudoHeaders = #{method := <<"CONNECT">>, authority := _}, Headers}
-				when map_size(PseudoHeaders) =:= 2 ->
-			regular_headers(Headers, Type, ReqMethod, IsFin, PseudoHeaders);
-		{ok, #{method := <<"CONNECT">>, authority := _}, _} ->
-			{error, connect_invalid_pseudo_header};
-		{ok, #{method := <<"CONNECT">>}, _} ->
-			{error, connect_missing_authority};
-		%% Other requests.
-		{ok, PseudoHeaders = #{method := _, scheme := _, path := _}, Headers} ->
-			regular_headers(Headers, Type, ReqMethod, IsFin, PseudoHeaders);
-		{ok, _, _} ->
-			{error, missing_pseudo_header};
+		{ok, PseudoHeaders, Headers} ->
+			case request_path(PseudoHeaders) of
+				ok ->
+					process_request(Headers, Type, ReqMethod, IsFin,
+						PseudoHeaders, IsExtendedConnectEnabled);
+				error ->
+					{error, invalid_pseudo_header}
+			end;
 		Error = {error, _} ->
 			Error
 	end;
@@ -227,10 +212,16 @@ request_pseudo_headers([{<<":authority">>, Authority}|Tail], PseudoHeaders) ->
 	end;
 request_pseudo_headers([{<<":path">>, _}|_], #{path := _}) ->
 	{error, multiple_path_pseudo_headers};
+%% <<>> and <<"*">> are judged once method and scheme are known.
+request_pseudo_headers([{<<":path">>, <<>>}|Tail], PseudoHeaders) ->
+	request_pseudo_headers(Tail, PseudoHeaders#{path => <<>>});
+request_pseudo_headers([{<<":path">>, <<"*">>}|Tail], PseudoHeaders) ->
+	request_pseudo_headers(Tail, PseudoHeaders#{path => <<"*">>});
 request_pseudo_headers([{<<":path">>, Path}|Tail], PseudoHeaders) ->
-	case validate_path(Path) of
-		ok -> request_pseudo_headers(Tail, PseudoHeaders#{path => Path});
-		error -> {error, invalid_pseudo_header}
+	try validate_path(Path) of
+		ok -> request_pseudo_headers(Tail, PseudoHeaders#{path => Path})
+	catch _:_ ->
+		{error, invalid_pseudo_header}
 	end;
 request_pseudo_headers([{<<":protocol">>, _}|_], #{protocol := _}) ->
 	{error, multiple_protocol_pseudo_headers};
@@ -244,6 +235,62 @@ request_pseudo_headers([{<<":", _/bits>>, _}|_], _) ->
 	{error, invalid_pseudo_header};
 request_pseudo_headers(Headers, PseudoHeaders) ->
 	{ok, PseudoHeaders, Headers}.
+
+%% Extended CONNECT method (HTTP/2: RFC8441, HTTP/3: RFC9220).
+process_request(Headers, Type, ReqMethod, IsFin,
+		PseudoHeaders=#{method := <<"CONNECT">>, scheme := _,
+			authority := _, path := _, protocol := _},
+		IsExtendedConnectEnabled) when IsExtendedConnectEnabled ->
+	regular_headers(Headers, Type, ReqMethod, IsFin, PseudoHeaders);
+process_request(_, _, _, _,
+		#{method := <<"CONNECT">>, scheme := _, authority := _, path := _},
+		IsExtendedConnectEnabled) when IsExtendedConnectEnabled ->
+	{error, extended_connect_missing_protocol};
+process_request(_, _, _, _, #{protocol := _}, _) ->
+	{error, invalid_protocol_pseudo_header};
+%% Normal CONNECT (no scheme/path).
+process_request(Headers, Type, ReqMethod, IsFin,
+		PseudoHeaders=#{method := <<"CONNECT">>, authority := _}, _)
+		when map_size(PseudoHeaders) =:= 2 ->
+	regular_headers(Headers, Type, ReqMethod, IsFin, PseudoHeaders);
+process_request(_, _, _, _, #{method := <<"CONNECT">>, authority := _}, _) ->
+	{error, connect_invalid_pseudo_header};
+process_request(_, _, _, _, #{method := <<"CONNECT">>}, _) ->
+	{error, connect_missing_authority};
+%% Other requests.
+process_request(Headers, Type, ReqMethod, IsFin,
+		PseudoHeaders=#{method := _, scheme := _, path := _}, _) ->
+	regular_headers(Headers, Type, ReqMethod, IsFin, PseudoHeaders);
+process_request(_, _, _, _, _, _) ->
+	{error, missing_pseudo_header}.
+
+%% <<>> is allowed only when the scheme is not http or https.
+%% <<"*">> is allowed only for OPTIONS with an http or https scheme.
+request_path(#{path := <<>>, scheme := Scheme}) ->
+	case is_http_scheme(Scheme) of
+		true -> error;
+		false -> ok
+	end;
+request_path(#{path := <<"*">>, method := <<"OPTIONS">>, scheme := Scheme}) ->
+	case is_http_scheme(Scheme) of
+		true -> ok;
+		false -> error
+	end;
+request_path(#{path := <<"*">>, method := Method}) when Method =/= <<"OPTIONS">> ->
+	error;
+request_path(_) ->
+	ok.
+
+is_http_scheme(Scheme) ->
+	scheme_lower_eq(Scheme, <<"http">>) orelse scheme_lower_eq(Scheme, <<"https">>).
+
+scheme_lower_eq(<<A, Rest/bits>>, <<B, Expect/bits>>)
+		when A =:= B; A =:= B - ($a - $A) ->
+	scheme_lower_eq(Rest, Expect);
+scheme_lower_eq(<<>>, <<>>) ->
+	true;
+scheme_lower_eq(_, _) ->
+	false.
 
 response_pseudo_headers([{<<":status">>, _}|_], #{status := _}) ->
 	{error, multiple_status_pseudo_headers};
@@ -314,13 +361,6 @@ regular_headers([{Name, Value}|Tail], Type) ->
 	end;
 regular_headers([], _) ->
 	ok.
-
-%% Reject CR, LF, NUL and # early.
-validate_path(Value) ->
-	case binary:match(Value, [<<$\r>>, <<$\n>>, <<$\0>>, <<$\#>>]) of
-		nomatch -> ok;
-		_ -> error
-	end.
 
 -ifdef(TEST).
 process_headers_name_test() ->
@@ -459,6 +499,90 @@ process_headers_authority_not_binary_test() ->
 		{<<":path">>, <<"/">>}
 	], request, undefined, fin, #{}),
 	ok.
+
+process_headers_path_test_() ->
+	Reqs = [
+		{<<"/">>, req(<<"GET">>, <<"http">>, <<"/">>)},
+		{<<"//x">>, req(<<"GET">>, <<"http">>, <<"//x">>)},
+		{<<"/foo:bar">>, req(<<"GET">>, <<"http">>, <<"/foo:bar">>)},
+		{<<"/foo@bar">>, req(<<"GET">>, <<"http">>, <<"/foo@bar">>)},
+		{<<"/foo*">>, req(<<"GET">>, <<"http">>, <<"/foo*">>)},
+		{<<"/foo(bar)">>, req(<<"GET">>, <<"http">>, <<"/foo(bar)">>)},
+		{<<"/%2f">>, req(<<"GET">>, <<"http">>, <<"/%2f">>)},
+		{<<"/%2F">>, req(<<"GET">>, <<"http">>, <<"/%2F">>)},
+		%% WHATWG leaves these raw. % that is not two hex digits stays.
+		{<<"/foo[]">>, req(<<"GET">>, <<"http">>, <<"/foo[]">>)},
+		{<<"/a|b">>, req(<<"GET">>, <<"http">>, <<"/a|b">>)},
+		{<<"/%">>, req(<<"GET">>, <<"http">>, <<"/%">>)},
+		{<<"/%2">>, req(<<"GET">>, <<"http">>, <<"/%2">>)},
+		{<<"/%GG">>, req(<<"GET">>, <<"http">>, <<"/%GG">>)},
+		{<<"/?a[]=1">>, req(<<"GET">>, <<"http">>, <<"/?a[]=1">>)},
+		{<<"/?q=100%">>, req(<<"GET">>, <<"http">>, <<"/?q=100%">>)},
+		{<<"/?a^b">>, req(<<"GET">>, <<"http">>, <<"/?a^b">>)},
+		{<<"/?a`b">>, req(<<"GET">>, <<"http">>, <<"/?a`b">>)},
+		{<<"/?{x}">>, req(<<"GET">>, <<"http">>, <<"/?{x}">>)},
+		{<<"/?a\\b">>, req(<<"GET">>, <<"http">>, <<"/?a\\b">>)},
+		{<<"/?a|b">>, req(<<"GET">>, <<"http">>, <<"/?a|b">>)},
+		{<<"/?">>, req(<<"GET">>, <<"http">>, <<"/?">>)},
+		{<<"/?a?b">>, req(<<"GET">>, <<"http">>, <<"/?a?b">>)},
+		{<<"/?a/b">>, req(<<"GET">>, <<"http">>, <<"/?a/b">>)},
+		{<<"*">>, req(<<"OPTIONS">>, <<"http">>, <<"*">>)},
+		{<<"*">>, req(<<"OPTIONS">>, <<"https">>, <<"*">>)},
+		{<<"*">>, req(<<"OPTIONS">>, <<"HTTP">>, <<"*">>)},
+		{<<>>, req(<<"GET">>, <<"ftp">>, <<>>)},
+		{<<>>, req(<<"GET">>, <<"FTP">>, <<>>)},
+		%% :path may precede :method and :scheme.
+		{<<"*">>, [
+			{<<":path">>, <<"*">>},
+			{<<":method">>, <<"OPTIONS">>},
+			{<<":scheme">>, <<"http">>}
+		]}
+	],
+	[{iolist_to_binary(io_lib:format("~0p ~0p", [Path, Headers])), fun() ->
+		{headers, [], #{path := Path}, _} = process_headers(Headers,
+			request, undefined, fin, #{})
+	end} || {Path, Headers} <- Reqs].
+
+process_headers_path_error_test_() ->
+	Reqs = [
+		req(<<"GET">>, <<"http">>, <<>>),
+		req(<<"GET">>, <<"https">>, <<>>),
+		req(<<"GET">>, <<"HTTP">>, <<>>),
+		req(<<"GET">>, <<"http">>, <<"*">>),
+		req(<<"GET">>, <<"https">>, <<"*">>),
+		req(<<"options">>, <<"http">>, <<"*">>),
+		req(<<"OPTIONS">>, <<"ftp">>, <<"*">>),
+		req(<<"OPTIONS">>, <<"http">>, <<"*?">>),
+		req(<<"GET">>, <<"ftp">>, <<"foo">>),
+		req(<<"GET">>, <<"http">>, <<"/foo bar">>),
+		req(<<"GET">>, <<"http">>, <<"/foo\tbar">>),
+		req(<<"GET">>, <<"http">>, <<"/a\\b">>),
+		req(<<"GET">>, <<"http">>, <<"/a^b">>),
+		req(<<"GET">>, <<"http">>, <<"/a`b">>),
+		req(<<"GET">>, <<"http">>, <<"/{x}">>),
+		req(<<"GET">>, <<"http">>, <<"/?a b">>),
+		req(<<"GET">>, <<"http">>, <<"/?a<b>">>),
+		req(<<"GET">>, <<"http">>, <<"/?a>b">>),
+		req(<<"GET">>, <<"http">>, <<"/?a\"b">>),
+		req(<<"GET">>, <<"http">>, <<"/a", 127>>),
+		req(<<"GET">>, <<"http">>, <<"/a", 128>>),
+		req(<<"GET">>, <<"http">>, <<"/foo#bar">>),
+		req(<<"GET">>, <<"http">>, <<"/a\r">>),
+		req(<<"GET">>, <<"http">>, <<"/a\n">>),
+		req(<<"GET">>, <<"http">>, <<"/a\0">>),
+		req(<<"GET">>, <<"ftp">>, <<"/a b">>)
+	],
+	[{iolist_to_binary(io_lib:format("~0p", [Headers])), fun() ->
+		{error, invalid_pseudo_header} = process_headers(Headers,
+			request, undefined, fin, #{})
+	end} || Headers <- Reqs].
+
+req(Method, Scheme, Path) ->
+	[
+		{<<":method">>, Method},
+		{<<":scheme">>, Scheme},
+		{<<":path">>, Path}
+	].
 
 process_headers_response_value_test() ->
 	{headers, [{<<"server">>, <<"Erlang">>}], #{status := 200}, 0}
@@ -617,6 +741,53 @@ validate_field_chars(<<C, R/bits>>) when ?IS_VCHAR_OBS(C) ->
 	validate_field_chars(R);
 validate_field_chars(<<>>) ->
 	ok.
+
+%% absolute-path [ "?" query ]. (RFC9110 4.1)
+%% A % that is not two hex digits stays as an octet. WHATWG leaves it raw.
+-spec ensure_path(binary()) -> binary().
+
+ensure_path(Path) ->
+	ok = validate_path(Path),
+	Path.
+
+validate_path(<<$/, Rest/bits>>) ->
+	validate_path(Rest, path).
+
+validate_path(<<$?, Rest/bits>>, path) ->
+	validate_path(Rest, query);
+validate_path(<<C, Rest/bits>>, path) when ?IS_PCHAR(C); C =:= $/ ->
+	validate_path(Rest, path);
+validate_path(<<C, Rest/bits>>, query) when ?IS_QUERY(C) ->
+	validate_path(Rest, query);
+validate_path(<<>>, _) ->
+	ok.
+
+-ifdef(TEST).
+ensure_path_test_() ->
+	Paths = [
+		<<"/">>, <<"//x">>, <<"/a/../b">>, <<"/.">>,
+		<<"/foo:bar">>, <<"/foo@bar">>, <<"/foo*">>, <<"/foo(bar)">>,
+		<<"/%2f">>, <<"/%2F">>,
+		<<"/foo[]">>, <<"/a|b">>, <<"/%">>, <<"/%2">>, <<"/%GG">>,
+		<<"/?a[]=1">>, <<"/?q=100%">>, <<"/?a^b">>, <<"/?a`b">>,
+		<<"/?{x}">>, <<"/?a\\b">>, <<"/?a|b">>,
+		<<"/?">>, <<"/?a?b">>, <<"/?a/b">>
+	],
+	[{Path, fun() -> Path = ensure_path(Path) end} || Path <- Paths].
+
+ensure_path_error_test_() ->
+	Paths = [
+		<<>>, <<"*">>, <<"*?">>, <<"foo">>,
+		<<"/foo bar">>, <<"/foo\tbar">>,
+		<<"/a\\b">>, <<"/a^b">>, <<"/a`b">>, <<"/{x}">>,
+		<<"/?a b">>, <<"/?a<b>">>, <<"/?a>b">>, <<"/?a\"b">>,
+		<<"/a", 127>>, <<"/a", 128>>,
+		<<"/foo#bar">>, <<"/a\r">>, <<"/a\n">>, <<"/a\0">>,
+		undefined
+	],
+	[{iolist_to_binary(io_lib:format("~0p", [Path])),
+		fun() -> ?assertError(_, ensure_path(Path)) end} || Path <- Paths].
+-endif.
 
 -spec ensure_scheme(binary()) -> binary().
 

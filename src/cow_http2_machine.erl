@@ -1008,7 +1008,7 @@ headers_process(Frame=#headers{id=StreamID, fin=IsFin},
 			push_promise_frame(Frame, State, Stream, Headers, PseudoHeaders);
 		{trailers, Headers} ->
 			trailers_frame(Frame, State, Stream, Headers);
-		{error, Reason} when Type =:= request ->
+		{error, Reason} when Type =:= request; Type =:= push_promise ->
 			headers_malformed(Frame, State, format_error(Reason));
 		{error, Reason} ->
 			stream_reset(StreamID, State, protocol_error, format_error(Reason))
@@ -1136,6 +1136,25 @@ malformed_request_lingers_test() ->
 	true = is_lingering_stream(1, S1),
 	{window_changed, 2, S2} = frame({data, 1, nofin, <<"hi">>, 2}, S1),
 	65533 = S2#http2_machine.remote_window,
+	ok.
+
+malformed_push_promise_lingers_test() ->
+	{Block0, _} = cow_hpack:encode([{<<":method">>, <<"GET">>}]),
+	Block = iolist_to_binary(Block0),
+	{ok, _, S00} = init(client, #{
+		preface_timeout => infinity,
+		settings_timeout => infinity
+	}),
+	{ok, S01} = frame({settings, #{}}, S00),
+	{ok, 1, S0} = init_stream(<<"GET">>, S01),
+	{error, {stream_error, 2, protocol_error, _}, S1}
+		= frame({push_promise, 1, head_fin, 2, Block}, S0),
+	2 = S1#http2_machine.remote_streamid,
+	false = is_map_key(2, S1#http2_machine.streams),
+	true = is_lingering_stream(2, S1),
+	%% The response that was already in flight is ignored.
+	{Resp0, _} = cow_hpack:encode([{<<":status">>, <<"200">>}]),
+	{ok, _} = frame({headers, 2, fin, head_fin, iolist_to_binary(Resp0)}, S1),
 	ok.
 
 rejected_request_continuation_lingers_test() ->

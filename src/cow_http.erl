@@ -42,8 +42,8 @@
 
 %% Validation functions.
 
--export([ensure_field_value/1]).
 -export([ensure_absolute_path/1]).
+-export([ensure_field_value/1]).
 -export([ensure_scheme/1]).
 -export([ensure_token/1]).
 -export([ensure_token_lowercase/1]).
@@ -158,9 +158,30 @@ process_headers(Headers0, Type, ReqMethod, IsFin, LocalSettings)
 		when Type =:= request; Type =:= push_promise ->
 	IsExtendedConnectEnabled = maps:get(enable_connect_protocol, LocalSettings, false),
 	case request_pseudo_headers(Headers0, #{}) of
-		{ok, PseudoHeaders, Headers} ->
-			process_request(Headers, Type, ReqMethod, IsFin,
-				PseudoHeaders, IsExtendedConnectEnabled);
+		%% Extended CONNECT method (HTTP/2: RFC8441, HTTP/3: RFC9220).
+		{ok, PseudoHeaders=#{method := <<"CONNECT">>, scheme := _,
+			authority := _, path := _, protocol := _}, Headers}
+			when IsExtendedConnectEnabled ->
+			regular_headers(Headers, Type, ReqMethod, IsFin, PseudoHeaders);
+		{ok, #{method := <<"CONNECT">>, scheme := _,
+			authority := _, path := _}, _}
+			when IsExtendedConnectEnabled ->
+			{error, extended_connect_missing_protocol};
+		{ok, #{protocol := _}, _} ->
+			{error, invalid_protocol_pseudo_header};
+		%% Normal CONNECT (no scheme/path).
+		{ok, PseudoHeaders = #{method := <<"CONNECT">>, authority := _}, Headers}
+				when map_size(PseudoHeaders) =:= 2 ->
+			regular_headers(Headers, Type, ReqMethod, IsFin, PseudoHeaders);
+		{ok, #{method := <<"CONNECT">>, authority := _}, _} ->
+			{error, connect_invalid_pseudo_header};
+		{ok, #{method := <<"CONNECT">>}, _} ->
+			{error, connect_missing_authority};
+		%% Other requests.
+		{ok, PseudoHeaders = #{method := _, scheme := _, path := _}, Headers} ->
+			regular_headers(Headers, Type, ReqMethod, IsFin, PseudoHeaders);
+		{ok, _, _} ->
+			{error, missing_pseudo_header};
 		Error = {error, _} ->
 			Error
 	end;
@@ -235,34 +256,6 @@ request_pseudo_headers(Headers, PseudoHeaders) ->
 		error ->
 			{error, invalid_pseudo_header}
 	end.
-
-%% Extended CONNECT method (HTTP/2: RFC8441, HTTP/3: RFC9220).
-process_request(Headers, Type, ReqMethod, IsFin,
-		PseudoHeaders=#{method := <<"CONNECT">>, scheme := _,
-			authority := _, path := _, protocol := _},
-		IsExtendedConnectEnabled) when IsExtendedConnectEnabled ->
-	regular_headers(Headers, Type, ReqMethod, IsFin, PseudoHeaders);
-process_request(_, _, _, _,
-		#{method := <<"CONNECT">>, scheme := _, authority := _, path := _},
-		IsExtendedConnectEnabled) when IsExtendedConnectEnabled ->
-	{error, extended_connect_missing_protocol};
-process_request(_, _, _, _, #{protocol := _}, _) ->
-	{error, invalid_protocol_pseudo_header};
-%% Normal CONNECT (no scheme/path).
-process_request(Headers, Type, ReqMethod, IsFin,
-		PseudoHeaders=#{method := <<"CONNECT">>, authority := _}, _)
-		when map_size(PseudoHeaders) =:= 2 ->
-	regular_headers(Headers, Type, ReqMethod, IsFin, PseudoHeaders);
-process_request(_, _, _, _, #{method := <<"CONNECT">>, authority := _}, _) ->
-	{error, connect_invalid_pseudo_header};
-process_request(_, _, _, _, #{method := <<"CONNECT">>}, _) ->
-	{error, connect_missing_authority};
-%% Other requests.
-process_request(Headers, Type, ReqMethod, IsFin,
-		PseudoHeaders=#{method := _, scheme := _, path := _}, _) ->
-	regular_headers(Headers, Type, ReqMethod, IsFin, PseudoHeaders);
-process_request(_, _, _, _, _, _) ->
-	{error, missing_pseudo_header}.
 
 %% <<>> is allowed only when the scheme is not http or https.
 %% <<"*">> is allowed only for OPTIONS with an http or https scheme.
@@ -929,31 +922,6 @@ parse_fullpath_test() ->
 
 %% Validation functions.
 
-%% Empty, or field-content. (RFC9110 5.5)
-%% Must not start or end with SP or HTAB.
--spec ensure_field_value(binary()) -> binary().
-
-ensure_field_value(Value) ->
-	ok = validate_field_value(Value),
-	Value.
-
-validate_field_value(Value) ->
-	ok = validate_field_value_ends(Value),
-	validate_field_chars(Value).
-
-validate_field_value_ends(<<>>) ->
-	ok;
-validate_field_value_ends(<<C, _/bits>> = Value) when C =/= $\s, C =/= $\t ->
-	ok = validate_field_value_last(binary:last(Value)).
-
-validate_field_value_last(C) when C =/= $\s, C =/= $\t ->
-	ok.
-
-validate_field_chars(<<C, R/bits>>) when ?IS_VCHAR_OBS(C) ->
-	validate_field_chars(R);
-validate_field_chars(<<>>) ->
-	ok.
-
 %% absolute-path [ "?" query ]. (RFC9110 4.1)
 %% A % that is not two hex digits stays as an octet. WHATWG leaves it raw.
 -spec ensure_absolute_path(binary()) -> binary().
@@ -1000,6 +968,31 @@ ensure_absolute_path_error_test_() ->
 	[{iolist_to_binary(io_lib:format("~0p", [Path])),
 		fun() -> ?assertError(_, ensure_absolute_path(Path)) end} || Path <- Paths].
 -endif.
+
+%% Empty, or field-content. (RFC9110 5.5)
+%% Must not start or end with SP or HTAB.
+-spec ensure_field_value(binary()) -> binary().
+
+ensure_field_value(Value) ->
+	ok = validate_field_value(Value),
+	Value.
+
+validate_field_value(Value) ->
+	ok = validate_field_value_ends(Value),
+	validate_field_chars(Value).
+
+validate_field_value_ends(<<>>) ->
+	ok;
+validate_field_value_ends(<<C, _/bits>> = Value) when C =/= $\s, C =/= $\t ->
+	ok = validate_field_value_last(binary:last(Value)).
+
+validate_field_value_last(C) when C =/= $\s, C =/= $\t ->
+	ok.
+
+validate_field_chars(<<C, R/bits>>) when ?IS_VCHAR_OBS(C) ->
+	validate_field_chars(R);
+validate_field_chars(<<>>) ->
+	ok.
 
 -spec ensure_scheme(binary()) -> binary().
 

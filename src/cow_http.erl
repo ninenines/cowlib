@@ -249,30 +249,28 @@ request_pseudo_headers([{<<":protocol">>, Protocol}|Tail], PseudoHeaders) ->
 	end;
 request_pseudo_headers([{<<":", _/bits>>, _}|_], _) ->
 	{error, invalid_pseudo_header};
-request_pseudo_headers(Headers, PseudoHeaders) ->
-	case request_path(PseudoHeaders) of
-		ok ->
-			{ok, PseudoHeaders, Headers};
-		error ->
-			{error, invalid_pseudo_header}
-	end.
-
 %% <<>> is allowed only when the scheme is not http or https.
 %% <<"*">> is allowed only for OPTIONS with an http or https scheme.
-request_path(#{path := <<>>, scheme := Scheme}) ->
+request_pseudo_headers(Headers, PseudoHeaders=#{path := <<>>, scheme := Scheme}) ->
 	case is_http_scheme(Scheme) of
-		true -> error;
-		false -> ok
+		true ->
+			{error, invalid_pseudo_header};
+		false ->
+			{ok, PseudoHeaders, Headers}
 	end;
-request_path(#{path := <<"*">>, method := <<"OPTIONS">>, scheme := Scheme}) ->
+request_pseudo_headers(Headers, PseudoHeaders=#{path := <<"*">>,
+		method := <<"OPTIONS">>, scheme := Scheme}) ->
 	case is_http_scheme(Scheme) of
-		true -> ok;
-		false -> error
+		true ->
+			{ok, PseudoHeaders, Headers};
+		false ->
+			{error, invalid_pseudo_header}
 	end;
-request_path(#{path := <<"*">>, method := Method}) when Method =/= <<"OPTIONS">> ->
-	error;
-request_path(_) ->
-	ok.
+request_pseudo_headers(_, #{path := <<"*">>, method := Method})
+		when Method =/= <<"OPTIONS">> ->
+	{error, invalid_pseudo_header};
+request_pseudo_headers(Headers, PseudoHeaders) ->
+	{ok, PseudoHeaders, Headers}.
 
 is_http_scheme(<<H, T1, T2, P>>) ->
 	(H =:= $h orelse H =:= $H) andalso

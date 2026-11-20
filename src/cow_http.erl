@@ -42,6 +42,7 @@
 
 %% Validation functions.
 
+-export([ensure_absolute_path/1]).
 -export([ensure_field_value/1]).
 -export([ensure_scheme/1]).
 -export([ensure_token/1]).
@@ -227,10 +228,16 @@ request_pseudo_headers([{<<":authority">>, Authority}|Tail], PseudoHeaders) ->
 	end;
 request_pseudo_headers([{<<":path">>, _}|_], #{path := _}) ->
 	{error, multiple_path_pseudo_headers};
+%% <<>> and <<"*">> are judged once method and scheme are known.
+request_pseudo_headers([{<<":path">>, <<>>}|Tail], PseudoHeaders) ->
+	request_pseudo_headers(Tail, PseudoHeaders#{path => <<>>});
+request_pseudo_headers([{<<":path">>, <<"*">>}|Tail], PseudoHeaders) ->
+	request_pseudo_headers(Tail, PseudoHeaders#{path => <<"*">>});
 request_pseudo_headers([{<<":path">>, Path}|Tail], PseudoHeaders) ->
-	case validate_path(Path) of
-		ok -> request_pseudo_headers(Tail, PseudoHeaders#{path => Path});
-		error -> {error, invalid_pseudo_header}
+	try validate_absolute_path(Path) of
+		ok -> request_pseudo_headers(Tail, PseudoHeaders#{path => Path})
+	catch _:_ ->
+		{error, invalid_pseudo_header}
 	end;
 request_pseudo_headers([{<<":protocol">>, _}|_], #{protocol := _}) ->
 	{error, multiple_protocol_pseudo_headers};
@@ -242,8 +249,42 @@ request_pseudo_headers([{<<":protocol">>, Protocol}|Tail], PseudoHeaders) ->
 	end;
 request_pseudo_headers([{<<":", _/bits>>, _}|_], _) ->
 	{error, invalid_pseudo_header};
+%% <<>> is allowed only when the scheme is not http or https.
+%% <<"*">> is allowed only for OPTIONS with an http or https scheme.
+request_pseudo_headers(Headers, PseudoHeaders=#{path := <<>>, scheme := Scheme}) ->
+	case is_http_scheme(Scheme) of
+		true ->
+			{error, invalid_pseudo_header};
+		false ->
+			{ok, PseudoHeaders, Headers}
+	end;
+request_pseudo_headers(Headers, PseudoHeaders=#{path := <<"*">>,
+		method := <<"OPTIONS">>, scheme := Scheme}) ->
+	case is_http_scheme(Scheme) of
+		true ->
+			{ok, PseudoHeaders, Headers};
+		false ->
+			{error, invalid_pseudo_header}
+	end;
+request_pseudo_headers(_, #{path := <<"*">>, method := Method})
+		when Method =/= <<"OPTIONS">> ->
+	{error, invalid_pseudo_header};
 request_pseudo_headers(Headers, PseudoHeaders) ->
 	{ok, PseudoHeaders, Headers}.
+
+is_http_scheme(<<H, T1, T2, P>>) ->
+	(H =:= $h orelse H =:= $H) andalso
+	(T1 =:= $t orelse T1 =:= $T) andalso
+	(T2 =:= $t orelse T2 =:= $T) andalso
+	(P =:= $p orelse P =:= $P);
+is_http_scheme(<<H, T1, T2, P, S>>) ->
+	(H =:= $h orelse H =:= $H) andalso
+	(T1 =:= $t orelse T1 =:= $T) andalso
+	(T2 =:= $t orelse T2 =:= $T) andalso
+	(P =:= $p orelse P =:= $P) andalso
+	(S =:= $s orelse S =:= $S);
+is_http_scheme(_) ->
+	false.
 
 response_pseudo_headers([{<<":status">>, _}|_], #{status := _}) ->
 	{error, multiple_status_pseudo_headers};
@@ -314,13 +355,6 @@ regular_headers([{Name, Value}|Tail], Type) ->
 	end;
 regular_headers([], _) ->
 	ok.
-
-%% Reject CR, LF, NUL and # early.
-validate_path(Value) ->
-	case binary:match(Value, [<<$\r>>, <<$\n>>, <<$\0>>, <<$\#>>]) of
-		nomatch -> ok;
-		_ -> error
-	end.
 
 -ifdef(TEST).
 process_headers_name_test() ->
@@ -460,6 +494,299 @@ process_headers_authority_not_binary_test() ->
 	], request, undefined, fin, #{}),
 	ok.
 
+process_headers_path_test_() ->
+	Reqs = [
+		{<<"/">>, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/">>}
+		]},
+		{<<"//x">>, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"//x">>}
+		]},
+		{<<"/foo:bar">>, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/foo:bar">>}
+		]},
+		{<<"/foo@bar">>, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/foo@bar">>}
+		]},
+		{<<"/foo*">>, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/foo*">>}
+		]},
+		{<<"/foo(bar)">>, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/foo(bar)">>}
+		]},
+		{<<"/%2f">>, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/%2f">>}
+		]},
+		{<<"/%2F">>, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/%2F">>}
+		]},
+		%% WHATWG leaves these raw. % that is not two hex digits stays.
+		{<<"/foo[]">>, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/foo[]">>}
+		]},
+		{<<"/a|b">>, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/a|b">>}
+		]},
+		{<<"/%">>, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/%">>}
+		]},
+		{<<"/%2">>, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/%2">>}
+		]},
+		{<<"/%GG">>, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/%GG">>}
+		]},
+		{<<"/?a[]=1">>, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/?a[]=1">>}
+		]},
+		{<<"/?q=100%">>, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/?q=100%">>}
+		]},
+		{<<"/?a^b">>, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/?a^b">>}
+		]},
+		{<<"/?a`b">>, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/?a`b">>}
+		]},
+		{<<"/?{x}">>, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/?{x}">>}
+		]},
+		{<<"/?a\\b">>, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/?a\\b">>}
+		]},
+		{<<"/?a|b">>, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/?a|b">>}
+		]},
+		{<<"/?">>, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/?">>}
+		]},
+		{<<"/?a?b">>, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/?a?b">>}
+		]},
+		{<<"/?a/b">>, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/?a/b">>}
+		]},
+		{<<"*">>, [
+			{<<":method">>, <<"OPTIONS">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"*">>}
+		]},
+		{<<"*">>, [
+			{<<":method">>, <<"OPTIONS">>},
+			{<<":scheme">>, <<"https">>},
+			{<<":path">>, <<"*">>}
+		]},
+		{<<"*">>, [
+			{<<":method">>, <<"OPTIONS">>},
+			{<<":scheme">>, <<"HTTP">>},
+			{<<":path">>, <<"*">>}
+		]},
+		{<<>>, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"ftp">>},
+			{<<":path">>, <<>>}
+		]},
+		{<<>>, [
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"FTP">>},
+			{<<":path">>, <<>>}
+		]},
+		%% :path may precede :method and :scheme.
+		{<<"*">>, [
+			{<<":path">>, <<"*">>},
+			{<<":method">>, <<"OPTIONS">>},
+			{<<":scheme">>, <<"http">>}
+		]}
+	],
+	[{iolist_to_binary(io_lib:format("~0p ~0p", [Path, Headers])), fun() ->
+		{headers, [], #{path := Path}, _} = process_headers(Headers,
+			request, undefined, fin, #{})
+	end} || {Path, Headers} <- Reqs].
+
+process_headers_path_error_test_() ->
+	Reqs = [
+		[
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<>>}
+		],
+		[
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"https">>},
+			{<<":path">>, <<>>}
+		],
+		[
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"HTTP">>},
+			{<<":path">>, <<>>}
+		],
+		[
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"*">>}
+		],
+		[
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"https">>},
+			{<<":path">>, <<"*">>}
+		],
+		[
+			{<<":method">>, <<"options">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"*">>}
+		],
+		[
+			{<<":method">>, <<"OPTIONS">>},
+			{<<":scheme">>, <<"ftp">>},
+			{<<":path">>, <<"*">>}
+		],
+		[
+			{<<":method">>, <<"OPTIONS">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"*?">>}
+		],
+		[
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"ftp">>},
+			{<<":path">>, <<"foo">>}
+		],
+		[
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/foo bar">>}
+		],
+		[
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/foo\tbar">>}
+		],
+		[
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/a\\b">>}
+		],
+		[
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/a^b">>}
+		],
+		[
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/a`b">>}
+		],
+		[
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/{x}">>}
+		],
+		[
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/?a b">>}
+		],
+		[
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/?a<b>">>}
+		],
+		[
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/?a>b">>}
+		],
+		[
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/?a\"b">>}
+		],
+		[
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/a", 127>>}
+		],
+		[
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/a", 128>>}
+		],
+		[
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/foo#bar">>}
+		],
+		[
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/a\r">>}
+		],
+		[
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/a\n">>}
+		],
+		[
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"http">>},
+			{<<":path">>, <<"/a\0">>}
+		],
+		[
+			{<<":method">>, <<"GET">>},
+			{<<":scheme">>, <<"ftp">>},
+			{<<":path">>, <<"/a b">>}
+		]
+	],
+	[{iolist_to_binary(io_lib:format("~0p", [Headers])), fun() ->
+		{error, invalid_pseudo_header} = process_headers(Headers,
+			request, undefined, fin, #{})
+	end} || Headers <- Reqs].
+
 process_headers_response_value_test() ->
 	{headers, [{<<"server">>, <<"Erlang">>}], #{status := 200}, 0}
 		= process_headers([
@@ -592,6 +919,53 @@ parse_fullpath_test() ->
 -endif.
 
 %% Validation functions.
+
+%% absolute-path [ "?" query ]. (RFC9110 4.1)
+%% A % that is not two hex digits stays as an octet. WHATWG leaves it raw.
+-spec ensure_absolute_path(binary()) -> binary().
+
+ensure_absolute_path(Path) ->
+	ok = validate_absolute_path(Path),
+	Path.
+
+validate_absolute_path(<<$/, Rest/bits>>) ->
+	validate_absolute_path(Rest, path).
+
+validate_absolute_path(<<$?, Rest/bits>>, path) ->
+	validate_absolute_path(Rest, query);
+validate_absolute_path(<<C, Rest/bits>>, path) when ?IS_PCHAR(C); C =:= $/ ->
+	validate_absolute_path(Rest, path);
+validate_absolute_path(<<C, Rest/bits>>, query) when ?IS_QUERY(C) ->
+	validate_absolute_path(Rest, query);
+validate_absolute_path(<<>>, _) ->
+	ok.
+
+-ifdef(TEST).
+ensure_absolute_path_test_() ->
+	Paths = [
+		<<"/">>, <<"//x">>, <<"/a/../b">>, <<"/.">>,
+		<<"/foo:bar">>, <<"/foo@bar">>, <<"/foo*">>, <<"/foo(bar)">>,
+		<<"/%2f">>, <<"/%2F">>,
+		<<"/foo[]">>, <<"/a|b">>, <<"/%">>, <<"/%2">>, <<"/%GG">>,
+		<<"/?a[]=1">>, <<"/?q=100%">>, <<"/?a^b">>, <<"/?a`b">>,
+		<<"/?{x}">>, <<"/?a\\b">>, <<"/?a|b">>,
+		<<"/?">>, <<"/?a?b">>, <<"/?a/b">>
+	],
+	[{Path, fun() -> Path = ensure_absolute_path(Path) end} || Path <- Paths].
+
+ensure_absolute_path_error_test_() ->
+	Paths = [
+		<<>>, <<"*">>, <<"*?">>, <<"foo">>,
+		<<"/foo bar">>, <<"/foo\tbar">>,
+		<<"/a\\b">>, <<"/a^b">>, <<"/a`b">>, <<"/{x}">>,
+		<<"/?a b">>, <<"/?a<b>">>, <<"/?a>b">>, <<"/?a\"b">>,
+		<<"/a", 127>>, <<"/a", 128>>,
+		<<"/foo#bar">>, <<"/a\r">>, <<"/a\n">>, <<"/a\0">>,
+		undefined
+	],
+	[{iolist_to_binary(io_lib:format("~0p", [Path])),
+		fun() -> ?assertError(_, ensure_absolute_path(Path)) end} || Path <- Paths].
+-endif.
 
 %% Empty, or field-content. (RFC9110 5.5)
 %% Must not start or end with SP or HTAB.

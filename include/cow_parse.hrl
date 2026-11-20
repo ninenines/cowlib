@@ -89,6 +89,19 @@
 	?IS_URI_UNRESERVED(C) or ?IS_URI_GEN_DELIMS(C) or
 	?IS_URI_SUB_DELIMS(C) or (C =:= $%)).
 
+%% absolute-path and query. (RFC3986 3.3, 3.4)
+%% The marked groups are octets WHATWG leaves raw.
+-define(IS_PCHAR(C),
+	?IS_URI_UNRESERVED(C) or ?IS_URI_SUB_DELIMS(C) or
+	(C =:= $:) or (C =:= $@) or
+	%% WHATWG leaves these raw.
+	(C =:= $[) or (C =:= $]) or (C =:= $|) or (C =:= $%)).
+-define(IS_QUERY(C),
+	?IS_PCHAR(C) or (C =:= $/) or (C =:= $?) or
+	%% WHATWG leaves these raw in the query.
+	(C =:= $\\) or (C =:= $^) or (C =:= $`) or
+	(C =:= ${) or (C =:= $})).
+
 -define(IS_VCHAR(C), C =:= $\t; C > 31, C < 127).
 -define(IS_VCHAR_OBS(C), C =:= $\t; C > 31, C =/= 127).
 -define(IS_WS(C), (C =:= $\s) or (C =:= $\t)).

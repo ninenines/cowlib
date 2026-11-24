@@ -16,6 +16,7 @@
 
 -export([parse_request_line/1]).
 -export([parse_status_line/1]).
+-export([ensure_status/1]).
 -export([status_to_integer/1]).
 -export([parse_headers/1]).
 
@@ -100,8 +101,20 @@ parse_status_line(<< "HTTP/1.0 ", Status/bits >>) ->
 parse_status_line(<<H, T, U, " ", Rest/bits>>, Version) ->
 	Status = status_to_integer(H, T, U),
 	{Pos, _} = binary:match(Rest, <<"\r">>),
-	<< StatusStr:Pos/binary, "\r\n", Rest2/bits >> = Rest,
-	{Version, Status, StatusStr, Rest2}.
+	<< Reason:Pos/binary, "\r\n", Rest2/bits >> = Rest,
+	ok = validate_reason_phrase(Reason),
+	{Version, Status, Reason, Rest2}.
+
+-spec ensure_status(binary()) -> binary().
+ensure_status(<<H, T, U, $\s, Reason/bits>> = Status)
+		when $0 =< H, H =< $9, $0 =< T, T =< $9, $0 =< U, U =< $9 ->
+	ok = validate_reason_phrase(Reason),
+	Status.
+
+validate_reason_phrase(<<C, R/bits>>) when ?IS_VCHAR_OBS(C) ->
+	validate_reason_phrase(R);
+validate_reason_phrase(<<>>) ->
+	ok.
 
 -spec status_to_integer(cow_http:status() | binary()) -> cow_http:status().
 status_to_integer(Status) when is_integer(Status) ->
@@ -128,7 +141,11 @@ parse_status_line_test_() ->
 		{<<"HTTP/1.1 500 Something very funny here\r\nRest">>,
 			{'HTTP/1.1', 500, <<"Something very funny here">>, <<"Rest">>}},
 		{<<"HTTP/1.1 200 \r\nRest">>,
-			{'HTTP/1.1', 200, <<>>, <<"Rest">>}}
+			{'HTTP/1.1', 200, <<>>, <<"Rest">>}},
+		{<<"HTTP/1.1 200 \t\r\nRest">>,
+			{'HTTP/1.1', 200, <<"\t">>, <<"Rest">>}},
+		{<<"HTTP/1.1 200 ", 128, "\r\nRest">>,
+			{'HTTP/1.1', 200, <<128>>, <<"Rest">>}}
 	],
 	[{V, fun() -> R = parse_status_line(V) end}
 		|| {V, R} <- Tests].
@@ -145,10 +162,35 @@ parse_status_line_error_test_() ->
 		<<"HTTP/1.1 42 Answer\r\n">>,
 		<<"HTTP/1.1 999999999 More than OK\r\n">>,
 		<<"content-type: text/plain\r\n">>,
-		<<0:80, "\r\n">>
+		<<0:80, "\r\n">>,
+		<<"HTTP/1.1 200 OK\nX\r\n">>,
+		<<"HTTP/1.1 200 ", 0, "\r\n">>,
+		<<"HTTP/1.1 200 ", 11, "\r\n">>,
+		<<"HTTP/1.1 200 ", 127, "\r\n">>
 	],
 	[{V, fun() -> ?assertError(_, parse_status_line(V)) end}
 		|| V <- Tests].
+
+ensure_status_test_() ->
+	Tests = [
+		<<"200 ">>,
+		<<"200 OK">>,
+		<<"200 \t">>,
+		<<"200 ", 128>>
+	],
+	[{V, fun() -> V = ensure_status(V) end} || V <- Tests].
+
+ensure_status_error_test_() ->
+	Tests = [
+		<<"200">>,
+		<<"20 OK">>,
+		<<"2000 OK">>,
+		<<"200 OK\nX">>,
+		<<"200 ", 0>>,
+		<<"200 ", 11>>,
+		<<"200 ", 127>>
+	],
+	[{V, fun() -> ?assertError(_, ensure_status(V)) end} || V <- Tests].
 
 horse_parse_status_line_200() ->
 	horse:repeat(200000,

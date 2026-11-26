@@ -231,12 +231,16 @@ parse_hd_value(<< $\r, Rest/bits >>, Headers, Name, SoFar) ->
 		<< $\n, C, Rest2/bits >> when C =:= $\s; C =:= $\t ->
 			parse_hd_value(Rest2, Headers, Name, SoFar);
 		<< $\n, Rest2/bits >> ->
-			parse_hd_name(Rest2, [{Name, SoFar}|Headers], <<>>)
+			parse_hd_name(Rest2, [{Name, SoFar}|Headers], <<>>);
+		_ ->
+			error(invalid_header_value)
 	end;
-parse_hd_value(<< $\0, _/bits >>, _, _, _) ->
-	error(invalid_header_value);
-parse_hd_value(<< C, Rest/bits >>, H, N, SoFar) ->
-	parse_hd_value(Rest, H, N, << SoFar/binary, C >>).
+%% VCHAR, SP, HTAB, or obs-text. 0x80-0xFF stays because
+%% browsers send raw UTF-8 in filename and name.
+parse_hd_value(<< C, Rest/bits >>, H, N, SoFar) when ?IS_VCHAR_OBS(C) ->
+	parse_hd_value(Rest, H, N, << SoFar/binary, C >>);
+parse_hd_value(<< _, _/bits >>, _, _, _) ->
+	error(invalid_header_value).
 
 %% @doc Parse the body of the current multipart part.
 %%
@@ -430,6 +434,54 @@ parse_hd_name_error_test_() ->
 		end
 	end} || V <- Tests].
 
+parse_hd_value_test_() ->
+	Boundary = <<"deadbeef">>,
+	Tests = [
+		{<<"n:\r\n\r\n">>, [{<<"n">>, <<>>}]},
+		{<<"n: \t \r\n\r\n">>, [{<<"n">>, <<>>}]},
+		{<<"n:   v\r\n\r\n">>, [{<<"n">>, <<"v">>}]},
+		{<<"n:\tv\r\n\r\n">>, [{<<"n">>, <<"v">>}]},
+		{<<"n: \t v\r\n\r\n">>, [{<<"n">>, <<"v">>}]},
+		{<<"n:\r\n v\r\n\r\n">>, [{<<"n">>, <<"v">>}]},
+		{<<"n:\r\n\tv\r\n\r\n">>, [{<<"n">>, <<"v">>}]},
+		{<<"n: v \r\n\r\n">>, [{<<"n">>, <<"v ">>}]},
+		{<<"n: v\t\r\n\r\n">>, [{<<"n">>, <<"v\t">>}]},
+		{<<"n: v \t \r\n\r\n">>, [{<<"n">>, <<"v \t ">>}]},
+		{<<"n: a \tb\r\n\r\n">>, [{<<"n">>, <<"a \tb">>}]},
+		{<<"n: !\r\n\r\n">>, [{<<"n">>, <<"!">>}]},
+		{<<"n: ~\r\n\r\n">>, [{<<"n">>, <<"~">>}]},
+		{<<$n, ": ", 128, "\r\n\r\n">>, [{<<"n">>, <<128>>}]},
+		{<<$n, ": ", 255, "\r\n\r\n">>, [{<<"n">>, <<255>>}]},
+		{<<"n: ", 195, 169, "\r\n\r\n">>, [{<<"n">>, <<195, 169>>}]},
+		{<<"n: %22%0A%0D\\\"\r\n\r\n">>, [{<<"n">>, <<"%22%0A%0D\\\"">>}]},
+		{<<"n: v \r\nx: y\r\n\r\n">>,
+			[{<<"x">>, <<"y">>}, {<<"n">>, <<"v ">>}]}
+	],
+	[{V, fun() ->
+		{ok, Expected, <<"--deadbeef--">>} = parse_headers(
+			<<"--deadbeef\r\n", V/binary, "--deadbeef--">>, Boundary)
+	end} || {V, Expected} <- Tests].
+
+parse_hd_value_error_test_() ->
+	Boundary = <<"deadbeef">>,
+	Tests = [
+		<<$n, ": a", 1, "b\r\n\r\n">>,
+		<<$n, ": a", 31, "b\r\n\r\n">>,
+		<<$n, ": a", 127, "b\r\n\r\n">>,
+		<<"n: a\nb\r\n\r\n">>,
+		<<"n: a\rb\r\n\r\n">>,
+		<<"n: a\r\r\n\r\n">>,
+		<<$n, ": ", 10, "\r\n\r\n">>,
+		<<$n, ": ", 127, "\r\n\r\n">>
+	],
+	[{V, fun() ->
+		ok = try parse_headers(<<"--deadbeef\r\n", V/binary>>, Boundary) of
+			_ -> error(unexpected_success)
+		catch
+			error:invalid_header_value -> ok
+		end
+	end} || V <- Tests].
+
 parse_headers_reject_nul_test_() ->
 	Boundary = <<"deadbeef">>,
 	Tests = [
@@ -497,8 +549,9 @@ part(Boundary, Headers) ->
 
 headers_to_iolist([], Acc) ->
 	lists:reverse([<<"\r\n">>|Acc]);
-headers_to_iolist([{N0, V}|Tail], Acc) ->
+headers_to_iolist([{N0, V0}|Tail], Acc) ->
 	N = ensure_hd_name(N0),
+	V = ensure_hd_value(V0),
 	%% We don't want to create a sublist so we list the
 	%% values in reverse order so that it gets reversed properly.
 	headers_to_iolist(Tail, [<<"\r\n">>, V, <<": ">>, N|Acc]).
@@ -515,6 +568,17 @@ validate_hd_name(Name) when Name =/= <<>> ->
 validate_hd_name1(<< C, R/bits >>) when ?IS_FTEXT(C) ->
 	validate_hd_name1(R);
 validate_hd_name1(<<>>) ->
+	ok.
+
+-spec ensure_hd_value(iodata()) -> binary().
+ensure_hd_value(Value0) ->
+	Value = iolist_to_binary(Value0),
+	ok = validate_hd_value(Value),
+	Value.
+
+validate_hd_value(<< C, R/bits >>) when ?IS_VCHAR_OBS(C) ->
+	validate_hd_value(R);
+validate_hd_value(<<>>) ->
 	ok.
 
 %% @doc Return the closing delimiter of the multipart message.
@@ -595,6 +659,77 @@ part_hd_name_error_test_() ->
 	[{iolist_to_binary(io_lib:format("~0p", [V])),
 		fun() ->
 			ok = try part(<<"b">>, [{V, <<"v">>}]) of
+				_ -> error(unexpected_success)
+			catch
+				error:function_clause -> ok;
+				error:badarg -> ok
+			end
+		end} || V <- Tests].
+
+part_hd_value_test() ->
+	[<<"\r\n--">>, <<"b">>, <<"\r\n">>, [
+		<<"n">>, <<": ">>, <<"a b">>, <<"\r\n">>,
+		<<"n2">>, <<": ">>, <<>>, <<"\r\n">>,
+		<<"\r\n">>
+	]] = part(<<"b">>, [
+		{<<"n">>, ["a", $\s, "b"]},
+		{<<"n2">>, <<>>}
+	]),
+	[<<"\r\n--">>, <<"b">>, <<"\r\n">>, [
+		<<"n">>, <<": ">>, <<" v ">>, <<"\r\n">>,
+		<<"\r\n">>
+	]] = part(<<"b">>, [{<<"n">>, <<" v ">>}]),
+	ok.
+
+ensure_hd_value_test_() ->
+	Tests = [
+		{<<>>, <<>>},
+		{<<"v">>, <<"v">>},
+		{<<" ">>, <<" ">>},
+		{<<"\t">>, <<"\t">>},
+		{<<" v ">>, <<" v ">>},
+		{<<"\tv\t">>, <<"\tv\t">>},
+		{<<"a b">>, <<"a b">>},
+		{<<"a\tb">>, <<"a\tb">>},
+		{<<"!">>, <<"!">>},
+		{<<"~">>, <<"~">>},
+		{<<128>>, <<128>>},
+		{<<255>>, <<255>>},
+		{<<195, 169>>, <<195, 169>>},
+		{<<"%22%0A%0D\\\"">>, <<"%22%0A%0D\\\"">>},
+		{["a", $\s, "b"], <<"a b">>},
+		{[$a, $\s, $b], <<"a b">>}
+	],
+	[{iolist_to_binary(io_lib:format("~0p", [V])),
+		fun() -> Expected = ensure_hd_value(V) end}
+			|| {V, Expected} <- Tests].
+
+ensure_hd_value_error_test_() ->
+	Tests = [
+		<<0>>, <<1>>, <<31>>, <<10>>, <<13>>, <<127>>,
+		<<"a\nb">>, <<"a\rb">>, <<"a\r\n\r\nb">>,
+		undefined
+	],
+	[{iolist_to_binary(io_lib:format("~0p", [V])),
+		fun() ->
+			ok = try ensure_hd_value(V) of
+				_ -> error(unexpected_success)
+			catch
+				error:function_clause -> ok;
+				error:badarg -> ok
+			end
+		end} || V <- Tests].
+
+part_hd_value_error_test_() ->
+	Tests = [
+		<<"a\r\n\r\nb">>,
+		<<"\n">>,
+		<<1>>,
+		undefined
+	],
+	[{iolist_to_binary(io_lib:format("~0p", [V])),
+		fun() ->
+			ok = try part(<<"b">>, [{<<"n">>, V}]) of
 				_ -> error(unexpected_success)
 			catch
 				error:function_clause -> ok;

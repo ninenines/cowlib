@@ -228,8 +228,17 @@ parse_hd_value(<< $\r, Rest/bits >>, Headers, Name, SoFar) ->
 	case Rest of
 		<< "\n\r\n", Rest2/bits >> ->
 			{ok, [{Name, SoFar}|Headers], Rest2};
-		<< $\n, C, Rest2/bits >> when C =:= $\s; C =:= $\t ->
-			parse_hd_value(Rest2, Headers, Name, SoFar);
+		%% Unfolding removes the CRLF and keeps the WSP.
+		%% Do not collapse that WSP the way cow_http1 does.
+		%% Before any value octet the WSP is still leading.
+		<< $\n, C, Rest2/bits >>
+				when C =:= $\s, SoFar =:= <<>>;
+					C =:= $\t, SoFar =:= <<>> ->
+			parse_hd_before_value(Rest2, Headers, Name);
+		<< $\n, C, Rest2/bits >>
+				when C =:= $\s, SoFar =/= <<>>;
+					C =:= $\t, SoFar =/= <<>> ->
+			parse_hd_value(Rest2, Headers, Name, << SoFar/binary, C >>);
 		<< $\n, Rest2/bits >> ->
 			parse_hd_name(Rest2, [{Name, SoFar}|Headers], <<>>);
 		_ ->
@@ -455,12 +464,50 @@ parse_hd_value_test_() ->
 		{<<"n: ", 195, 169, "\r\n\r\n">>, [{<<"n">>, <<195, 169>>}]},
 		{<<"n: %22%0A%0D\\\"\r\n\r\n">>, [{<<"n">>, <<"%22%0A%0D\\\"">>}]},
 		{<<"n: v \r\nx: y\r\n\r\n">>,
-			[{<<"x">>, <<"y">>}, {<<"n">>, <<"v ">>}]}
+			[{<<"x">>, <<"y">>}, {<<"n">>, <<"v ">>}]},
+		{<<"n: ab\r\n cd\r\n\r\n">>, [{<<"n">>, <<"ab cd">>}]},
+		{<<"n: ab\r\n\tcd\r\n\r\n">>, [{<<"n">>, <<"ab\tcd">>}]},
+		{<<"n: ab\r\n  cd\r\n\r\n">>, [{<<"n">>, <<"ab  cd">>}]},
+		{<<"n: ab\r\n \tcd\r\n\r\n">>, [{<<"n">>, <<"ab \tcd">>}]},
+		{<<"n: ab \r\n cd\r\n\r\n">>, [{<<"n">>, <<"ab  cd">>}]},
+		{<<"n: ab\r\n cd\r\n ef\r\n\r\n">>, [{<<"n">>, <<"ab cd ef">>}]},
+		{<<"n: v\r\n \r\n\r\n">>, [{<<"n">>, <<"v ">>}]},
+		{<<"n: v\r\n\t\r\n\r\n">>, [{<<"n">>, <<"v\t">>}]},
+		{<<"n:\r\n  v\r\n\r\n">>, [{<<"n">>, <<"v">>}]},
+		{<<"n:\r\n \tv\r\n\r\n">>, [{<<"n">>, <<"v">>}]},
+		{<<"n:\r\n \r\n\r\n">>, [{<<"n">>, <<>>}]},
+		{<<"n:\r\n\t\r\n\r\n">>, [{<<"n">>, <<>>}]},
+		{<<"n: filename=\"evil\r\n .php\"\r\n\r\n">>,
+			[{<<"n">>, <<"filename=\"evil .php\"">>}]},
+		{<<"n: name=\"a\"\r\n\tb\r\n\r\n">>,
+			[{<<"n">>, <<"name=\"a\"\tb">>}]},
+		{<<"n: ab\r\nx: y\r\n\r\n">>,
+			[{<<"x">>, <<"y">>}, {<<"n">>, <<"ab">>}]}
 	],
 	[{V, fun() ->
 		{ok, Expected, <<"--deadbeef--">>} = parse_headers(
 			<<"--deadbeef\r\n", V/binary, "--deadbeef--">>, Boundary)
 	end} || {V, Expected} <- Tests].
+
+%% Many leading folds must stay linear. Copying the tail on
+%% each fold is quadratic.
+parse_hd_leading_fold_cost_test() ->
+	_ = leading_fold_reductions(200),
+	R1 = leading_fold_reductions(1000),
+	R8 = leading_fold_reductions(8000),
+	case R8 < R1 * 12 of
+		true -> ok;
+		false -> error({R1, R8})
+	end.
+
+leading_fold_reductions(N) ->
+	Fold = binary:copy(<<"\r\n ">>, N),
+	Bin = <<"--deadbeef\r\nn:", Fold/binary, "v\r\n\r\n--deadbeef--">>,
+	{reductions, R0} = erlang:process_info(self(), reductions),
+	{ok, [{<<"n">>, <<"v">>}], <<"--deadbeef--">>}
+		= parse_headers(Bin, <<"deadbeef">>),
+	{reductions, R1} = erlang:process_info(self(), reductions),
+	R1 - R0.
 
 parse_hd_value_error_test_() ->
 	Boundary = <<"deadbeef">>,

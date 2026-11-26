@@ -34,6 +34,7 @@
 -export_type([headers/0]).
 
 -include("cow_inline.hrl").
+-include("cow_parse.hrl").
 
 -define(TEST1_MIME, <<
 	"This is a message with multiple parts in MIME format.\r\n"
@@ -209,21 +210,12 @@ before_parse_headers(<< "\r\n", Stream/bits >>) ->
 	%% There is a line break right after the boundary, skip it.
 	parse_hd_name(Stream, [], <<>>).
 
-parse_hd_name(<< C, Rest/bits >>, H, SoFar) ->
-	case C of
-		$: -> parse_hd_before_value(Rest, H, SoFar);
-		$\s -> parse_hd_name_ws(Rest, H, SoFar);
-		$\t -> parse_hd_name_ws(Rest, H, SoFar);
-		$\0 -> error(invalid_header_name);
-		_ -> ?LOWER(parse_hd_name, Rest, H, SoFar)
-	end.
-
-parse_hd_name_ws(<< C, Rest/bits >>, H, Name) ->
-	case C of
-		$\s -> parse_hd_name_ws(Rest, H, Name);
-		$\t -> parse_hd_name_ws(Rest, H, Name);
-		$: -> parse_hd_before_value(Rest, H, Name)
-	end.
+parse_hd_name(<< $:, Rest/bits >>, H, SoFar) when SoFar =/= <<>> ->
+	parse_hd_before_value(Rest, H, SoFar);
+parse_hd_name(<< C, Rest/bits >>, H, SoFar) when ?IS_FTEXT(C) ->
+	?LOWER(parse_hd_name, Rest, H, SoFar);
+parse_hd_name(<< _, _/bits >>, _, _) ->
+	error(invalid_header_name).
 
 parse_hd_before_value(<< $\s, Rest/bits >>, H, N) ->
 	parse_hd_before_value(Rest, H, N);
@@ -403,6 +395,41 @@ parse_partial_test() ->
 		= parse_body(<<"boundary\r\n--">>, <<"boundary">>),
 	ok.
 
+parse_hd_name_test_() ->
+	Boundary = <<"deadbeef">>,
+	Tests = [
+		{<<"x/y: v\r\n\r\n">>, [{<<"x/y">>, <<"v">>}]},
+		{<<"X(Y): v\r\n\r\n">>, [{<<"x(y)">>, <<"v">>}]},
+		{<<"!: v\r\n\r\n">>, [{<<"!">>, <<"v">>}]},
+		{<<"9: v\r\n\r\n">>, [{<<"9">>, <<"v">>}]},
+		{<<";: v\r\n\r\n">>, [{<<";">>, <<"v">>}]},
+		{<<"~: v\r\n\r\n">>, [{<<"~">>, <<"v">>}]}
+	],
+	[{V, fun() ->
+		{ok, Expected, <<"--deadbeef--">>} = parse_headers(
+			<<"--deadbeef\r\n", V/binary, "--deadbeef--">>, Boundary)
+	end} || {V, Expected} <- Tests].
+
+parse_hd_name_error_test_() ->
+	Boundary = <<"deadbeef">>,
+	Tests = [
+		<<": v\r\n\r\n">>,
+		<<" : v\r\n\r\n">>,
+		<<"Name : v\r\n\r\n">>,
+		<<"X Y: v\r\n\r\n">>,
+		<<"a\t: v\r\n\r\n">>,
+		<<$a, 31, ": v\r\n\r\n">>,
+		<<$a, 127, ": v\r\n\r\n">>,
+		<<$a, 128, ": v\r\n\r\n">>
+	],
+	[{V, fun() ->
+		ok = try parse_headers(<<"--deadbeef\r\n", V/binary>>, Boundary) of
+			_ -> error(unexpected_success)
+		catch
+			error:invalid_header_name -> ok
+		end
+	end} || V <- Tests].
+
 parse_headers_reject_nul_test_() ->
 	Boundary = <<"deadbeef">>,
 	Tests = [
@@ -470,10 +497,25 @@ part(Boundary, Headers) ->
 
 headers_to_iolist([], Acc) ->
 	lists:reverse([<<"\r\n">>|Acc]);
-headers_to_iolist([{N, V}|Tail], Acc) ->
+headers_to_iolist([{N0, V}|Tail], Acc) ->
+	N = ensure_hd_name(N0),
 	%% We don't want to create a sublist so we list the
 	%% values in reverse order so that it gets reversed properly.
 	headers_to_iolist(Tail, [<<"\r\n">>, V, <<": ">>, N|Acc]).
+
+-spec ensure_hd_name(iodata()) -> binary().
+ensure_hd_name(Name0) ->
+	Name = iolist_to_binary(Name0),
+	ok = validate_hd_name(Name),
+	Name.
+
+validate_hd_name(Name) when Name =/= <<>> ->
+	validate_hd_name1(Name).
+
+validate_hd_name1(<< C, R/bits >>) when ?IS_FTEXT(C) ->
+	validate_hd_name1(R);
+validate_hd_name1(<<>>) ->
+	ok.
 
 %% @doc Return the closing delimiter of the multipart message.
 
@@ -496,6 +538,69 @@ build_test() ->
 		close(?TEST1_BOUNDARY)
 	])),
 	ok.
+
+part_hd_name_test() ->
+	[<<"\r\n--">>, <<"b">>, <<"\r\n">>,
+		[<<"Content-Type">>, <<": ">>, <<"text/plain">>, <<"\r\n">>, <<"\r\n">>]]
+		= part(<<"b">>, [{["Content-", "Type"], <<"text/plain">>}]),
+	[<<"\r\n--">>, <<"b">>, <<"\r\n">>,
+		[<<"x/y">>, <<": ">>, <<"v">>, <<"\r\n">>, <<"\r\n">>]]
+		= part(<<"b">>, [{<<"x/y">>, <<"v">>}]),
+	ok.
+
+ensure_hd_name_test_() ->
+	Tests = [
+		{<<"!">>, <<"!">>},
+		{<<$9>>, <<$9>>},
+		{<<$;>>, <<$;>>},
+		{<<$~>>, <<$~>>},
+		{<<"x/y">>, <<"x/y">>},
+		{<<"x(y)">>, <<"x(y)">>},
+		{<<"\"(),/;<=>?@[\\]{}">>, <<"\"(),/;<=>?@[\\]{}">>},
+		{<<"Content-Type">>, <<"Content-Type">>},
+		{["Content-", "Type"], <<"Content-Type">>},
+		{[$C, $o, $n, $t, $e, $n, $t, $-, $T, $y, $p, $e], <<"Content-Type">>}
+	],
+	[{iolist_to_binary(io_lib:format("~0p", [V])),
+		fun() -> Expected = ensure_hd_name(V) end}
+			|| {V, Expected} <- Tests].
+
+ensure_hd_name_error_test_() ->
+	Tests = [
+		<<>>,
+		<<" ">>, <<"\t">>,
+		<<":">>, <<"a b">>, <<"a:b">>, <<"a\tb">>,
+		<<0>>, <<31>>, <<32>>, <<58>>, <<127>>, <<128>>,
+		<<195, 169>>,
+		["a", $\s, "b"],
+		undefined
+	],
+	[{iolist_to_binary(io_lib:format("~0p", [V])),
+		fun() ->
+			ok = try ensure_hd_name(V) of
+				_ -> error(unexpected_success)
+			catch
+				error:function_clause -> ok;
+				error:badarg -> ok
+			end
+		end} || V <- Tests].
+
+part_hd_name_error_test_() ->
+	Tests = [
+		<<>>,
+		<<" ">>,
+		["a", $\s, "b"],
+		undefined
+	],
+	[{iolist_to_binary(io_lib:format("~0p", [V])),
+		fun() ->
+			ok = try part(<<"b">>, [{V, <<"v">>}]) of
+				_ -> error(unexpected_success)
+			catch
+				error:function_clause -> ok;
+				error:badarg -> ok
+			end
+		end} || V <- Tests].
 
 identity_test() ->
 	B = boundary(),

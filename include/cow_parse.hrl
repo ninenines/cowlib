@@ -67,6 +67,9 @@
 	(C =:= $') or (C =:= $*) or (C =:= $+) or (C =:= $-) or (C =:= $.) or
 	(C =:= $^) or (C =:= $_) or (C =:= $`) or (C =:= $|) or (C =:= $~)).
 
+%% RFC 5322 ftext. Printable US-ASCII except ":".
+-define(IS_FTEXT(C), (C >= 33), (C =< 57); (C >= 59), (C =< 126)).
+
 -define(IS_TOKEN68(C),
 	?IS_ALPHA(C) or ?IS_DIGIT(C) or
 	(C =:= $-) or (C =:= $.) or (C =:= $_) or

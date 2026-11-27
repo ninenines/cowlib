@@ -207,7 +207,7 @@ process_field(<<"event">>, Value, State) ->
 process_field(<<"data">>, Value, State=#state{data=Data}) ->
 	{ok, State#state{data=[<<$\n>>, Value|Data]}};
 process_field(<<"id">>, Value, State) ->
-	{ok, State#state{last_event_id=Value, last_event_id_set=true}};
+	{ok, State#state{last_event_id=binary:copy(Value), last_event_id_set=true}};
 process_field(<<"retry">>, Value = <<C, _/bits>>, State) when ?IS_DIGIT(C) ->
 	try
 		{ok, State#state{retry=binary_to_integer(Value)}}
@@ -449,6 +449,18 @@ parse_max_event_size_tail_test() ->
 	{event, _, St5} = parse(<<"data: a\n\ndata: b">>,
 		init(#{max_event_size => 20})),
 	<<"data: b">> = St5#state.buffer,
+	ok.
+
+%% The id outlives the event. Copy it so the input can be dropped.
+parse_max_event_size_id_copy_test() ->
+	Pad = binary:copy(<<$z>>, 500),
+	Id = binary:copy(<<$i>>, 80),
+	Bin = <<"id: ", Id/binary, "\n\n", Pad/binary>>,
+	{event, #{last_event_id := Got}, _} = parse(Bin,
+		init(#{max_event_size => 200})),
+	Id = Got,
+	erlang:garbage_collect(),
+	80 = binary:referenced_byte_size(Got),
 	ok.
 
 %% A CR at the end of the buffer may start a CRLF. Do not end the

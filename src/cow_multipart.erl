@@ -882,9 +882,9 @@ parse_cd_type(<<>>, Acc) ->
 	{Acc, []};
 parse_cd_type(<< C, Rest/bits >>, Acc) ->
 	case C of
-		$; -> {Acc, parse_before_param(Rest, [])};
-		$\s -> {Acc, parse_before_param(Rest, [])};
-		$\t -> {Acc, parse_before_param(Rest, [])};
+		$; -> {Acc, parse_before_param(Rest, [], disposition)};
+		$\s -> {Acc, parse_before_param(Rest, [], disposition)};
+		$\t -> {Acc, parse_before_param(Rest, [], disposition)};
 		_ -> ?LOWER(parse_cd_type, Rest, Acc)
 	end.
 
@@ -911,7 +911,18 @@ parse_content_disposition_test_() ->
 		{<<"file; filename=\"file1.txt\"">>,
 			{<<"file">>, [{<<"filename">>, <<"file1.txt">>}]}},
 		{<<"file; filename=\"file2.gif\"">>,
-			{<<"file">>, [{<<"filename">>, <<"file2.gif">>}]}}
+			{<<"file">>, [{<<"filename">>, <<"file2.gif">>}]}},
+		{<<"form-data; name=\"file\"; filename=\"z:\\tmp\\test.txt\"">>,
+			{<<"form-data">>, [
+				{<<"name">>, <<"file">>},
+				{<<"filename">>, <<"z:\\tmp\\test.txt">>}
+			]}},
+		{<<"form-data; name=\"a\\b\"">>,
+			{<<"form-data">>, [{<<"name">>, <<"a\\b">>}]}},
+		{<<"form-data; filename=\"foo\\\"">>,
+			{<<"form-data">>, [{<<"filename">>, <<"foo\\">>}]}},
+		{<<"form-data; name=\"a%22b%0D%0A\"">>,
+			{<<"form-data">>, [{<<"name">>, <<"a%22b%0D%0A">>}]}}
 	],
 	[{V, fun() -> R = parse_content_disposition(V) end} || {V, R} <- Tests].
 
@@ -978,9 +989,9 @@ parse_ct_subtype(<<>>, Type, Subtype) when Subtype =/= <<>> ->
 	{Type, Subtype, []};
 parse_ct_subtype(<< C, Rest/bits >>, Type, Acc) ->
 	case C of
-		$; -> {Type, Acc, parse_before_param(Rest, [])};
-		$\s -> {Type, Acc, parse_before_param(Rest, [])};
-		$\t -> {Type, Acc, parse_before_param(Rest, [])};
+		$; -> {Type, Acc, parse_before_param(Rest, [], content_type)};
+		$\s -> {Type, Acc, parse_before_param(Rest, [], content_type)};
+		$\t -> {Type, Acc, parse_before_param(Rest, [], content_type)};
 		_ -> ?LOWER(parse_ct_subtype, Rest, Type, Acc)
 	end.
 
@@ -995,6 +1006,10 @@ parse_content_type_test_() ->
 			{<<"text">>, <<"plain">>, [{<<"charset">>, <<"us-ascii">>}]}},
 		{<<"text/plain; charset=\"us-ascii\"">>,
 			{<<"text">>, <<"plain">>, [{<<"charset">>, <<"us-ascii">>}]}},
+		{<<"text/plain; charset=\"a\\b\"">>,
+			{<<"text">>, <<"plain">>, [{<<"charset">>, <<"ab">>}]}},
+		{<<"text/plain; charset=\"a\\\\b\"">>,
+			{<<"text">>, <<"plain">>, [{<<"charset">>, <<"a\\b">>}]}},
 		{<<"multipart/form-data; boundary=AaB03x">>,
 			{<<"multipart">>, <<"form-data">>,
 				[{<<"boundary">>, <<"AaB03x">>}]}},
@@ -1036,50 +1051,62 @@ horse_parse_content_type_five() ->
 
 %% @doc Parse RFC 2045 parameters.
 
-parse_before_param(<<>>, Params) ->
+parse_before_param(<<>>, Params, _Kind) ->
 	lists:reverse(Params);
-parse_before_param(<< C, Rest/bits >>, Params) ->
+parse_before_param(<< C, Rest/bits >>, Params, Kind) ->
 	case C of
-		$; -> parse_before_param(Rest, Params);
-		$\s -> parse_before_param(Rest, Params);
-		$\t -> parse_before_param(Rest, Params);
-		_ -> ?LOWER(parse_param_name, Rest, Params, <<>>)
+		$; -> parse_before_param(Rest, Params, Kind);
+		$\s -> parse_before_param(Rest, Params, Kind);
+		$\t -> parse_before_param(Rest, Params, Kind);
+		_ -> ?LOWER(parse_param_name, Rest, Params, Kind, <<>>)
 	end.
 
-parse_param_name(<<>>, Params, Acc) ->
+parse_param_name(<<>>, Params, _Kind, Acc) ->
 	lists:reverse([{Acc, <<>>}|Params]);
-parse_param_name(<< C, Rest/bits >>, Params, Acc) ->
+parse_param_name(<< C, Rest/bits >>, Params, Kind, Acc) ->
 	case C of
-		$= -> parse_param_value(Rest, Params, Acc);
-		_ -> ?LOWER(parse_param_name, Rest, Params, Acc)
+		$= -> parse_param_value(Rest, Params, Kind, Acc);
+		_ -> ?LOWER(parse_param_name, Rest, Params, Kind, Acc)
 	end.
 
-parse_param_value(<<>>, Params, Name) ->
+parse_param_value(<<>>, Params, _Kind, Name) ->
 	lists:reverse([{Name, <<>>}|Params]);
-parse_param_value(<< C, Rest/bits >>, Params, Name) ->
+parse_param_value(<< $", Rest/bits >>, Params, disposition, Name) ->
+	parse_cd_quoted_value(Rest, Params, Name, <<>>);
+parse_param_value(<< $", Rest/bits >>, Params, content_type, Name) ->
+	parse_ct_quoted_value(Rest, Params, Name, <<>>);
+parse_param_value(<< C, Rest/bits >>, Params, Kind, Name) ->
 	case C of
-		$" -> parse_param_quoted_value(Rest, Params, Name, <<>>);
-		$; -> parse_before_param(Rest, [{Name, <<>>}|Params]);
-		$\s -> parse_before_param(Rest, [{Name, <<>>}|Params]);
-		$\t -> parse_before_param(Rest, [{Name, <<>>}|Params]);
-		C -> parse_param_value(Rest, Params, Name, << C >>)
+		$; -> parse_before_param(Rest, [{Name, <<>>}|Params], Kind);
+		$\s -> parse_before_param(Rest, [{Name, <<>>}|Params], Kind);
+		$\t -> parse_before_param(Rest, [{Name, <<>>}|Params], Kind);
+		C -> parse_param_value(Rest, Params, Kind, Name, << C >>)
 	end.
 
-parse_param_value(<<>>, Params, Name, Acc) ->
+parse_param_value(<<>>, Params, _Kind, Name, Acc) ->
 	lists:reverse([{Name, Acc}|Params]);
-parse_param_value(<< C, Rest/bits >>, Params, Name, Acc) ->
+parse_param_value(<< C, Rest/bits >>, Params, Kind, Name, Acc) ->
 	case C of
-		$; -> parse_before_param(Rest, [{Name, Acc}|Params]);
-		$\s -> parse_before_param(Rest, [{Name, Acc}|Params]);
-		$\t -> parse_before_param(Rest, [{Name, Acc}|Params]);
-		C -> parse_param_value(Rest, Params, Name, << Acc/binary, C >>)
+		$; -> parse_before_param(Rest, [{Name, Acc}|Params], Kind);
+		$\s -> parse_before_param(Rest, [{Name, Acc}|Params], Kind);
+		$\t -> parse_before_param(Rest, [{Name, Acc}|Params], Kind);
+		C -> parse_param_value(Rest, Params, Kind, Name, << Acc/binary, C >>)
 	end.
 
 %% We expect a final $" so no need to test for <<>>.
-parse_param_quoted_value(<< $\\, C, Rest/bits >>, Params, Name, Acc) ->
-	parse_param_quoted_value(Rest, Params, Name, << Acc/binary, C >>);
-parse_param_quoted_value(<< $", Rest/bits >>, Params, Name, Acc) ->
-	parse_before_param(Rest, [{Name, Acc}|Params]);
-parse_param_quoted_value(<< C, Rest/bits >>, Params, Name, Acc)
+parse_cd_quoted_value(<< $", Rest/bits >>, Params, Name, Acc) ->
+	parse_before_param(Rest, [{Name, Acc}|Params], disposition);
+%% HTML multipart leaves "\" as a byte inside quotes.
+%% This is an HTML exception to the RFC 822 quoted-pair algorithm.
+parse_cd_quoted_value(<< C, Rest/bits >>, Params, Name, Acc)
 		when C =/= $\r ->
-	parse_param_quoted_value(Rest, Params, Name, << Acc/binary, C >>).
+	parse_cd_quoted_value(Rest, Params, Name, << Acc/binary, C >>).
+
+%% We expect a final $" so no need to test for <<>>.
+parse_ct_quoted_value(<< $\\, C, Rest/bits >>, Params, Name, Acc) ->
+	parse_ct_quoted_value(Rest, Params, Name, << Acc/binary, C >>);
+parse_ct_quoted_value(<< $", Rest/bits >>, Params, Name, Acc) ->
+	parse_before_param(Rest, [{Name, Acc}|Params], content_type);
+parse_ct_quoted_value(<< C, Rest/bits >>, Params, Name, Acc)
+		when C =/= $\r ->
+	parse_ct_quoted_value(Rest, Params, Name, << Acc/binary, C >>).

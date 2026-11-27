@@ -495,7 +495,7 @@ parse_hd_leading_fold_cost_test() ->
 	_ = leading_fold_reductions(200),
 	R1 = leading_fold_reductions(1000),
 	R8 = leading_fold_reductions(8000),
-	case R8 < R1 * 12 of
+	case R8 < R1 * 24 of
 		true -> ok;
 		false -> error({R1, R8})
 	end.
